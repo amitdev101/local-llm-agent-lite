@@ -1,0 +1,19 @@
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+
+# Core LLM runtime (prebuilt CPU wheel from the index above)
+llama-cpp-python
+
+# API and configuration
+fastapi==0.115.14
+uvicorn==0.34.3
+pydantic-settings>=2.10,<3
+PyYAML>=6.0,<7
+python-multipart>=0.0.20,<1
+python-dotenv==1.2.1
+
+# Local tools, web search, and observability
+httpx==0.28.1
+psutil>=7.0,<8
+
+# Phase 6: local embeddings and persistent vector storage
+lancedb==0.37.1
