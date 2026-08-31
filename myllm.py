@@ -17,22 +17,43 @@ from llama_cpp import Llama
 
 
 # ============================================================
-# PATHS / DEFAULTS
+# APPLICATION PATHS
 # ============================================================
 
-APP_DIR = Path.home() / ".myllm"
-print(f"Using app directory: {APP_DIR}")
+# Folder containing THIS Python script.
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+# Everything belonging to this app is stored beside myllm.py.
+APP_DIR = SCRIPT_DIR / ".myllm"
+
 CONFIG_FILE = APP_DIR / "config.json"
+
+MEMORY_ROOT = APP_DIR / "memory"
+
+
+# ============================================================
+# DEFAULT CONFIGURATION
+# ============================================================
 
 DEFAULT_CONFIG = {
     "model_path": "",
-    "project_root": str(Path.cwd()),
+    "project_root": str(SCRIPT_DIR),
     "context_size": 8192,
     "gpu_layers": 0,
     "max_steps": 30,
     "temperature": 0.1,
+
+    # 0 = no debug
+    # 1 = raw model response
+    # 2 = raw model response + tool details
+    # 3 = full prompt + raw response + tools
+    "debug_level": 1,
 }
 
+
+# ============================================================
+# LIMITS
+# ============================================================
 
 IGNORE_DIRS = {
     ".git",
@@ -48,7 +69,6 @@ IGNORE_DIRS = {
     "node_modules",
     "dist",
     "build",
-    ".local_agent",
     ".myllm",
 }
 
@@ -77,40 +97,43 @@ TEXT_EXTENSIONS = {
 
 
 MAX_FILE_BYTES = 1_000_000
+
 MAX_TOOL_OUTPUT_CHARS = 7000
+
 MAX_EDIT_CHARS = 20_000
 
 MAX_IDENTICAL_ACTIONS = 2
+
 CONTEXT_COMPACT_RATIO = 0.70
+
 MAX_MODEL_OUTPUT_TOKENS = 900
 
 
 # ============================================================
-# CONFIG
+# CONFIGURATION
 # ============================================================
 
-def load_config() -> dict[str, Any]:
-    APP_DIR.mkdir(parents=True, exist_ok=True)
+def ensure_app_folder() -> None:
+    """
+    Create .myllm beside this script if it does not exist.
+    """
 
-    if not CONFIG_FILE.exists():
-        save_config(DEFAULT_CONFIG.copy())
-        return DEFAULT_CONFIG.copy()
+    APP_DIR.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    try:
-        loaded = json.loads(
-            CONFIG_FILE.read_text(encoding="utf-8")
-        )
-    except Exception:
-        loaded = {}
-
-    config = DEFAULT_CONFIG.copy()
-    config.update(loaded)
-
-    return config
+    MEMORY_ROOT.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
 
-def save_config(config: dict[str, Any]) -> None:
-    APP_DIR.mkdir(parents=True, exist_ok=True)
+def save_config(
+    config: dict[str, Any],
+) -> None:
+
+    ensure_app_folder()
 
     CONFIG_FILE.write_text(
         json.dumps(
@@ -122,24 +145,77 @@ def save_config(config: dict[str, Any]) -> None:
     )
 
 
+def load_config() -> dict[str, Any]:
+    """
+    Load config.json.
+
+    If it does not exist, automatically create it
+    with default values.
+    """
+
+    ensure_app_folder()
+
+    if not CONFIG_FILE.exists():
+
+        config = DEFAULT_CONFIG.copy()
+
+        save_config(config)
+
+        return config
+
+    try:
+
+        loaded = json.loads(
+            CONFIG_FILE.read_text(
+                encoding="utf-8"
+            )
+        )
+
+    except Exception:
+
+        loaded = {}
+
+    # Merge existing config with defaults so newer config
+    # properties appear automatically.
+    config = DEFAULT_CONFIG.copy()
+
+    config.update(loaded)
+
+    # Persist merged config.
+    save_config(config)
+
+    return config
+
+
 # ============================================================
-# DATA
+# STATE TYPES
 # ============================================================
 
 @dataclass
 class Observation:
+
     id: str
+
     tool: str
+
     args: dict[str, Any]
+
     text: str
+
     success: bool
-    timestamp: float = field(default_factory=time.time)
+
+    timestamp: float = field(
+        default_factory=time.time
+    )
 
 
 @dataclass
 class AgentState:
+
     task: str
+
     step: int = 0
+
     summary: str = ""
 
     observations: list[Observation] = field(
@@ -154,30 +230,56 @@ class AgentState:
         default_factory=set
     )
 
-    edit_backups: list[tuple[Path, str]] = field(
+    edit_backups: list[
+        tuple[Path, str]
+    ] = field(
         default_factory=list
     )
 
     last_test_passed: bool = False
+
     last_validation_passed: bool = False
+
+
+# ============================================================
+# UI HELPERS
+# ============================================================
+
+def clear_screen() -> None:
+
+    os.system(
+        "cls"
+        if os.name == "nt"
+        else "clear"
+    )
+
+
+def pause() -> None:
+
+    input(
+        "\nPress Enter to continue..."
+    )
+
+
+def print_header(
+    title: str,
+) -> None:
+
+    print()
+    print("=" * 70)
+    print(title)
+    print("=" * 70)
 
 
 # ============================================================
 # GENERAL HELPERS
 # ============================================================
 
-def clear_screen() -> None:
-    os.system("cls" if os.name == "nt" else "clear")
-
-
-def pause() -> None:
-    input("\nPress Enter to continue...")
-
-
 def truncate_text(
     text: str,
     max_chars: int = MAX_TOOL_OUTPUT_CHARS,
 ) -> str:
+
     if len(text) <= max_chars:
         return text
 
@@ -185,20 +287,34 @@ def truncate_text(
 
     return (
         text[:half]
-        + "\n\n... [OUTPUT TRUNCATED] ...\n\n"
+        + "\n\n"
+        + "... [OUTPUT TRUNCATED] ..."
+        + "\n\n"
         + text[-half:]
     )
 
 
-def command_exists(name: str) -> bool:
-    return shutil.which(name) is not None
+def command_exists(
+    name: str,
+) -> bool:
+
+    return shutil.which(
+        name
+    ) is not None
 
 
-def module_available(name: str) -> bool:
+def module_available(
+    name: str,
+) -> bool:
+
     try:
+
         __import__(name)
+
         return True
+
     except Exception:
+
         return False
 
 
@@ -206,6 +322,7 @@ def action_fingerprint(
     name: str,
     args: dict[str, Any],
 ) -> str:
+
     blob = json.dumps(
         {
             "name": name,
@@ -220,13 +337,18 @@ def action_fingerprint(
     ).hexdigest()
 
 
-def read_text_file(path: Path) -> str:
+def read_text_file(
+    path: Path,
+) -> str:
+
     if not path.exists():
+
         raise ValueError(
             f"File does not exist: {path}"
         )
 
     if not path.is_file():
+
         raise ValueError(
             f"Not a file: {path}"
         )
@@ -234,8 +356,10 @@ def read_text_file(path: Path) -> str:
     size = path.stat().st_size
 
     if size > MAX_FILE_BYTES:
+
         raise ValueError(
-            f"File too large: {size:,} bytes"
+            f"File too large: "
+            f"{size:,} bytes"
         )
 
     return path.read_text(
@@ -249,32 +373,51 @@ def read_text_file(path: Path) -> str:
 # ============================================================
 
 class Workspace:
-    def __init__(self, root: Path):
+
+    def __init__(
+        self,
+        root: Path,
+    ):
+
         self.root = root.resolve()
 
-    def resolve(self, path: str) -> Path:
+    def resolve(
+        self,
+        path: str,
+    ) -> Path:
+
         raw = Path(path)
 
         if raw.is_absolute():
+
             candidate = raw.resolve()
+
         else:
+
             candidate = (
                 self.root / raw
             ).resolve()
 
         try:
+
             candidate.relative_to(
                 self.root
             )
+
         except ValueError:
+
             raise ValueError(
-                "Access outside the project "
-                "workspace is blocked."
+                "Access outside the selected "
+                "project workspace is blocked."
             )
 
         return candidate
 
-    def relative(self, path: Path) -> str:
+    def relative(
+        self,
+        path: Path,
+    ) -> str:
+
         return str(
             path.resolve().relative_to(
                 self.root
@@ -291,54 +434,92 @@ def detect_project(
 ) -> dict[str, Any]:
 
     try:
+
         files = {
-            p.name
-            for p in root.iterdir()
-            if p.is_file()
+            item.name
+            for item in root.iterdir()
+            if item.is_file()
         }
+
     except Exception:
+
         files = set()
 
     project_types = []
 
     if "pyproject.toml" in files:
-        project_types.append("Python")
+
+        project_types.append(
+            "Python"
+        )
 
     if "requirements.txt" in files:
-        project_types.append("Python")
+
+        project_types.append(
+            "Python"
+        )
+
+    if "setup.py" in files:
+
+        project_types.append(
+            "Python"
+        )
 
     if "package.json" in files:
-        project_types.append("Node.js")
+
+        project_types.append(
+            "Node.js"
+        )
 
     if "Cargo.toml" in files:
-        project_types.append("Rust")
+
+        project_types.append(
+            "Rust"
+        )
 
     if "go.mod" in files:
-        project_types.append("Go")
+
+        project_types.append(
+            "Go"
+        )
 
     return {
         "os": (
             f"{platform.system()} "
             f"{platform.release()}"
         ),
-        "python": sys.version.split()[0],
-        "working_directory": str(root),
+
+        "python": (
+            sys.version.split()[0]
+        ),
+
+        "working_directory": (
+            str(root)
+        ),
+
         "project_types": (
-            list(set(project_types))
+            sorted(
+                set(project_types)
+            )
             or ["unknown"]
         ),
-        "git_available": command_exists("git"),
+
+        "git_available": (
+            command_exists("git")
+        ),
+
         "git_repository": (
             root / ".git"
         ).exists(),
-        "pytest_available": module_available(
-            "pytest"
+
+        "pytest_available": (
+            module_available("pytest")
         ),
     }
 
 
 # ============================================================
-# LANCEDB MEMORY
+# LANCEDB PROJECT MEMORY
 # ============================================================
 
 class ProjectMemory:
@@ -349,10 +530,16 @@ class ProjectMemory:
         self,
         workspace: Workspace,
     ):
+
+        project_hash = hashlib.sha256(
+            str(
+                workspace.root
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+
         memory_dir = (
-            workspace.root
-            / ".local_agent"
-            / "memory"
+            MEMORY_ROOT
+            / project_hash
         )
 
         memory_dir.mkdir(
@@ -364,18 +551,18 @@ class ProjectMemory:
             str(memory_dir)
         )
 
-        self.project_id = hashlib.sha256(
-            str(
-                workspace.root
-            ).encode("utf-8")
-        ).hexdigest()[:16]
+        self.project_id = project_hash
 
     def _open(self):
+
         try:
+
             return self.db.open_table(
                 self.TABLE_NAME
             )
+
         except Exception:
+
             return None
 
     def add_fact(
@@ -386,22 +573,42 @@ class ProjectMemory:
     ) -> None:
 
         row = {
-            "project": self.project_id,
-            "fact": fact.strip(),
-            "evidence": evidence.strip(),
-            "evidence_id": evidence_id,
-            "created_at": int(time.time()),
+
+            "project": (
+                self.project_id
+            ),
+
+            "fact": (
+                fact.strip()
+            ),
+
+            "evidence": (
+                evidence.strip()
+            ),
+
+            "evidence_id": (
+                evidence_id
+            ),
+
+            "created_at": (
+                int(time.time())
+            ),
         }
 
         table = self._open()
 
         if table is None:
+
             self.db.create_table(
                 self.TABLE_NAME,
                 data=[row],
             )
+
         else:
-            table.add([row])
+
+            table.add(
+                [row]
+            )
 
     def load_facts(
         self,
@@ -411,9 +618,11 @@ class ProjectMemory:
         table = self._open()
 
         if table is None:
+
             return []
 
         try:
+
             return (
                 table.search()
                 .where(
@@ -423,7 +632,9 @@ class ProjectMemory:
                 .limit(limit)
                 .to_list()
             )
+
         except Exception:
+
             return []
 
 
@@ -439,18 +650,28 @@ class Tools:
         memory: ProjectMemory,
         state: AgentState,
     ):
+
         self.workspace = workspace
+
         self.memory = memory
+
         self.state = state
 
-    def inspect_project(self) -> str:
+    # --------------------------------------------------------
+    # inspect_project
+    # --------------------------------------------------------
+
+    def inspect_project(
+        self,
+    ) -> str:
+
         info = detect_project(
             self.workspace.root
         )
 
         items = []
 
-        for p in sorted(
+        for item in sorted(
             self.workspace.root.iterdir(),
             key=lambda x: (
                 not x.is_dir(),
@@ -460,12 +681,12 @@ class Tools:
 
             prefix = (
                 "DIR "
-                if p.is_dir()
+                if item.is_dir()
                 else "FILE"
             )
 
             items.append(
-                f"{prefix} {p.name}"
+                f"{prefix} {item.name}"
             )
 
         return json.dumps(
@@ -476,26 +697,49 @@ class Tools:
             indent=2,
         )
 
+    # --------------------------------------------------------
+    # list_files
+    # --------------------------------------------------------
+
     def list_files(
         self,
         path: str = ".",
         depth: int = 2,
     ) -> str:
 
-        base = self.workspace.resolve(path)
+        base = self.workspace.resolve(
+            path
+        )
+
+        if not base.exists():
+
+            raise ValueError(
+                "Path does not exist."
+            )
 
         depth = max(
             0,
-            min(int(depth), 4),
+            min(
+                int(depth),
+                4,
+            ),
         )
 
         results = []
 
-        base_parts = len(base.parts)
+        base_parts = len(
+            base.parts
+        )
 
-        for current_root, dirs, files in os.walk(base):
+        for (
+            current_root,
+            dirs,
+            files,
+        ) in os.walk(base):
 
-            current = Path(current_root)
+            current = Path(
+                current_root
+            )
 
             current_depth = (
                 len(current.parts)
@@ -503,28 +747,43 @@ class Tools:
             )
 
             dirs[:] = [
-                d
-                for d in dirs
-                if d not in IGNORE_DIRS
+                directory
+                for directory in dirs
+                if directory
+                not in IGNORE_DIRS
             ]
 
             if current_depth >= depth:
+
                 dirs[:] = []
 
-            for filename in sorted(files):
+            for filename in sorted(
+                files
+            ):
 
-                p = current / filename
+                path_obj = (
+                    current
+                    / filename
+                )
 
                 try:
+
                     relative = (
-                        self.workspace.relative(p)
+                        self.workspace.relative(
+                            path_obj
+                        )
                     )
+
                 except Exception:
+
                     continue
 
-                results.append(relative)
+                results.append(
+                    relative
+                )
 
                 if len(results) >= 300:
+
                     results.append(
                         "... result limit reached ..."
                     )
@@ -538,6 +797,10 @@ class Tools:
             or "(no files)"
         )
 
+    # --------------------------------------------------------
+    # search_text
+    # --------------------------------------------------------
+
     def search_text(
         self,
         query: str,
@@ -546,11 +809,16 @@ class Tools:
     ) -> str:
 
         if not query:
+
             raise ValueError(
                 "query cannot be empty"
             )
 
-        base = self.workspace.resolve(path)
+        base = (
+            self.workspace.resolve(
+                path
+            )
+        )
 
         max_results = max(
             1,
@@ -562,42 +830,57 @@ class Tools:
 
         matches = []
 
-        for current_root, dirs, files in os.walk(base):
+        for (
+            current_root,
+            dirs,
+            files,
+        ) in os.walk(base):
 
             dirs[:] = [
-                d
-                for d in dirs
-                if d not in IGNORE_DIRS
+                directory
+                for directory in dirs
+                if directory
+                not in IGNORE_DIRS
             ]
 
             for filename in files:
 
-                p = Path(
-                    current_root
-                ) / filename
+                path_obj = (
+                    Path(current_root)
+                    / filename
+                )
 
                 if (
-                    p.suffix.lower()
+                    path_obj.suffix.lower()
                     not in TEXT_EXTENSIONS
                 ):
+
                     continue
 
                 try:
+
                     if (
-                        p.stat().st_size
+                        path_obj.stat().st_size
                         > MAX_FILE_BYTES
                     ):
+
                         continue
 
-                    text = p.read_text(
-                        encoding="utf-8",
-                        errors="replace",
+                    text = (
+                        path_obj.read_text(
+                            encoding="utf-8",
+                            errors="replace",
+                        )
                     )
 
                 except Exception:
+
                     continue
 
-                for line_number, line in enumerate(
+                for (
+                    line_number,
+                    line,
+                ) in enumerate(
                     text.splitlines(),
                     start=1,
                 ):
@@ -606,8 +889,9 @@ class Tools:
                         query.lower()
                         in line.lower()
                     ):
+
                         matches.append(
-                            f"{self.workspace.relative(p)}:"
+                            f"{self.workspace.relative(path_obj)}:"
                             f"{line_number}: "
                             f"{line[:300]}"
                         )
@@ -616,6 +900,7 @@ class Tools:
                             len(matches)
                             >= max_results
                         ):
+
                             return "\n".join(
                                 matches
                             )
@@ -625,6 +910,10 @@ class Tools:
             or "(no matches)"
         )
 
+    # --------------------------------------------------------
+    # read_file
+    # --------------------------------------------------------
+
     def read_file(
         self,
         path: str,
@@ -632,11 +921,19 @@ class Tools:
         end_line: int = 200,
     ) -> str:
 
-        p = self.workspace.resolve(path)
+        path_obj = (
+            self.workspace.resolve(
+                path
+            )
+        )
 
-        text = read_text_file(p)
+        text = read_text_file(
+            path_obj
+        )
 
-        lines = text.splitlines()
+        lines = (
+            text.splitlines()
+        )
 
         start = max(
             1,
@@ -649,6 +946,7 @@ class Tools:
         )
 
         if end - start > 300:
+
             end = start + 300
 
         end = min(
@@ -662,6 +960,7 @@ class Tools:
             start - 1,
             end,
         ):
+
             selected.append(
                 f"{index + 1:5d} | "
                 f"{lines[index]}"
@@ -669,11 +968,15 @@ class Tools:
 
         return (
             f"FILE: "
-            f"{self.workspace.relative(p)}\n"
-            f"LINES: {start}-{end} "
-            f"/ {len(lines)}\n\n"
+            f"{self.workspace.relative(path_obj)}\n"
+            f"LINES: "
+            f"{start}-{end} / {len(lines)}\n\n"
             + "\n".join(selected)
         )
+
+    # --------------------------------------------------------
+    # apply_patch
+    # --------------------------------------------------------
 
     def apply_patch(
         self,
@@ -683,6 +986,7 @@ class Tools:
     ) -> str:
 
         if not old_text:
+
             raise ValueError(
                 "old_text cannot be empty"
             )
@@ -692,24 +996,37 @@ class Tools:
             + len(new_text)
             > MAX_EDIT_CHARS
         ):
+
             raise ValueError(
-                "Edit is too large."
+                "Edit is too large. "
+                "Make a smaller targeted edit."
             )
 
-        p = self.workspace.resolve(path)
+        path_obj = (
+            self.workspace.resolve(
+                path
+            )
+        )
 
-        original = read_text_file(p)
+        original = read_text_file(
+            path_obj
+        )
 
-        count = original.count(old_text)
+        count = original.count(
+            old_text
+        )
 
         if count == 0:
+
             raise ValueError(
-                "old_text not found exactly."
+                "old_text was not found exactly. "
+                "Read the relevant file again."
             )
 
         if count > 1:
+
             raise ValueError(
-                "old_text occurs multiple times. "
+                f"old_text occurs {count} times. "
                 "Provide more surrounding text."
             )
 
@@ -720,61 +1037,87 @@ class Tools:
         )
 
         if updated == original:
+
             raise ValueError(
                 "Edit would make no change."
             )
 
         self.state.edit_backups.append(
             (
-                p,
+                path_obj,
                 original,
             )
         )
 
-        p.write_text(
+        path_obj.write_text(
             updated,
             encoding="utf-8",
         )
 
         relative = (
-            self.workspace.relative(p)
+            self.workspace.relative(
+                path_obj
+            )
         )
 
         self.state.edited_files.add(
             relative
         )
 
+        # Any code edit invalidates old verification.
         self.state.last_test_passed = False
+
         self.state.last_validation_passed = False
 
         return (
             f"Edited {relative} successfully."
         )
 
-    def undo_last_edit(self) -> str:
+    # --------------------------------------------------------
+    # undo_last_edit
+    # --------------------------------------------------------
+
+    def undo_last_edit(
+        self,
+    ) -> str:
 
         if not self.state.edit_backups:
+
             raise ValueError(
                 "No edit to undo."
             )
 
-        path, old_contents = (
-            self.state.edit_backups.pop()
-        )
+        (
+            path_obj,
+            original,
+        ) = self.state.edit_backups.pop()
 
-        path.write_text(
-            old_contents,
+        path_obj.write_text(
+            original,
             encoding="utf-8",
         )
 
+        self.state.last_test_passed = False
+
+        self.state.last_validation_passed = False
+
         return (
             f"Restored "
-            f"{self.workspace.relative(path)}"
+            f"{self.workspace.relative(path_obj)}"
         )
 
-    def git_status(self) -> str:
+    # --------------------------------------------------------
+    # git_status
+    # --------------------------------------------------------
 
-        if not command_exists("git"):
+    def git_status(
+        self,
+    ) -> str:
+
+        if not command_exists(
+            "git"
+        ):
+
             raise ValueError(
                 "Git is unavailable."
             )
@@ -788,9 +1131,18 @@ class Tools:
             timeout=20,
         )
 
-    def git_diff(self) -> str:
+    # --------------------------------------------------------
+    # git_diff
+    # --------------------------------------------------------
 
-        if not command_exists("git"):
+    def git_diff(
+        self,
+    ) -> str:
+
+        if not command_exists(
+            "git"
+        ):
+
             raise ValueError(
                 "Git is unavailable."
             )
@@ -804,6 +1156,10 @@ class Tools:
             ],
             timeout=20,
         )
+
+    # --------------------------------------------------------
+    # run_tests
+    # --------------------------------------------------------
 
     def run_tests(
         self,
@@ -819,19 +1175,25 @@ class Tools:
         if target:
 
             if target.startswith("-"):
+
                 raise ValueError(
                     "Invalid pytest target."
                 )
 
-            command.append(target)
-
-        command.append("-q")
-
-        result, code = (
-            self._run_with_code(
-                command,
-                timeout=180,
+            command.append(
+                target
             )
+
+        command.append(
+            "-q"
+        )
+
+        (
+            result,
+            code,
+        ) = self._run_with_code(
+            command,
+            timeout=180,
         )
 
         self.state.last_test_passed = (
@@ -843,21 +1205,28 @@ class Tools:
             f"{result}"
         )
 
-    def validate_python(self) -> str:
+    # --------------------------------------------------------
+    # validate_python
+    # --------------------------------------------------------
 
-        result, code = (
-            self._run_with_code(
-                [
-                    sys.executable,
-                    "-m",
-                    "compileall",
-                    "-q",
-                    str(
-                        self.workspace.root
-                    ),
-                ],
-                timeout=120,
-            )
+    def validate_python(
+        self,
+    ) -> str:
+
+        (
+            result,
+            code,
+        ) = self._run_with_code(
+            [
+                sys.executable,
+                "-m",
+                "compileall",
+                "-q",
+                str(
+                    self.workspace.root
+                ),
+            ],
+            timeout=120,
         )
 
         self.state.last_validation_passed = (
@@ -866,8 +1235,12 @@ class Tools:
 
         return (
             f"EXIT_CODE: {code}\n\n"
-            f"{result or 'Compilation succeeded.'}"
+            f"{result or 'Python compilation succeeded.'}"
         )
+
+    # --------------------------------------------------------
+    # remember_fact
+    # --------------------------------------------------------
 
     def remember_fact(
         self,
@@ -877,41 +1250,51 @@ class Tools:
 
         observation = next(
             (
-                observation
-                for observation
+                obs
+                for obs
                 in self.state.observations
-                if observation.id
-                == evidence_id
+                if obs.id == evidence_id
             ),
             None,
         )
 
         if observation is None:
+
             raise ValueError(
                 "Unknown evidence ID."
             )
 
         if not observation.success:
+
             raise ValueError(
                 "Evidence must come from "
-                "a successful observation."
+                "a successful tool observation."
             )
 
         if len(fact) > 500:
+
             raise ValueError(
                 "Fact is too long."
             )
 
         self.memory.add_fact(
             fact=fact,
+
             evidence=truncate_text(
                 observation.text,
                 1000,
             ),
+
             evidence_id=evidence_id,
         )
 
-        return "Project fact remembered."
+        return (
+            "Verified project fact saved."
+        )
+
+    # --------------------------------------------------------
+    # RUN PROCESS
+    # --------------------------------------------------------
 
     def _run(
         self,
@@ -947,13 +1330,20 @@ class Tools:
         output = ""
 
         if process.stdout:
-            output += process.stdout
+
+            output += (
+                process.stdout
+            )
 
         if process.stderr:
+
             if output:
+
                 output += "\n"
 
-            output += process.stderr
+            output += (
+                process.stderr
+            )
 
         return (
             truncate_text(output),
@@ -962,87 +1352,115 @@ class Tools:
 
 
 # ============================================================
-# MODEL PROTOCOL
+# MODEL TOOL DOCUMENTATION
 # ============================================================
 
 TOOL_DOCS = """
 AVAILABLE TOOLS
 
-inspect_project
+1. inspect_project
 {}
 
-list_files
+Discover project type, OS, Python, Git and top-level files.
+
+
+2. list_files
 {
   "path": ".",
   "depth": 2
 }
 
-search_text
+
+3. search_text
 {
-  "query": "text",
+  "query": "authentication",
   "path": ".",
   "max_results": 50
 }
 
-read_file
+
+4. read_file
 {
   "path": "src/app.py",
   "start_line": 1,
-  "end_line": 150
+  "end_line": 120
 }
 
-apply_patch
+
+5. apply_patch
 {
   "path": "src/app.py",
-  "old_text": "exact existing code",
-  "new_text": "replacement code"
+  "old_text": "exact existing text",
+  "new_text": "replacement text"
 }
 
-undo_last_edit
+
+6. undo_last_edit
 {}
 
-run_tests
+
+7. run_tests
 {
   "target": ""
 }
 
-validate_python
+
+8. validate_python
 {}
 
-git_status
+
+9. git_status
 {}
 
-git_diff
+
+10. git_diff
 {}
 
-remember_fact
+
+11. remember_fact
 {
-  "fact": "verified fact",
+  "fact": "stable verified project fact",
   "evidence_id": "obs-005"
 }
 """
 
 
+# ============================================================
+# STRUCTURED MODEL OUTPUT
+# ============================================================
+
 ACTION_SCHEMA = {
+
     "type": "object",
+
     "properties": {
+
         "type": {
+
             "type": "string",
+
             "enum": [
                 "tool",
                 "final",
             ],
         },
+
         "tool": {
+
             "type": "string",
         },
+
         "args": {
+
             "type": "object",
         },
+
         "message": {
+
             "type": "string",
         },
     },
+
     "required": [
         "type",
         "tool",
@@ -1052,57 +1470,91 @@ ACTION_SCHEMA = {
 }
 
 
+# ============================================================
+# SYSTEM PROMPT
+# ============================================================
+
 SYSTEM_PROMPT = f"""
-You are a conservative autonomous local coding agent.
+You are a local coding assistant.
 
-The user gives you a coding task.
+The user may either:
 
-Work toward it by choosing ONE next action at a time.
+1. Have a normal conversation.
+2. Ask a general programming question.
+3. Ask a project-specific question.
+4. Ask you to inspect, debug, edit, test, or modify the project.
 
-{TOOL_DOCS}
+IMPORTANT:
 
-RULES
+Do NOT use tools merely because tools are available.
 
-- Inspect before editing.
-- Search before reading large files.
-- Read small relevant regions.
-- Prefer minimal edits.
-- Never invent tool results.
-- Never access paths outside the workspace.
-- Do not repeatedly issue the same action.
-- Test changes when practical.
-- Inspect Git diff after editing when Git is available.
-- Only store facts supported by real observations.
-- Do not expose private chain-of-thought.
-- Your message field should contain only a short action description.
-- Return "final" when the task is complete.
+If the user's message is casual conversation, a greeting,
+general knowledge, or something that can be answered directly,
+return type="final" immediately.
 
-For tool use:
+Example:
 
-{{
-  "type": "tool",
-  "tool": "read_file",
-  "args": {{
-    "path": "app.py",
-    "start_line": 1,
-    "end_line": 100
-  }},
-  "message": "Inspecting the implementation."
-}}
+User:
+Hello how are you?
 
-For completion:
+Correct response:
 
 {{
   "type": "final",
   "tool": "",
   "args": {{}},
-  "message": "Task completed."
+  "message": "I'm doing well. How can I help you?"
+}}
+
+Only use project tools when project-specific evidence or an actual
+filesystem/code operation is needed.
+
+When tools ARE needed, choose exactly ONE next action at a time.
+
+{TOOL_DOCS}
+
+TOOL RULES
+
+- Inspect before editing.
+- Search before reading large amounts of source code.
+- Read small relevant file sections.
+- Make the smallest reasonable edit.
+- Never invent tool output.
+- Never assume a tool succeeded.
+- Tool errors are observations.
+- Do not repeatedly request the same action.
+- Prefer targeted tests before broad tests.
+- Inspect Git diff after edits when Git is available.
+- Stable facts may be persisted only when supported by evidence.
+- Never claim an edit works until it has verification.
+- Do not reveal private chain-of-thought.
+
+For tool use return:
+
+{{
+  "type": "tool",
+  "tool": "read_file",
+  "args": {{
+    "path": "src/example.py",
+    "start_line": 1,
+    "end_line": 100
+  }},
+  "message": "Inspecting the relevant code."
+}}
+
+For a direct answer or finished task return:
+
+{{
+  "type": "final",
+  "tool": "",
+  "args": {{}},
+  "message": "Your answer here."
 }}
 """
 
 
 # ============================================================
-# AGENT
+# CODING AGENT
 # ============================================================
 
 class CodingAgent:
@@ -1118,58 +1570,205 @@ class CodingAgent:
             config["model_path"]
         )
 
-        root = Path(
+        project_root = Path(
             config["project_root"]
         ).resolve()
 
         if not model_path.exists():
+
             raise ValueError(
                 "Configured model file "
                 "does not exist."
             )
 
-        if not root.exists():
+        if not project_root.exists():
+
             raise ValueError(
                 "Configured project root "
                 "does not exist."
             )
 
-        self.workspace = Workspace(root)
+        self.workspace = Workspace(
+            project_root
+        )
 
         self.memory = ProjectMemory(
             self.workspace
         )
 
-        threads = max(
-            1,
-            (os.cpu_count() or 4) - 2,
+        cpu_count = (
+            os.cpu_count()
+            or 4
         )
 
+        threads = max(
+            1,
+            cpu_count - 2,
+        )
+
+        print()
         print(
-            "\n🧠 Loading model..."
+            "🧠 Loading model..."
         )
 
         self.llm = Llama(
-            model_path=str(model_path),
+
+            model_path=str(
+                model_path
+            ),
+
             n_ctx=int(
-                config["context_size"]
+                config[
+                    "context_size"
+                ]
             ),
+
             n_gpu_layers=int(
-                config["gpu_layers"]
+                config[
+                    "gpu_layers"
+                ]
             ),
+
             n_threads=threads,
+
             n_threads_batch=threads,
+
             use_mmap=True,
+
             verbose=False,
         )
 
         self.n_ctx = int(
-            config["context_size"]
+            config[
+                "context_size"
+            ]
         )
 
         print(
-            "✅ Model loaded.\n"
+            "✅ Model loaded."
         )
+
+    # --------------------------------------------------------
+    # DEBUG
+    # --------------------------------------------------------
+
+    def debug_level(
+        self,
+    ) -> int:
+
+        return int(
+            self.config.get(
+                "debug_level",
+                0,
+            )
+        )
+
+    def debug_print(
+        self,
+        title: str,
+        content: Any,
+        minimum_level: int = 1,
+    ) -> None:
+
+        if (
+            self.debug_level()
+            < minimum_level
+        ):
+
+            return
+
+        print()
+        print(
+            "─" * 70
+        )
+
+        print(
+            f"🔎 {title}"
+        )
+
+        print(
+            "─" * 70
+        )
+
+        if isinstance(
+            content,
+            str,
+        ):
+
+            print(content)
+
+        else:
+
+            try:
+
+                print(
+                    json.dumps(
+                        content,
+                        indent=2,
+                        ensure_ascii=False,
+                    )
+                )
+
+            except Exception:
+
+                print(content)
+
+        print(
+            "─" * 70
+        )
+
+    def debug_messages(
+        self,
+        messages: list[dict[str, str]],
+    ) -> None:
+
+        if self.debug_level() < 3:
+
+            return
+
+        print()
+        print(
+            "=" * 70
+        )
+
+        print(
+            "📨 FULL MODEL INPUT"
+        )
+
+        print(
+            "=" * 70
+        )
+
+        for (
+            index,
+            message,
+        ) in enumerate(
+            messages,
+            start=1,
+        ):
+
+            print()
+            print(
+                f"[{index}] "
+                f"{message['role'].upper()}"
+            )
+
+            print(
+                "-" * 70
+            )
+
+            print(
+                message["content"]
+            )
+
+        print()
+        print(
+            "=" * 70
+        )
+
+    # --------------------------------------------------------
+    # TOKEN COUNT
+    # --------------------------------------------------------
 
     def token_count(
         self,
@@ -1177,38 +1776,82 @@ class CodingAgent:
     ) -> int:
 
         text = "\n".join(
+
             f"{message['role']}:\n"
             f"{message['content']}"
-            for message in messages
+
+            for message
+            in messages
         )
 
-        return len(
-            self.llm.tokenize(
-                text.encode("utf-8"),
-                add_bos=False,
+        try:
+
+            tokens = (
+                self.llm.tokenize(
+                    text.encode(
+                        "utf-8"
+                    ),
+                    add_bos=False,
+                )
             )
-        )
+
+            return len(tokens)
+
+        except Exception:
+
+            # Rough fallback.
+            return max(
+                1,
+                len(text) // 4,
+            )
+
+    # --------------------------------------------------------
+    # MODEL CALL
+    # --------------------------------------------------------
 
     def call_model(
         self,
         messages: list[dict[str, str]],
     ) -> dict[str, Any]:
 
+        self.debug_messages(
+            messages
+        )
+
         response = (
             self.llm.create_chat_completion(
+
                 messages=messages,
+
                 response_format={
-                    "type": "json_object",
-                    "schema": ACTION_SCHEMA,
+                    "type": (
+                        "json_object"
+                    ),
+
+                    "schema": (
+                        ACTION_SCHEMA
+                    ),
                 },
+
                 temperature=float(
-                    self.config["temperature"]
+                    self.config[
+                        "temperature"
+                    ]
                 ),
+
                 top_p=0.9,
+
                 max_tokens=(
                     MAX_MODEL_OUTPUT_TOKENS
                 ),
             )
+        )
+
+        # Debug level 3 can inspect the entire llama.cpp response.
+        self.debug_print(
+            "FULL LLAMA.CPP RESPONSE OBJECT",
+            response,
+            minimum_level=3,
         )
 
         content = (
@@ -1216,24 +1859,70 @@ class CodingAgent:
             ["message"]["content"]
         )
 
-        return json.loads(content)
+        # Level 1 and above sees exactly what the model produced.
+        self.debug_print(
+            "RAW LLM RESPONSE",
+            content,
+            minimum_level=1,
+        )
 
-    def memory_card(self) -> str:
+        try:
 
-        facts = self.memory.load_facts(
-            limit=30
+            parsed = json.loads(
+                content
+            )
+
+        except json.JSONDecodeError as error:
+
+            self.debug_print(
+                "JSON PARSE ERROR",
+                str(error),
+                minimum_level=1,
+            )
+
+            return {
+                "type": "invalid",
+                "tool": "",
+                "args": {},
+                "message": content,
+            }
+
+        self.debug_print(
+            "PARSED MODEL ACTION",
+            parsed,
+            minimum_level=2,
+        )
+
+        return parsed
+
+    # --------------------------------------------------------
+    # MEMORY CARD
+    # --------------------------------------------------------
+
+    def memory_card(
+        self,
+    ) -> str:
+
+        facts = (
+            self.memory.load_facts(
+                limit=30
+            )
         )
 
         if not facts:
+
             return (
-                "(no persistent project "
-                "memory yet)"
+                "(no persistent "
+                "project memory yet)"
             )
 
-        lines = []
         seen = set()
 
-        for row in reversed(facts):
+        lines = []
+
+        for row in reversed(
+            facts
+        ):
 
             fact = str(
                 row.get(
@@ -1246,9 +1935,12 @@ class CodingAgent:
                 not fact
                 or fact in seen
             ):
+
                 continue
 
-            seen.add(fact)
+            seen.add(
+                fact
+            )
 
             lines.append(
                 f"- {fact}"
@@ -1258,6 +1950,10 @@ class CodingAgent:
             lines[:20]
         )
 
+    # --------------------------------------------------------
+    # TOOL EXECUTION
+    # --------------------------------------------------------
+
     def execute_tool(
         self,
         tools: Tools,
@@ -1266,6 +1962,7 @@ class CodingAgent:
     ) -> tuple[bool, str]:
 
         available = {
+
             "inspect_project":
                 tools.inspect_project,
 
@@ -1305,33 +2002,68 @@ class CodingAgent:
         )
 
         if function is None:
+
             return (
                 False,
                 f"Unknown tool: {name}",
             )
 
+        self.debug_print(
+            "TOOL CALL",
+            {
+                "tool": name,
+                "args": args,
+            },
+            minimum_level=2,
+        )
+
         try:
-            result = function(**args)
+
+            result = function(
+                **args
+            )
+
+            result = truncate_text(
+                str(result)
+            )
+
+            self.debug_print(
+                "FULL TOOL RESULT",
+                result,
+                minimum_level=2,
+            )
 
             return (
                 True,
-                truncate_text(
-                    str(result)
-                ),
+                result,
             )
 
         except subprocess.TimeoutExpired:
+
             return (
                 False,
                 "Tool timed out.",
             )
 
+        except TypeError as error:
+
+            return (
+                False,
+                "Invalid tool arguments: "
+                f"{error}",
+            )
+
         except Exception as error:
+
             return (
                 False,
                 f"{type(error).__name__}: "
                 f"{error}",
             )
+
+    # --------------------------------------------------------
+    # CONTEXT COMPACTION
+    # --------------------------------------------------------
 
     def compact(
         self,
@@ -1345,51 +2077,69 @@ class CodingAgent:
         )
 
         transcript = "\n\n".join(
-            f"{message['role']}:\n"
+
+            f"{message['role'].upper()}:\n"
             f"{message['content']}"
-            for message in messages[1:]
+
+            for message
+            in messages[1:]
         )
 
         prompt = f"""
-Summarize the current coding task state.
+Summarize the current coding-agent state.
 
-Keep:
-- original goal
-- confirmed facts
-- important files
-- edits made
+Keep only facts required to continue correctly:
+
+- original task
+- confirmed discoveries
+- relevant files/functions
+- edits already made
 - current errors
 - test results
 - unresolved work
+- important constraints
 
-Do not invent anything.
+Do not invent information.
 
 TASK:
 {state.task}
 
-MEMORY:
+PERSISTENT MEMORY:
 {memory_card}
 
 HISTORY:
 {truncate_text(transcript, 20000)}
 """
 
+        summary_messages = [
+
+            {
+                "role": "system",
+                "content": (
+                    "Create a concise factual "
+                    "working-state summary."
+                ),
+            },
+
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ]
+
+        if self.debug_level() >= 3:
+
+            self.debug_messages(
+                summary_messages
+            )
+
         response = (
             self.llm.create_chat_completion(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Create a concise factual "
-                            "working-memory summary."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt,
-                    },
-                ],
+
+                messages=summary_messages,
+
                 temperature=0.0,
+
                 max_tokens=600,
             )
         )
@@ -1399,25 +2149,80 @@ HISTORY:
             ["message"]["content"]
         )
 
-        state.summary = summary
+        self.debug_print(
+            "COMPACTION RESPONSE",
+            summary,
+            minimum_level=2,
+        )
+
+        state.summary = (
+            summary
+        )
 
         return [
+
             {
                 "role": "system",
                 "content": SYSTEM_PROMPT,
             },
+
             {
                 "role": "user",
                 "content": (
                     f"ORIGINAL TASK:\n"
                     f"{state.task}\n\n"
-                    f"PROJECT MEMORY:\n"
+
+                    f"PERSISTENT PROJECT MEMORY:\n"
                     f"{memory_card}\n\n"
-                    f"CURRENT STATE:\n"
+
+                    f"COMPACTED WORKING STATE:\n"
                     f"{summary}"
                 ),
             },
         ]
+
+    # --------------------------------------------------------
+    # COMPLETION CHECK
+    # --------------------------------------------------------
+
+    def completion_allowed(
+        self,
+        state: AgentState,
+    ) -> tuple[bool, str]:
+
+        if not state.edited_files:
+
+            return (
+                True,
+                "",
+            )
+
+        if state.last_test_passed:
+
+            return (
+                True,
+                "",
+            )
+
+        if state.last_validation_passed:
+
+            return (
+                True,
+                "",
+            )
+
+        return (
+            False,
+            (
+                "Code was modified but no successful "
+                "verification has occurred yet. "
+                "Run tests or validate_python."
+            ),
+        )
+
+    # --------------------------------------------------------
+    # AGENT RUN
+    # --------------------------------------------------------
 
     def run(
         self,
@@ -1445,24 +2250,34 @@ HISTORY:
         )
 
         messages = [
+
             {
                 "role": "system",
                 "content": SYSTEM_PROMPT,
             },
+
             {
                 "role": "user",
                 "content": (
-                    f"TASK:\n{task}\n\n"
+                    f"USER REQUEST:\n"
+                    f"{task}\n\n"
+
                     f"ENVIRONMENT:\n"
-                    f"{json.dumps(environment, indent=2)}"
-                    f"\n\nPROJECT MEMORY:\n"
-                    f"{memory_card}"
+                    f"{json.dumps(environment, indent=2)}\n\n"
+
+                    f"PERSISTENT VERIFIED PROJECT MEMORY:\n"
+                    f"{memory_card}\n\n"
+
+                    "If this can be answered directly, "
+                    "do not use tools."
                 ),
             },
         ]
 
         max_steps = int(
-            self.config["max_steps"]
+            self.config[
+                "max_steps"
+            ]
         )
 
         for step in range(
@@ -1470,10 +2285,14 @@ HISTORY:
             max_steps + 1,
         ):
 
-            state.step = step
+            state.step = (
+                step
+            )
 
-            used = self.token_count(
-                messages
+            used = (
+                self.token_count(
+                    messages
+                )
             )
 
             threshold = int(
@@ -1483,23 +2302,30 @@ HISTORY:
 
             if used >= threshold:
 
-                messages = self.compact(
-                    state,
-                    messages,
-                    memory_card,
+                messages = (
+                    self.compact(
+                        state,
+                        messages,
+                        memory_card,
+                    )
                 )
 
-                used = self.token_count(
-                    messages
+                used = (
+                    self.token_count(
+                        messages
+                    )
                 )
 
+            print()
             print(
-                f"\n🧠 Step {step}/{max_steps}"
+                f"🧠 Step "
+                f"{step}/{max_steps}"
                 f" | context ≈ "
                 f"{used}/{self.n_ctx}"
             )
 
             try:
+
                 action = (
                     self.call_model(
                         messages
@@ -1507,13 +2333,17 @@ HISTORY:
                 )
 
             except Exception as error:
+
                 return (
-                    f"Model error: "
+                    "Model invocation failed:\n"
+                    f"{type(error).__name__}: "
                     f"{error}"
                 )
 
             action_type = (
-                action.get("type")
+                action.get(
+                    "type"
+                )
             )
 
             tool_name = (
@@ -1531,37 +2361,63 @@ HISTORY:
                 or {}
             )
 
-            message = (
+            model_message = (
                 action.get(
                     "message",
                     "",
                 )
             )
 
+            # =================================================
+            # FINAL
+            # =================================================
+
             if action_type == "final":
 
-                if (
-                    state.edited_files
-                    and not (
-                        state.last_test_passed
-                        or state.last_validation_passed
+                allowed, reason = (
+                    self.completion_allowed(
+                        state
                     )
-                ):
-                    messages.append(
-                        {
-                            "role": "user",
-                            "content": (
-                                "CONTROLLER: "
-                                "Code was edited but "
-                                "has not been successfully "
-                                "verified yet."
-                            ),
-                        }
+                )
+
+                if allowed:
+
+                    return (
+                        model_message
                     )
 
-                    continue
+                print(
+                    f"🚫 Completion rejected: "
+                    f"{reason}"
+                )
 
-                return message
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": (
+                            json.dumps(
+                                action,
+                                ensure_ascii=False,
+                            )
+                        ),
+                    }
+                )
+
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "CONTROLLER:\n"
+                            f"{reason}"
+                        ),
+                    }
+                )
+
+                continue
+
+            # =================================================
+            # INVALID
+            # =================================================
 
             if action_type != "tool":
 
@@ -1569,14 +2425,37 @@ HISTORY:
                     {
                         "role": "user",
                         "content": (
-                            "CONTROLLER: "
-                            "Choose either "
-                            "tool or final."
+                            "CONTROLLER ERROR:\n"
+                            "Your response was invalid. "
+                            "Return either type='tool' "
+                            "or type='final'."
                         ),
                     }
                 )
 
                 continue
+
+            if not isinstance(
+                args,
+                dict,
+            ):
+
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "CONTROLLER ERROR:\n"
+                            "Tool args must be "
+                            "a JSON object."
+                        ),
+                    }
+                )
+
+                continue
+
+            # =================================================
+            # LOOP DETECTION
+            # =================================================
 
             fingerprint = (
                 action_fingerprint(
@@ -1602,42 +2481,68 @@ HISTORY:
                 > MAX_IDENTICAL_ACTIONS
             ):
 
+                warning = (
+                    "You have already requested "
+                    "this exact action multiple times. "
+                    "Choose another approach."
+                )
+
+                print(
+                    f"🔁 {warning}"
+                )
+
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": (
+                            json.dumps(
+                                action,
+                                ensure_ascii=False,
+                            )
+                        ),
+                    }
+                )
+
                 messages.append(
                     {
                         "role": "user",
                         "content": (
-                            "CONTROLLER: "
-                            "You have repeated "
-                            "this exact action. "
-                            "Choose another approach."
+                            "CONTROLLER:\n"
+                            f"{warning}"
                         ),
                     }
                 )
 
                 continue
 
+            # =================================================
+            # EXECUTE TOOL
+            # =================================================
+
             print(
                 f"🛠️ {tool_name}"
             )
 
-            if message:
+            if model_message:
+
                 print(
-                    f"   {message}"
+                    f"   {model_message}"
                 )
 
-            success, output = (
-                self.execute_tool(
-                    tools,
-                    tool_name,
-                    args,
-                )
+            (
+                success,
+                output,
+            ) = self.execute_tool(
+                tools,
+                tool_name,
+                args,
             )
 
             observation_id = (
                 f"obs-{step:03d}"
             )
 
-            state.observations.append(
+            observation = (
                 Observation(
                     id=observation_id,
                     tool=tool_name,
@@ -1647,6 +2552,21 @@ HISTORY:
                 )
             )
 
+            state.observations.append(
+                observation
+            )
+
+            if (
+                len(
+                    state.observations
+                )
+                > 100
+            ):
+
+                state.observations = (
+                    state.observations[-100:]
+                )
+
             icon = (
                 "📦"
                 if success
@@ -1655,15 +2575,17 @@ HISTORY:
 
             print(
                 f"{icon} "
-                f"{truncate_text(output, 700)}"
+                f"{truncate_text(output, 1000)}"
             )
 
             messages.append(
                 {
                     "role": "assistant",
-                    "content": json.dumps(
-                        action,
-                        ensure_ascii=False,
+                    "content": (
+                        json.dumps(
+                            action,
+                            ensure_ascii=False,
+                        )
                     ),
                 }
             )
@@ -1674,7 +2596,8 @@ HISTORY:
                     "content": (
                         f"TOOL OBSERVATION "
                         f"{observation_id}\n"
-                        f"success={success}\n\n"
+                        f"success={success}\n"
+                        f"tool={tool_name}\n\n"
                         f"{output}"
                     ),
                 }
@@ -1685,49 +2608,65 @@ HISTORY:
                 and tool_name
                 == "remember_fact"
             ):
+
                 memory_card = (
                     self.memory_card()
                 )
 
         return (
             "🛑 Maximum number of "
-            "agent steps reached."
+            f"{max_steps} agent steps reached."
         )
 
 
 # ============================================================
-# MODEL SELECTION
+# MODEL DISCOVERY
 # ============================================================
 
 def find_gguf_files(
     start: Path,
+    max_results: int = 100,
 ) -> list[Path]:
 
     found = []
 
+    if not start.exists():
+
+        return found
+
     try:
-        for path in start.rglob(
-            "*.gguf"
+
+        for path in (
+            start.rglob(
+                "*.gguf"
+            )
         ):
 
-            if (
-                ".git"
-                in path.parts
-            ):
+            if ".git" in path.parts:
+
                 continue
 
             found.append(
                 path.resolve()
             )
 
-            if len(found) >= 100:
+            if (
+                len(found)
+                >= max_results
+            ):
+
                 break
 
     except Exception:
+
         pass
 
     return found
 
+
+# ============================================================
+# MODEL SELECTION MENU
+# ============================================================
 
 def model_selection_menu(
     config: dict[str, Any],
@@ -1735,34 +2674,54 @@ def model_selection_menu(
 
     clear_screen()
 
-    print("🤖 MODEL SELECTION")
-    print("=" * 60)
+    print_header(
+        "🤖 MODEL SELECTION"
+    )
 
     search_locations = [
+
+        SCRIPT_DIR,
+
+        SCRIPT_DIR / "models",
+
         Path.cwd(),
+
         Path.cwd() / "models",
-        Path.home() / "models",
     ]
 
     models = []
+
     seen = set()
 
-    for location in search_locations:
+    for location in (
+        search_locations
+    ):
 
         if not location.exists():
+
             continue
 
-        for model in find_gguf_files(
-            location
+        for model in (
+            find_gguf_files(
+                location
+            )
         ):
 
-            key = str(model).lower()
+            key = str(
+                model
+            ).lower()
 
             if key in seen:
+
                 continue
 
-            seen.add(key)
-            models.append(model)
+            seen.add(
+                key
+            )
+
+            models.append(
+                model
+            )
 
     if models:
 
@@ -1770,119 +2729,181 @@ def model_selection_menu(
             "\nDetected GGUF models:\n"
         )
 
-        for index, model in enumerate(
+        for (
+            index,
+            model,
+        ) in enumerate(
             models,
             start=1,
         ):
 
             marker = ""
 
-            if (
-                str(model)
-                == config["model_path"]
-            ):
-                marker = "  ✅ current"
+            try:
+
+                configured = (
+                    Path(
+                        config[
+                            "model_path"
+                        ]
+                    ).resolve()
+                )
+
+                if (
+                    model.resolve()
+                    == configured
+                ):
+
+                    marker = (
+                        "  ✅ current"
+                    )
+
+            except Exception:
+
+                pass
 
             try:
+
                 size_gb = (
                     model.stat().st_size
                     / 1024**3
                 )
 
-                size_text = (
+                size = (
                     f"{size_gb:.2f} GB"
                 )
 
             except Exception:
-                size_text = "?"
+
+                size = "?"
 
             print(
                 f"{index}. "
                 f"{model.name}"
-                f" [{size_text}]"
+                f" [{size}]"
                 f"{marker}"
             )
 
-        print(
-            f"{len(models) + 1}. "
-            "Enter model path manually"
+        manual_number = (
+            len(models)
+            + 1
         )
 
-        print("0. Back")
+        print(
+            f"\n{manual_number}. "
+            f"Enter model path manually"
+        )
 
-        choice = input(
+        print(
+            "0. Back"
+        )
+
+        selected = input(
             "\nSelect model: "
         ).strip()
 
-        if choice == "0":
+        if selected == "0":
+
             return
 
         try:
-            selected = int(choice)
+
+            number = int(
+                selected
+            )
 
             if (
                 1
-                <= selected
+                <= number
                 <= len(models)
             ):
-                config["model_path"] = str(
+
+                selected_model = (
                     models[
-                        selected - 1
+                        number - 1
                     ]
                 )
 
-                save_config(config)
+                config[
+                    "model_path"
+                ] = str(
+                    selected_model
+                )
+
+                save_config(
+                    config
+                )
 
                 print(
-                    "\n✅ Model selected."
+                    "\n✅ Model selected:"
+                )
+
+                print(
+                    selected_model
                 )
 
                 pause()
+
                 return
 
             if (
-                selected
-                == len(models) + 1
+                number
+                != manual_number
             ):
-                pass
 
-            else:
                 return
 
         except ValueError:
+
             pass
 
-    model_path = input(
-        "\nEnter full GGUF path: "
+    print()
+
+    entered = input(
+        "Enter full GGUF model path: "
     ).strip().strip('"')
 
-    path = Path(
-        model_path
-    ).expanduser()
+    if not entered:
+
+        return
+
+    path = (
+        Path(entered)
+        .expanduser()
+        .resolve()
+    )
 
     if not path.exists():
+
         print(
             "\n❌ File does not exist."
         )
+
         pause()
+
         return
 
     if (
         path.suffix.lower()
         != ".gguf"
     ):
+
         print(
             "\n❌ Selected file "
-            "is not a GGUF file."
+            "is not a .gguf model."
         )
+
         pause()
+
         return
 
-    config["model_path"] = str(
-        path.resolve()
-    )
+    config[
+        "model_path"
+    ] = str(path)
 
-    save_config(config)
+    save_config(
+        config
+    )
 
     print(
         "\n✅ Model selected."
@@ -1901,17 +2922,27 @@ def project_selection_menu(
 
     clear_screen()
 
-    print("📁 PROJECT SELECTION")
-    print("=" * 60)
-
-    print(
-        "\nCurrent project:\n"
-        f"{config['project_root']}"
+    print_header(
+        "📁 PROJECT SELECTION"
     )
 
     print(
-        "\nEnter a folder path "
-        "or press Enter to cancel."
+        "\nCurrent project:"
+    )
+
+    print(
+        config[
+            "project_root"
+        ]
+    )
+
+    print()
+    print(
+        "Enter another project folder."
+    )
+
+    print(
+        "Press Enter to cancel."
     )
 
     entered = input(
@@ -1919,41 +2950,139 @@ def project_selection_menu(
     ).strip().strip('"')
 
     if not entered:
+
         return
 
-    path = Path(
-        entered
-    ).expanduser().resolve()
+    path = (
+        Path(entered)
+        .expanduser()
+        .resolve()
+    )
 
     if not path.exists():
+
         print(
             "\n❌ Folder does not exist."
         )
+
         pause()
+
         return
 
     if not path.is_dir():
+
         print(
-            "\n❌ That is not a folder."
+            "\n❌ Selected path "
+            "is not a directory."
         )
+
         pause()
+
         return
 
-    config["project_root"] = str(
-        path
-    )
+    config[
+        "project_root"
+    ] = str(path)
 
-    save_config(config)
+    save_config(
+        config
+    )
 
     print(
-        "\n✅ Project selected."
+        "\n✅ Project selected:"
     )
+
+    print(path)
 
     pause()
 
 
 # ============================================================
-# SETTINGS
+# DEBUG SETTINGS
+# ============================================================
+
+def debug_settings_menu(
+    config: dict[str, Any],
+) -> None:
+
+    while True:
+
+        clear_screen()
+
+        print_header(
+            "🔎 DEBUG MODE"
+        )
+
+        current = int(
+            config.get(
+                "debug_level",
+                1,
+            )
+        )
+
+        print(
+            f"\nCurrent debug level: "
+            f"{current}\n"
+        )
+
+        print(
+            "0. Off"
+        )
+
+        print(
+            "1. Raw LLM responses"
+        )
+
+        print(
+            "2. Raw LLM responses "
+            "+ tool calls/results"
+        )
+
+        print(
+            "3. Full prompts + raw responses "
+            "+ tools + llama response object"
+        )
+
+        print(
+            "9. Back"
+        )
+
+        choice = input(
+            "\nSelect debug level: "
+        ).strip()
+
+        if choice == "9":
+
+            return
+
+        if choice in {
+            "0",
+            "1",
+            "2",
+            "3",
+        }:
+
+            config[
+                "debug_level"
+            ] = int(
+                choice
+            )
+
+            save_config(
+                config
+            )
+
+            print(
+                "\n✅ Debug level updated."
+            )
+
+            pause()
+
+            return
+
+
+# ============================================================
+# SETTINGS MENU
 # ============================================================
 
 def settings_menu(
@@ -1964,35 +3093,42 @@ def settings_menu(
 
         clear_screen()
 
-        print("⚙️ SETTINGS")
-        print("=" * 60)
+        print_header(
+            "⚙️ SETTINGS"
+        )
 
         print(
             f"\n1. Context size"
-            f"      : "
+            f"       : "
             f"{config['context_size']}"
         )
 
         print(
             f"2. GPU layers"
-            f"        : "
+            f"         : "
             f"{config['gpu_layers']}"
         )
 
         print(
             f"3. Max agent steps"
-            f"   : "
+            f"    : "
             f"{config['max_steps']}"
         )
 
         print(
             f"4. Temperature"
-            f"       : "
+            f"        : "
             f"{config['temperature']}"
         )
 
         print(
-            "\n5. Reset defaults"
+            f"5. Debug level"
+            f"        : "
+            f"{config['debug_level']}"
+        )
+
+        print(
+            "6. Reset settings to defaults"
         )
 
         print(
@@ -2003,21 +3139,46 @@ def settings_menu(
             "\nSelect option: "
         ).strip()
 
+        # ----------------------------------------------------
+        # BACK
+        # ----------------------------------------------------
+
         if choice == "0":
+
+            save_config(
+                config
+            )
+
             return
+
+        # ----------------------------------------------------
+        # CONTEXT
+        # ----------------------------------------------------
 
         elif choice == "1":
 
+            print()
             print(
-                "\nCommon values:"
+                "1. 4096"
             )
-            print("1. 4096")
-            print("2. 8192")
-            print("3. 16384")
-            print("4. 32768")
-            print("5. Custom")
 
-            selected = input(
+            print(
+                "2. 8192"
+            )
+
+            print(
+                "3. 16384"
+            )
+
+            print(
+                "4. 32768"
+            )
+
+            print(
+                "5. Custom"
+            )
+
+            context_choice = input(
                 "\nSelect: "
             ).strip()
 
@@ -2028,30 +3189,51 @@ def settings_menu(
                 "4": 32768,
             }
 
-            if selected in mapping:
-                config["context_size"] = (
-                    mapping[selected]
+            if (
+                context_choice
+                in mapping
+            ):
+
+                config[
+                    "context_size"
+                ] = (
+                    mapping[
+                        context_choice
+                    ]
                 )
 
-            elif selected == "5":
+            elif (
+                context_choice
+                == "5"
+            ):
 
                 try:
-                    config["context_size"] = int(
+
+                    value = int(
                         input(
                             "Context size: "
                         )
                     )
+
+                    if value >= 1024:
+
+                        config[
+                            "context_size"
+                        ] = value
+
                 except ValueError:
+
                     pass
+
+        # ----------------------------------------------------
+        # GPU LAYERS
+        # ----------------------------------------------------
 
         elif choice == "2":
 
+            print()
             print(
-                "\nGPU layer options:"
-            )
-
-            print(
-                "0 = CPU only"
+                "0  = CPU only"
             )
 
             print(
@@ -2060,78 +3242,147 @@ def settings_menu(
             )
 
             try:
-                config["gpu_layers"] = int(
+
+                value = int(
                     input(
                         "\nGPU layers: "
                     )
                 )
+
+                config[
+                    "gpu_layers"
+                ] = value
+
             except ValueError:
+
                 pass
+
+        # ----------------------------------------------------
+        # MAX STEPS
+        # ----------------------------------------------------
 
         elif choice == "3":
 
             try:
-                config["max_steps"] = int(
+
+                value = int(
                     input(
-                        "\nMax steps: "
+                        "\nMax agent steps: "
                     )
                 )
+
+                if value >= 1:
+
+                    config[
+                        "max_steps"
+                    ] = value
+
             except ValueError:
+
                 pass
+
+        # ----------------------------------------------------
+        # TEMPERATURE
+        # ----------------------------------------------------
 
         elif choice == "4":
 
             try:
-                config["temperature"] = float(
+
+                value = float(
                     input(
                         "\nTemperature: "
                     )
                 )
+
+                if (
+                    0
+                    <= value
+                    <= 2
+                ):
+
+                    config[
+                        "temperature"
+                    ] = value
+
             except ValueError:
+
                 pass
+
+        # ----------------------------------------------------
+        # DEBUG
+        # ----------------------------------------------------
 
         elif choice == "5":
 
+            debug_settings_menu(
+                config
+            )
+
+        # ----------------------------------------------------
+        # RESET
+        # ----------------------------------------------------
+
+        elif choice == "6":
+
             current_model = (
-                config["model_path"]
+                config.get(
+                    "model_path",
+                    "",
+                )
             )
 
             current_project = (
-                config["project_root"]
+                config.get(
+                    "project_root",
+                    str(SCRIPT_DIR),
+                )
             )
 
             config.clear()
+
             config.update(
                 DEFAULT_CONFIG.copy()
             )
 
-            config["model_path"] = (
-                current_model
+            # Keep selections.
+            config[
+                "model_path"
+            ] = current_model
+
+            config[
+                "project_root"
+            ] = current_project
+
+            print(
+                "\n✅ Settings reset."
             )
 
-            config["project_root"] = (
-                current_project
-            )
+            pause()
 
-        save_config(config)
+        save_config(
+            config
+        )
 
 
 # ============================================================
-# CHAT
+# CHAT MENU
 # ============================================================
 
 def chat_menu(
     config: dict[str, Any],
 ) -> None:
 
-    if not config["model_path"]:
+    # --------------------------------------------------------
+    # MODEL CHECK
+    # --------------------------------------------------------
+
+    if not config.get(
+        "model_path"
+    ):
 
         print(
             "\n⚠️ No model selected."
-        )
-
-        print(
-            "Opening model selection..."
         )
 
         pause()
@@ -2140,18 +3391,23 @@ def chat_menu(
             config
         )
 
-        if not config["model_path"]:
+        if not config.get(
+            "model_path"
+        ):
+
             return
 
     model = Path(
-        config["model_path"]
+        config[
+            "model_path"
+        ]
     )
 
     if not model.exists():
 
         print(
             "\n❌ Configured model "
-            "could not be found."
+            "was not found."
         )
 
         pause()
@@ -2162,15 +3418,21 @@ def chat_menu(
 
         return
 
+    # --------------------------------------------------------
+    # PROJECT CHECK
+    # --------------------------------------------------------
+
     project = Path(
-        config["project_root"]
+        config[
+            "project_root"
+        ]
     )
 
     if not project.exists():
 
         print(
-            "\n❌ Project folder "
-            "could not be found."
+            "\n❌ Configured project "
+            "folder was not found."
         )
 
         pause()
@@ -2181,10 +3443,15 @@ def chat_menu(
 
         return
 
+    # --------------------------------------------------------
+    # START AGENT
+    # --------------------------------------------------------
+
     clear_screen()
 
-    print("🤖 LOCAL CODING AGENT")
-    print("=" * 60)
+    print_header(
+        "🤖 LOCAL CODING AGENT"
+    )
 
     print(
         f"\nModel   : "
@@ -2202,10 +3469,16 @@ def chat_menu(
     )
 
     print(
+        f"Debug   : "
+        f"{config['debug_level']}"
+    )
+
+    print(
         "\nLoading..."
     )
 
     try:
+
         agent = CodingAgent(
             config
         )
@@ -2213,45 +3486,65 @@ def chat_menu(
     except Exception as error:
 
         print(
-            f"\n❌ Could not "
-            f"start model:\n{error}"
+            "\n❌ Could not load model:"
         )
 
+        print(error)
+
         pause()
+
         return
+
+    print()
+    print(
+        "Commands:"
+    )
+
+    print(
+        "  /back   Return to main menu"
+    )
+
+    print(
+        "  /help   Show commands"
+    )
+
+    # --------------------------------------------------------
+    # INTERACTIVE LOOP
+    # --------------------------------------------------------
 
     while True:
 
         print()
-        print("-" * 60)
+        print(
+            "-" * 70
+        )
 
         task = input(
-            "\n👤 Task > "
+            "\n👤 > "
         ).strip()
 
         if not task:
+
             continue
 
-        if task.lower() in {
+        normalized = (
+            task.lower()
+        )
+
+        if normalized in {
+            "/back",
             "/exit",
             "/quit",
-            "/back",
             "exit",
         }:
+
             return
 
-        if task.lower() == "/help":
+        if normalized == "/help":
 
+            print()
             print(
-                "\nCommands:"
-            )
-
-            print(
-                "/back  - return to menu"
-            )
-
-            print(
-                "/exit  - return to menu"
+                "/back  - return to main menu"
             )
 
             print(
@@ -2260,23 +3553,110 @@ def chat_menu(
 
             continue
 
+        print()
         print(
-            "\n🚀 Starting agent..."
+            "🚀 Sending to model..."
         )
 
-        result = agent.run(
-            task
+        result = (
+            agent.run(
+                task
+            )
         )
 
         print()
-        print("=" * 60)
-        print("🤖 RESULT")
-        print("=" * 60)
-        print(result)
+        print(
+            "=" * 70
+        )
+
+        print(
+            "🤖 RESPONSE"
+        )
+
+        print(
+            "=" * 70
+        )
+
+        print(
+            result
+        )
 
 
 # ============================================================
-# MAIN MENU
+# SYSTEM INFORMATION
+# ============================================================
+
+def system_information_menu(
+    config: dict[str, Any],
+) -> None:
+
+    clear_screen()
+
+    print_header(
+        "🔎 SYSTEM INFORMATION"
+    )
+
+    project = Path(
+        config[
+            "project_root"
+        ]
+    )
+
+    if project.exists():
+
+        info = detect_project(
+            project
+        )
+
+        print()
+        print(
+            json.dumps(
+                info,
+                indent=2,
+            )
+        )
+
+    print()
+    print(
+        "Application directory:"
+    )
+
+    print(
+        SCRIPT_DIR
+    )
+
+    print()
+    print(
+        ".myllm directory:"
+    )
+
+    print(
+        APP_DIR
+    )
+
+    print()
+    print(
+        "Configuration:"
+    )
+
+    print(
+        CONFIG_FILE
+    )
+
+    print()
+    print(
+        "Persistent memory:"
+    )
+
+    print(
+        MEMORY_ROOT
+    )
+
+    pause()
+
+
+# ============================================================
+# STATUS
 # ============================================================
 
 def show_status(
@@ -2284,14 +3664,22 @@ def show_status(
 ) -> None:
 
     model_path = (
-        config["model_path"]
+        config.get(
+            "model_path",
+            "",
+        )
     )
 
     if model_path:
-        model_name = Path(
-            model_path
-        ).name
+
+        model_name = (
+            Path(
+                model_path
+            ).name
+        )
+
     else:
+
         model_name = (
             "Not selected"
         )
@@ -2311,8 +3699,25 @@ def show_status(
         f"{config['context_size']}"
     )
 
+    print(
+        f"🔎 Debug   : "
+        f"{config['debug_level']}"
+    )
+
+
+# ============================================================
+# MAIN MENU
+# ============================================================
 
 def main_menu() -> None:
+
+    # This immediately creates:
+    #
+    # .myllm/
+    #     config.json
+    #     memory/
+    #
+    # if they don't already exist.
 
     config = load_config()
 
@@ -2321,92 +3726,85 @@ def main_menu() -> None:
         clear_screen()
 
         print(
-            "╔══════════════════════════════════╗"
+            "╔══════════════════════════════════════╗"
         )
 
         print(
-            "║        🤖 MY LOCAL LLM          ║"
+            "║          🤖 MY LOCAL LLM            ║"
         )
 
         print(
-            "╚══════════════════════════════════╝"
+            "╚══════════════════════════════════════╝"
         )
 
-        show_status(config)
+        show_status(
+            config
+        )
 
         print()
-        print("1. 💬 Chat / Coding Agent")
-        print("2. ⚙️  Settings")
-        print("3. 🤖 Model Selection")
-        print("4. 📁 Project Selection")
-        print("5. 🔎 System Information")
-        print("0. 🚪 Exit")
+        print(
+            "1. 💬 Chat / Coding Agent"
+        )
+
+        print(
+            "2. ⚙️  Settings"
+        )
+
+        print(
+            "3. 🤖 Model Selection"
+        )
+
+        print(
+            "4. 📁 Project Selection"
+        )
+
+        print(
+            "5. 🔎 System Information"
+        )
+
+        print(
+            "0. 🚪 Exit"
+        )
 
         choice = input(
             "\nSelect option: "
         ).strip()
 
         if choice == "1":
+
             chat_menu(
                 config
             )
 
         elif choice == "2":
+
             settings_menu(
                 config
             )
 
         elif choice == "3":
+
             model_selection_menu(
                 config
             )
 
         elif choice == "4":
+
             project_selection_menu(
                 config
             )
 
         elif choice == "5":
 
-            clear_screen()
-
-            print(
-                "🔎 SYSTEM INFORMATION"
+            system_information_menu(
+                config
             )
-
-            print(
-                "=" * 60
-            )
-
-            info = detect_project(
-                Path(
-                    config[
-                        "project_root"
-                    ]
-                )
-            )
-
-            print(
-                json.dumps(
-                    info,
-                    indent=2,
-                )
-            )
-
-            print(
-                "\nConfiguration file:"
-            )
-
-            print(
-                CONFIG_FILE
-            )
-
-            pause()
 
         elif choice == "0":
 
+            print()
             print(
-                "\n👋 Goodbye."
+                "👋 Goodbye."
             )
 
             break
@@ -2417,4 +3815,5 @@ def main_menu() -> None:
 # ============================================================
 
 if __name__ == "__main__":
+
     main_menu()
