@@ -3,6 +3,24 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Local model binaries are large and must not be committed.
+models/*.gguf
+
+# Local conversation history
+data/*.jsonl
+data/*.json
+data/*.lance/
+
+# Per-workspace Local Agent settings
+**/.llmAgentLite/
+
+# Rotating application logs
+logs/*.log
+logs/*.log.*
+
+# Broken environments preserved during local repair
+.venv-broken*/
+
 # C extensions
 *.so
 
