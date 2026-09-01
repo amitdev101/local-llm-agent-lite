@@ -33,7 +33,6 @@ IGNORE_DIRS = {
     ".myllm",
 }
 
-
 TEXT_EXTENSIONS = {
     ".py",
     ".pyi",
@@ -67,10 +66,9 @@ TEXT_EXTENSIONS = {
     ".ps1",
 }
 
-
 MAX_FILE_BYTES = 1_500_000
-MAX_TOOL_OUTPUT_CHARS = 7000
-MAX_EDIT_CHARS = 50000
+MAX_TOOL_OUTPUT_CHARS = 6_000
+MAX_EDIT_CHARS = 60_000
 
 
 # ============================================================
@@ -107,6 +105,8 @@ class ProjectProfile:
     notes: list[str] = field(
         default_factory=list
     )
+
+    root: str = "."
 
 
 # ============================================================
@@ -148,7 +148,7 @@ def read_text_file(
 
     if not path.is_file():
         raise ValueError(
-            f"Not a file: {path}"
+            f"Path is not a file: {path}"
         )
 
     size = path.stat().st_size
@@ -164,33 +164,33 @@ def read_text_file(
     )
 
 
-def _npm_runner(
-    package_manager: str,
+def npm_script_command(
+    manager: str,
     script: str,
 ) -> list[str]:
 
-    if package_manager == "npm":
+    if manager == "npm":
         return [
             "npm",
             "run",
             script,
         ]
 
-    if package_manager == "pnpm":
+    if manager == "pnpm":
         return [
             "pnpm",
             "run",
             script,
         ]
 
-    if package_manager == "yarn":
+    if manager == "yarn":
         return [
             "yarn",
             script,
         ]
 
     return [
-        package_manager,
+        manager,
         "run",
         script,
     ]
@@ -206,32 +206,42 @@ def detect_project_profile(
 
     root = root.resolve()
 
-    profile = ProjectProfile()
+    profile = ProjectProfile(
+        root=str(root)
+    )
 
-    # --------------------------------------------------------
-    # NODE / REACT / JS / TS
-    # --------------------------------------------------------
+    if not root.exists():
+        return profile
 
-    package_json = root / "package.json"
+    # ========================================================
+    # NODE / JAVASCRIPT / TYPESCRIPT
+    # ========================================================
+
+    package_json = (
+        root / "package.json"
+    )
 
     if package_json.exists():
 
         profile.kind = "node"
+        profile.languages.append(
+            "JavaScript"
+        )
 
         try:
-            data = json.loads(
+            package_data = json.loads(
                 package_json.read_text(
                     encoding="utf-8"
                 )
             )
 
         except Exception:
-            data = {}
+            package_data = {}
 
         dependencies: dict[str, Any] = {}
 
         dependencies.update(
-            data.get(
+            package_data.get(
                 "dependencies",
                 {}
             )
@@ -239,7 +249,7 @@ def detect_project_profile(
         )
 
         dependencies.update(
-            data.get(
+            package_data.get(
                 "devDependencies",
                 {}
             )
@@ -247,20 +257,19 @@ def detect_project_profile(
         )
 
         scripts = (
-            data.get(
+            package_data.get(
                 "scripts",
                 {}
             )
             or {}
         )
 
-        profile.languages.append(
-            "JavaScript"
-        )
-
         if (
             "typescript" in dependencies
-            or (root / "tsconfig.json").exists()
+            or (
+                root
+                / "tsconfig.json"
+            ).exists()
         ):
             profile.languages.append(
                 "TypeScript"
@@ -286,51 +295,64 @@ def detect_project_profile(
                 "Vue"
             )
 
-        if (
-            root / "pnpm-lock.yaml"
-        ).exists():
+        if "svelte" in dependencies:
+            profile.frameworks.append(
+                "Svelte"
+            )
 
-            profile.package_manager = "pnpm"
+        if (
+            root
+            / "pnpm-lock.yaml"
+        ).exists():
+            profile.package_manager = (
+                "pnpm"
+            )
 
         elif (
-            root / "yarn.lock"
+            root
+            / "yarn.lock"
         ).exists():
-
-            profile.package_manager = "yarn"
+            profile.package_manager = (
+                "yarn"
+            )
 
         else:
-            profile.package_manager = "npm"
+            profile.package_manager = (
+                "npm"
+            )
 
-        pm = profile.package_manager
+        manager = (
+            profile.package_manager
+        )
 
         if "test" in scripts:
             profile.test_command = (
-                _npm_runner(
-                    pm,
+                npm_script_command(
+                    manager,
                     "test",
                 )
             )
 
         if "build" in scripts:
             profile.build_command = (
-                _npm_runner(
-                    pm,
+                npm_script_command(
+                    manager,
                     "build",
                 )
             )
 
         if "lint" in scripts:
             profile.lint_command = (
-                _npm_runner(
-                    pm,
+                npm_script_command(
+                    manager,
                     "lint",
                 )
             )
 
         if "typecheck" in scripts:
             profile.typecheck_command = (
-                _npm_runner(
-                    pm,
+                npm_script_command(
+                    manager,
                     "typecheck",
                 )
             )
@@ -338,17 +360,19 @@ def detect_project_profile(
         elif (
             "TypeScript"
             in profile.languages
+            and command_exists(
+                "npx"
+            )
         ):
-            if command_exists("npx"):
-                profile.typecheck_command = [
-                    "npx",
-                    "tsc",
-                    "--noEmit",
-                ]
+            profile.typecheck_command = [
+                "npx",
+                "tsc",
+                "--noEmit",
+            ]
 
         profile.source_dirs = [
-            directory
-            for directory
+            name
+            for name
             in [
                 "src",
                 "app",
@@ -356,46 +380,44 @@ def detect_project_profile(
                 "components",
             ]
             if (
-                root / directory
+                root / name
             ).exists()
         ]
 
         profile.test_dirs = [
-            directory
-            for directory
+            name
+            for name
             in [
                 "tests",
                 "test",
                 "__tests__",
             ]
             if (
-                root / directory
+                root / name
             ).exists()
         ]
 
         return profile
 
-    # --------------------------------------------------------
-    # JAVA / MAVEN
-    # --------------------------------------------------------
+    # ========================================================
+    # JAVA MAVEN
+    # ========================================================
 
     if (
         root / "pom.xml"
     ).exists():
 
         profile.kind = "java_maven"
-
         profile.languages = [
             "Java"
         ]
-
-        profile.frameworks = []
-
         profile.package_manager = (
             "Maven"
         )
 
-        if command_exists("mvn"):
+        if command_exists(
+            "mvn"
+        ):
             profile.test_command = [
                 "mvn",
                 "test",
@@ -407,6 +429,12 @@ def detect_project_profile(
                 "-DskipTests",
             ]
 
+        else:
+            profile.notes.append(
+                "Maven project detected but mvn "
+                "is not available in PATH."
+            )
+
         profile.source_dirs = [
             "src/main/java"
         ]
@@ -417,12 +445,15 @@ def detect_project_profile(
 
         return profile
 
-    # --------------------------------------------------------
-    # JAVA / GRADLE
-    # --------------------------------------------------------
+    # ========================================================
+    # JAVA GRADLE
+    # ========================================================
 
     if (
-        (root / "build.gradle").exists()
+        (
+            root
+            / "build.gradle"
+        ).exists()
         or
         (
             root
@@ -431,51 +462,70 @@ def detect_project_profile(
     ):
 
         profile.kind = "java_gradle"
-
         profile.languages = [
             "Java"
         ]
-
         profile.package_manager = (
             "Gradle"
         )
 
         if os.name == "nt":
+
             wrapper_path = (
-                root / "gradlew.bat"
+                root
+                / "gradlew.bat"
             )
 
-            wrapper = (
-                str(wrapper_path)
-                if wrapper_path.exists()
-                else "gradle"
-            )
+            if wrapper_path.exists():
+                runner = str(
+                    wrapper_path
+                )
+
+            elif command_exists(
+                "gradle"
+            ):
+                runner = "gradle"
+
+            else:
+                runner = None
 
         else:
+
             wrapper_path = (
-                root / "gradlew"
+                root
+                / "gradlew"
             )
 
-            wrapper = (
-                str(wrapper_path)
-                if wrapper_path.exists()
-                else "gradle"
-            )
+            if wrapper_path.exists():
+                runner = str(
+                    wrapper_path
+                )
 
-        if (
-            Path(wrapper).exists()
-            or command_exists(wrapper)
-            or "gradlew" in wrapper.lower()
-        ):
+            elif command_exists(
+                "gradle"
+            ):
+                runner = "gradle"
+
+            else:
+                runner = None
+
+        if runner:
+
             profile.test_command = [
-                wrapper,
+                runner,
                 "test",
             ]
 
             profile.build_command = [
-                wrapper,
+                runner,
                 "build",
             ]
+
+        else:
+            profile.notes.append(
+                "Gradle project detected but "
+                "Gradle is unavailable."
+            )
 
         profile.source_dirs = [
             "src/main/java"
@@ -487,12 +537,78 @@ def detect_project_profile(
 
         return profile
 
-    # --------------------------------------------------------
+    # ========================================================
+    # SIMPLE JAVA PROJECT
+    # ========================================================
+
+    java_files = list(
+        root.glob(
+            "*.java"
+        )
+    )
+
+    if not java_files:
+
+        try:
+
+            java_files = list(
+                root.rglob(
+                    "*.java"
+                )
+            )[:100]
+
+        except Exception:
+            java_files = []
+
+    if java_files:
+
+        profile.kind = (
+            "java_simple"
+        )
+
+        profile.languages = [
+            "Java"
+        ]
+
+        profile.package_manager = (
+            "javac"
+        )
+
+        if command_exists(
+            "javac"
+        ):
+
+            relative_files = [
+                str(
+                    file.relative_to(
+                        root
+                    )
+                )
+                for file
+                in java_files
+            ]
+
+            profile.build_command = [
+                "javac",
+                *relative_files,
+            ]
+
+        else:
+
+            profile.notes.append(
+                "Java source detected but javac "
+                "is not available in PATH."
+            )
+
+        return profile
+
+    # ========================================================
     # RUST
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
-        root / "Cargo.toml"
+        root
+        / "Cargo.toml"
     ).exists():
 
         profile.kind = "rust"
@@ -505,7 +621,10 @@ def detect_project_profile(
             "Cargo"
         )
 
-        if command_exists("cargo"):
+        if command_exists(
+            "cargo"
+        ):
+
             profile.test_command = [
                 "cargo",
                 "test",
@@ -516,19 +635,11 @@ def detect_project_profile(
                 "check",
             ]
 
-        profile.source_dirs = [
-            "src"
-        ]
-
-        profile.test_dirs = [
-            "tests"
-        ]
-
         return profile
 
-    # --------------------------------------------------------
+    # ========================================================
     # GO
-    # --------------------------------------------------------
+    # ========================================================
 
     if (
         root / "go.mod"
@@ -542,7 +653,10 @@ def detect_project_profile(
 
         profile.package_manager = "Go"
 
-        if command_exists("go"):
+        if command_exists(
+            "go"
+        ):
+
             profile.test_command = [
                 "go",
                 "test",
@@ -557,20 +671,37 @@ def detect_project_profile(
 
         return profile
 
-    # --------------------------------------------------------
+    # ========================================================
     # PYTHON
-    # --------------------------------------------------------
+    # ========================================================
 
     python_markers = [
-        root / "pyproject.toml",
-        root / "requirements.txt",
-        root / "setup.py",
-        root / "Pipfile",
+        root
+        / "pyproject.toml",
+
+        root
+        / "requirements.txt",
+
+        root
+        / "setup.py",
+
+        root
+        / "Pipfile",
     ]
 
-    if any(
-        marker.exists()
-        for marker in python_markers
+    python_files = list(
+        root.glob(
+            "*.py"
+        )
+    )
+
+    if (
+        any(
+            marker.exists()
+            for marker
+            in python_markers
+        )
+        or python_files
     ):
 
         profile.kind = "python"
@@ -584,6 +715,7 @@ def detect_project_profile(
         )
 
         try:
+
             import pytest  # noqa: F401
 
             profile.test_command = [
@@ -594,33 +726,68 @@ def detect_project_profile(
             ]
 
         except Exception:
+
             profile.notes.append(
-                "pytest is not installed"
+                "pytest is not installed."
             )
 
         profile.source_dirs = [
-            directory
-            for directory
+            name
+            for name
             in [
                 "src",
                 "app",
             ]
             if (
-                root / directory
+                root / name
             ).exists()
         ]
 
         profile.test_dirs = [
-            directory
-            for directory
+            name
+            for name
             in [
                 "tests",
                 "test",
             ]
             if (
-                root / directory
+                root / name
             ).exists()
         ]
+
+        return profile
+
+    # ========================================================
+    # STATIC WEB
+    # ========================================================
+
+    if (
+        list(
+            root.glob(
+                "*.html"
+            )
+        )
+        or
+        list(
+            root.glob(
+                "*.js"
+            )
+        )
+    ):
+
+        profile.kind = (
+            "static_web"
+        )
+
+        profile.languages = [
+            "JavaScript",
+            "HTML",
+            "CSS",
+        ]
+
+        profile.notes.append(
+            "Static browser application."
+        )
 
         return profile
 
@@ -643,25 +810,33 @@ def profile_to_prompt(
         )
 
     return (
-        f"PROJECT KIND: {profile.kind}\n"
+        f"ACTIVE PROJECT ROOT: "
+        f"{profile.root}\n"
+
+        f"PROJECT KIND: "
+        f"{profile.kind}\n"
+
         f"LANGUAGES: "
         f"{', '.join(profile.languages) or 'unknown'}\n"
+
         f"FRAMEWORKS: "
-        f"{', '.join(profile.frameworks) or 'none detected'}\n"
+        f"{', '.join(profile.frameworks) or 'none'}\n"
+
         f"PACKAGE MANAGER: "
-        f"{profile.package_manager or 'unknown'}\n"
+        f"{profile.package_manager or 'none'}\n"
+
         f"TEST COMMAND: "
         f"{command_text(profile.test_command)}\n"
+
         f"BUILD COMMAND: "
         f"{command_text(profile.build_command)}\n"
+
         f"LINT COMMAND: "
         f"{command_text(profile.lint_command)}\n"
+
         f"TYPECHECK COMMAND: "
         f"{command_text(profile.typecheck_command)}\n"
-        f"SOURCE DIRECTORIES: "
-        f"{', '.join(profile.source_dirs) or 'unknown'}\n"
-        f"TEST DIRECTORIES: "
-        f"{', '.join(profile.test_dirs) or 'unknown'}\n"
+
         f"NOTES: "
         f"{'; '.join(profile.notes) or 'none'}"
     )
@@ -687,25 +862,31 @@ class Workspace:
         path: str,
     ) -> Path:
 
-        raw = Path(path)
+        raw = Path(
+            path
+        )
 
         if raw.is_absolute():
+
             candidate = (
                 raw.resolve()
             )
 
         else:
+
             candidate = (
                 self.root
                 / raw
             ).resolve()
 
         try:
+
             candidate.relative_to(
                 self.root
             )
 
         except ValueError:
+
             raise ValueError(
                 "Access outside the selected "
                 "workspace is blocked."
@@ -737,16 +918,26 @@ class Tools:
         memory: Any = None,
         state: Any = None,
         profile: ProjectProfile | None = None,
+        command_root: Path | None = None,
     ):
 
-        self.workspace = workspace
+        self.workspace = (
+            workspace
+        )
+
         self.memory = memory
         self.state = state
+
+        self.command_root = (
+            command_root.resolve()
+            if command_root
+            else workspace.root
+        )
 
         self.profile = (
             profile
             or detect_project_profile(
-                workspace.root
+                self.command_root
             )
         )
 
@@ -756,34 +947,64 @@ class Tools:
 
     def inspect_project(
         self,
+        path: str = ".",
     ) -> str:
+
+        target = (
+            self.workspace.resolve(
+                path
+            )
+        )
+
+        if target.is_file():
+            target = (
+                target.parent
+            )
+
+        profile = (
+            detect_project_profile(
+                target
+            )
+        )
 
         items = []
 
-        for item in sorted(
-            self.workspace.root.iterdir(),
-            key=lambda p: (
-                not p.is_dir(),
-                p.name.lower(),
-            ),
-        )[:100]:
+        try:
 
-            prefix = (
-                "DIR "
-                if item.is_dir()
-                else "FILE"
-            )
+            for item in sorted(
+                target.iterdir(),
+                key=lambda p: (
+                    not p.is_dir(),
+                    p.name.lower(),
+                ),
+            )[:100]:
+
+                prefix = (
+                    "DIR "
+                    if item.is_dir()
+                    else "FILE"
+                )
+
+                items.append(
+                    f"{prefix} "
+                    f"{item.name}"
+                )
+
+        except Exception as error:
 
             items.append(
-                f"{prefix} {item.name}"
+                f"Could not list project: "
+                f"{error}"
             )
 
         return (
             profile_to_prompt(
-                self.profile
+                profile
             )
             + "\n\nTOP LEVEL:\n"
-            + "\n".join(items)
+            + "\n".join(
+                items
+            )
         )
 
     # ========================================================
@@ -823,21 +1044,27 @@ class Tools:
         results = []
 
         base_parts = (
-            len(base.parts)
+            len(
+                base.parts
+            )
         )
 
         for (
             current_root,
             dirs,
             files,
-        ) in os.walk(base):
+        ) in os.walk(
+            base
+        ):
 
             current = Path(
                 current_root
             )
 
             current_depth = (
-                len(current.parts)
+                len(
+                    current.parts
+                )
                 - base_parts
             )
 
@@ -849,7 +1076,10 @@ class Tools:
                 not in IGNORE_DIRS
             ]
 
-            if current_depth >= depth:
+            if (
+                current_depth
+                >= depth
+            ):
                 dirs[:] = []
 
             for filename in sorted(
@@ -861,21 +1091,16 @@ class Tools:
                     / filename
                 )
 
-                try:
-                    relative = (
-                        self.workspace.relative(
-                            file_path
-                        )
-                    )
-
-                except ValueError:
-                    continue
-
                 results.append(
-                    relative
+                    self.workspace.relative(
+                        file_path
+                    )
                 )
 
-                if len(results) >= 300:
+                if len(
+                    results
+                ) >= 300:
+
                     results.append(
                         "... result limit reached ..."
                     )
@@ -885,7 +1110,9 @@ class Tools:
                     )
 
         return (
-            "\n".join(results)
+            "\n".join(
+                results
+            )
             or "(no files)"
         )
 
@@ -901,6 +1128,16 @@ class Tools:
             )
         )
 
+        if not base.exists():
+            raise ValueError(
+                "Path does not exist."
+            )
+
+        if not base.is_dir():
+            raise ValueError(
+                "Path is not a directory."
+            )
+
         depth = max(
             0,
             min(
@@ -912,21 +1149,27 @@ class Tools:
         results = []
 
         base_parts = (
-            len(base.parts)
+            len(
+                base.parts
+            )
         )
 
         for (
             current_root,
             dirs,
             _,
-        ) in os.walk(base):
+        ) in os.walk(
+            base
+        ):
 
-            current = (
-                Path(current_root)
+            current = Path(
+                current_root
             )
 
             current_depth = (
-                len(current.parts)
+                len(
+                    current.parts
+                )
                 - base_parts
             )
 
@@ -938,18 +1181,32 @@ class Tools:
                 not in IGNORE_DIRS
             ]
 
-            if current != base:
+            if (
+                current
+                != base
+            ):
+
                 results.append(
                     self.workspace.relative(
                         current
                     )
                 )
 
-            if current_depth >= depth:
+            if (
+                current_depth
+                >= depth
+            ):
                 dirs[:] = []
 
+            if len(
+                results
+            ) >= 200:
+                break
+
         return (
-            "\n".join(results[:200])
+            "\n".join(
+                results
+            )
             or "(no directories)"
         )
 
@@ -980,7 +1237,9 @@ class Tools:
             current_root,
             dirs,
             files,
-        ) in os.walk(base):
+        ) in os.walk(
+            base
+        ):
 
             dirs[:] = [
                 directory
@@ -998,7 +1257,9 @@ class Tools:
                 ):
 
                     file_path = (
-                        Path(current_root)
+                        Path(
+                            current_root
+                        )
                         / filename
                     )
 
@@ -1008,13 +1269,18 @@ class Tools:
                         )
                     )
 
-                    if len(results) >= 100:
+                    if len(
+                        results
+                    ) >= 100:
+
                         return "\n".join(
                             results
                         )
 
         return (
-            "\n".join(results)
+            "\n".join(
+                results
+            )
             or "(no matching files)"
         )
 
@@ -1043,18 +1309,22 @@ class Tools:
         max_results = max(
             1,
             min(
-                int(max_results),
+                int(
+                    max_results
+                ),
                 100,
             ),
         )
 
-        matches = []
+        results = []
 
         for (
             current_root,
             dirs,
             files,
-        ) in os.walk(base):
+        ) in os.walk(
+            base
+        ):
 
             dirs[:] = [
                 directory
@@ -1067,7 +1337,9 @@ class Tools:
             for filename in files:
 
                 file_path = (
-                    Path(current_root)
+                    Path(
+                        current_root
+                    )
                     / filename
                 )
 
@@ -1108,21 +1380,25 @@ class Tools:
                         in line.lower()
                     ):
 
-                        matches.append(
+                        results.append(
                             f"{self.workspace.relative(file_path)}:"
-                            f"{number}: {line[:300]}"
+                            f"{number}: "
+                            f"{line[:300]}"
                         )
 
                         if (
-                            len(matches)
+                            len(results)
                             >= max_results
                         ):
+
                             return "\n".join(
-                                matches
+                                results
                             )
 
         return (
-            "\n".join(matches)
+            "\n".join(
+                results
+            )
             or "(no matches)"
         )
 
@@ -1150,6 +1426,7 @@ class Tools:
         )
 
         if not lines:
+
             return (
                 f"FILE: "
                 f"{self.workspace.relative(file_path)}\n"
@@ -1158,12 +1435,16 @@ class Tools:
 
         start = max(
             1,
-            int(start_line),
+            int(
+                start_line
+            ),
         )
 
         end = max(
             start,
-            int(end_line),
+            int(
+                end_line
+            ),
         )
 
         if (
@@ -1171,12 +1452,15 @@ class Tools:
             > 300
         ):
             end = (
-                start + 300
+                start
+                + 300
             )
 
         end = min(
             end,
-            len(lines),
+            len(
+                lines
+            ),
         )
 
         selected = []
@@ -1194,9 +1478,12 @@ class Tools:
         return (
             f"FILE: "
             f"{self.workspace.relative(file_path)}\n"
-            f"LINES: {start}-{end} "
-            f"/ {len(lines)}\n\n"
-            + "\n".join(selected)
+            f"LINES: "
+            f"{start}-{end} / "
+            f"{len(lines)}\n\n"
+            + "\n".join(
+                selected
+            )
         )
 
     # ========================================================
@@ -1216,15 +1503,19 @@ class Tools:
         )
 
         if file_path.exists():
+
             raise ValueError(
                 "File already exists. "
                 "Use apply_patch to modify it."
             )
 
         if (
-            len(content)
+            len(
+                content
+            )
             > MAX_EDIT_CHARS
         ):
+
             raise ValueError(
                 "Content is too large."
             )
@@ -1239,21 +1530,18 @@ class Tools:
             encoding="utf-8",
         )
 
-        if self.state is not None:
-            backups = getattr(
-                self.state,
-                "edit_backups",
-                None,
-            )
+        if (
+            self.state
+            is not None
+        ):
 
-            if backups is not None:
-                backups.append(
-                    (
-                        file_path,
-                        "",
-                        False,
-                    )
+            self.state.edit_backups.append(
+                (
+                    file_path,
+                    "",
+                    False,
                 )
+            )
 
         self._mark_edited(
             self.workspace.relative(
@@ -1266,6 +1554,132 @@ class Tools:
             f"{self.workspace.relative(file_path)}"
         )
 
+    def create_files(
+        self,
+        files: list[dict[str, str]],
+    ) -> str:
+
+        if not files:
+
+            raise ValueError(
+                "files cannot be empty"
+            )
+
+        if len(
+            files
+        ) > 12:
+
+            raise ValueError(
+                "At most 12 files may be "
+                "created in one call."
+            )
+
+        prepared = []
+
+        for item in files:
+
+            path = str(
+                item.get(
+                    "path",
+                    ""
+                )
+            )
+
+            content = str(
+                item.get(
+                    "content",
+                    ""
+                )
+            )
+
+            if not path:
+                raise ValueError(
+                    "Every file needs a path."
+                )
+
+            target = (
+                self.workspace.resolve(
+                    path
+                )
+            )
+
+            if target.exists():
+                raise ValueError(
+                    f"File already exists: "
+                    f"{path}"
+                )
+
+            if (
+                len(
+                    content
+                )
+                > MAX_EDIT_CHARS
+            ):
+                raise ValueError(
+                    f"Content too large: "
+                    f"{path}"
+                )
+
+            prepared.append(
+                (
+                    target,
+                    content,
+                )
+            )
+
+        created = []
+
+        for (
+            target,
+            content,
+        ) in prepared:
+
+            target.parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+            target.write_text(
+                content,
+                encoding="utf-8",
+            )
+
+            if (
+                self.state
+                is not None
+            ):
+
+                self.state.edit_backups.append(
+                    (
+                        target,
+                        "",
+                        False,
+                    )
+                )
+
+            relative = (
+                self.workspace.relative(
+                    target
+                )
+            )
+
+            self._mark_edited(
+                relative
+            )
+
+            created.append(
+                relative
+            )
+
+        return (
+            "Created files:\n"
+            + "\n".join(
+                f"- {item}"
+                for item
+                in created
+            )
+        )
+
     def apply_patch(
         self,
         path: str,
@@ -1274,16 +1688,22 @@ class Tools:
     ) -> str:
 
         if not old_text:
+
             raise ValueError(
                 "old_text cannot be empty. "
                 "Use create_file for new files."
             )
 
         if (
-            len(old_text)
-            + len(new_text)
+            len(
+                old_text
+            )
+            + len(
+                new_text
+            )
             > MAX_EDIT_CHARS
         ):
+
             raise ValueError(
                 "Patch is too large."
             )
@@ -1307,11 +1727,13 @@ class Tools:
         )
 
         if count == 0:
+
             raise ValueError(
                 "old_text was not found exactly."
             )
 
         if count > 1:
+
             raise ValueError(
                 f"old_text occurs {count} times. "
                 "Provide more surrounding text."
@@ -1325,26 +1747,27 @@ class Tools:
             )
         )
 
-        if updated == original:
+        if (
+            updated
+            == original
+        ):
+
             raise ValueError(
                 "Patch would make no change."
             )
 
-        if self.state is not None:
-            backups = getattr(
-                self.state,
-                "edit_backups",
-                None,
-            )
+        if (
+            self.state
+            is not None
+        ):
 
-            if backups is not None:
-                backups.append(
-                    (
-                        file_path,
-                        original,
-                        True,
-                    )
+            self.state.edit_backups.append(
+                (
+                    file_path,
+                    original,
+                    True,
                 )
+            )
 
         file_path.write_text(
             updated,
@@ -1379,21 +1802,18 @@ class Tools:
             )
         )
 
-        if self.state is not None:
-            backups = getattr(
-                self.state,
-                "edit_backups",
-                None,
-            )
+        if (
+            self.state
+            is not None
+        ):
 
-            if backups is not None:
-                backups.append(
-                    (
-                        file_path,
-                        original,
-                        True,
-                    )
+            self.state.edit_backups.append(
+                (
+                    file_path,
+                    original,
+                    True,
                 )
+            )
 
         file_path.unlink()
 
@@ -1420,8 +1840,16 @@ class Tools:
         )
 
         if directory.exists():
+
+            if directory.is_dir():
+
+                raise ValueError(
+                    "Directory already exists."
+                )
+
             raise ValueError(
-                "Directory already exists."
+                "A non-directory item "
+                "already exists at this path."
             )
 
         directory.mkdir(
@@ -1458,6 +1886,7 @@ class Tools:
         if any(
             directory.iterdir()
         ):
+
             raise ValueError(
                 "Directory is not empty."
             )
@@ -1473,18 +1902,19 @@ class Tools:
         self,
     ) -> str:
 
-        if self.state is None:
+        if (
+            self.state
+            is None
+        ):
+
             raise ValueError(
                 "Agent state unavailable."
             )
 
-        backups = getattr(
-            self.state,
-            "edit_backups",
-            None,
-        )
+        if not (
+            self.state.edit_backups
+        ):
 
-        if not backups:
             raise ValueError(
                 "No edit available to undo."
             )
@@ -1493,7 +1923,9 @@ class Tools:
             file_path,
             old_content,
             existed_before,
-        ) = backups.pop()
+        ) = (
+            self.state.edit_backups.pop()
+        )
 
         if existed_before:
 
@@ -1518,7 +1950,7 @@ class Tools:
                 file_path.unlink()
 
             result = (
-                "Removed newly created file: "
+                "Removed newly-created file: "
                 f"{self.workspace.relative(file_path)}"
             )
 
@@ -1527,7 +1959,414 @@ class Tools:
         return result
 
     # ========================================================
-    # SYMBOL TOOLS
+    # VERIFICATION
+    # ========================================================
+
+    def verify_file_exists(
+        self,
+        path: str,
+    ) -> str:
+
+        target = (
+            self.workspace.resolve(
+                path
+            )
+        )
+
+        if not target.exists():
+
+            raise ValueError(
+                "File does not exist."
+            )
+
+        if not target.is_file():
+
+            raise ValueError(
+                "Path is not a file. "
+                "Use verify_directory_exists "
+                "for directories."
+            )
+
+        return (
+            "Verified file exists: "
+            f"{self.workspace.relative(target)}"
+        )
+
+    def verify_files_exist(
+        self,
+        paths: list[str],
+    ) -> str:
+
+        if not paths:
+
+            raise ValueError(
+                "paths cannot be empty"
+            )
+
+        verified = []
+
+        for path in paths:
+
+            target = (
+                self.workspace.resolve(
+                    path
+                )
+            )
+
+            if not target.exists():
+
+                raise ValueError(
+                    f"File does not exist: "
+                    f"{path}"
+                )
+
+            if not target.is_file():
+
+                raise ValueError(
+                    f"Not a file: "
+                    f"{path}"
+                )
+
+            verified.append(
+                self.workspace.relative(
+                    target
+                )
+            )
+
+        return (
+            "Verified files exist:\n"
+            + "\n".join(
+                f"- {item}"
+                for item
+                in verified
+            )
+        )
+
+    def verify_directory_exists(
+        self,
+        path: str,
+    ) -> str:
+
+        target = (
+            self.workspace.resolve(
+                path
+            )
+        )
+
+        if not target.exists():
+
+            raise ValueError(
+                "Directory does not exist."
+            )
+
+        if not target.is_dir():
+
+            raise ValueError(
+                "Path is not a directory."
+            )
+
+        return (
+            "Verified directory exists: "
+            f"{self.workspace.relative(target)}"
+        )
+
+    def verify_file_content(
+        self,
+        path: str,
+        expected_text: str,
+    ) -> str:
+
+        target = (
+            self.workspace.resolve(
+                path
+            )
+        )
+
+        text = (
+            read_text_file(
+                target
+            )
+        )
+
+        if (
+            expected_text
+            not in text
+        ):
+
+            raise ValueError(
+                "Expected text was not found."
+            )
+
+        return (
+            "Verified expected content exists in "
+            f"{self.workspace.relative(target)}"
+        )
+
+    def verify_line_count(
+        self,
+        path: str,
+        expected: int,
+        ignore_empty: bool = True,
+    ) -> str:
+
+        target = (
+            self.workspace.resolve(
+                path
+            )
+        )
+
+        text = (
+            read_text_file(
+                target
+            )
+        )
+
+        lines = (
+            text.splitlines()
+        )
+
+        if ignore_empty:
+
+            lines = [
+                line
+                for line
+                in lines
+                if line.strip()
+            ]
+
+        actual = len(
+            lines
+        )
+
+        if actual != int(
+            expected
+        ):
+
+            raise ValueError(
+                f"Expected {expected} lines, "
+                f"found {actual}."
+            )
+
+        return (
+            f"Verified "
+            f"{self.workspace.relative(target)} "
+            f"contains {actual} "
+            f"{'non-empty ' if ignore_empty else ''}"
+            f"lines."
+        )
+
+    def count_matches(
+        self,
+        path: str,
+        text: str,
+    ) -> str:
+
+        target = (
+            self.workspace.resolve(
+                path
+            )
+        )
+
+        content = (
+            read_text_file(
+                target
+            )
+        )
+
+        count = (
+            content.count(
+                text
+            )
+        )
+
+        return (
+            f"{self.workspace.relative(target)} "
+            f"contains {count} occurrence(s) "
+            f"of {text!r}."
+        )
+
+    # ========================================================
+    # PROJECT VERIFICATION
+    # ========================================================
+
+    def run_project_tests(
+        self,
+    ) -> str:
+
+        command = (
+            self.profile.test_command
+        )
+
+        if not command:
+
+            raise ValueError(
+                "No project test command "
+                "was detected."
+            )
+
+        return (
+            self._run_project_command(
+                command,
+                "tests",
+            )
+        )
+
+    def run_project_build(
+        self,
+    ) -> str:
+
+        command = (
+            self.profile.build_command
+        )
+
+        if not command:
+
+            raise ValueError(
+                "No project build command "
+                "was detected."
+            )
+
+        return (
+            self._run_project_command(
+                command,
+                "build",
+            )
+        )
+
+    def run_project_lint(
+        self,
+    ) -> str:
+
+        command = (
+            self.profile.lint_command
+        )
+
+        if not command:
+
+            raise ValueError(
+                "No project lint command "
+                "was detected."
+            )
+
+        return (
+            self._run_project_command(
+                command,
+                "lint",
+            )
+        )
+
+    def run_project_typecheck(
+        self,
+    ) -> str:
+
+        command = (
+            self.profile.typecheck_command
+        )
+
+        if not command:
+
+            raise ValueError(
+                "No project typecheck command "
+                "was detected."
+            )
+
+        return (
+            self._run_project_command(
+                command,
+                "typecheck",
+            )
+        )
+
+    def validate_python(
+        self,
+    ) -> str:
+
+        output, code = (
+            self._run_with_code(
+                [
+                    sys.executable,
+                    "-m",
+                    "compileall",
+                    "-q",
+                    str(
+                        self.command_root
+                    ),
+                ],
+                timeout=180,
+            )
+        )
+
+        if (
+            self.state
+            is not None
+        ):
+
+            self.state.last_validation_passed = (
+                code == 0
+            )
+
+        return (
+            f"COMMAND: python -m compileall\n"
+            f"EXIT_CODE: {code}\n\n"
+            f"{output or 'Python compilation succeeded.'}"
+        )
+
+    def check_python_import(
+        self,
+        module: str,
+    ) -> str:
+
+        if not module:
+            raise ValueError(
+                "module cannot be empty"
+            )
+
+        if not all(
+            part.replace(
+                "_",
+                "",
+            ).isalnum()
+            for part
+            in module.split(
+                "."
+            )
+        ):
+
+            raise ValueError(
+                "Invalid Python module name."
+            )
+
+        output, code = (
+            self._run_with_code(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        f"import {module}; "
+                        f"print('IMPORT_OK')"
+                    ),
+                ],
+                timeout=30,
+            )
+        )
+
+        if code != 0:
+
+            raise ValueError(
+                output
+                or (
+                    f"Could not import "
+                    f"{module}"
+                )
+            )
+
+        return (
+            f"Successfully imported "
+            f"{module}."
+        )
+
+    # ========================================================
+    # SYMBOLS
     # ========================================================
 
     def find_symbol(
@@ -1553,7 +2392,9 @@ class Tools:
             current_root,
             dirs,
             files,
-        ) in os.walk(base):
+        ) in os.walk(
+            base
+        ):
 
             dirs[:] = [
                 directory
@@ -1571,7 +2412,9 @@ class Tools:
                     continue
 
                 file_path = (
-                    Path(current_root)
+                    Path(
+                        current_root
+                    )
                     / filename
                 )
 
@@ -1619,7 +2462,9 @@ class Tools:
                             )
 
         return (
-            "\n".join(results)
+            "\n".join(
+                results
+            )
             or "(symbol not found)"
         )
 
@@ -1630,309 +2475,12 @@ class Tools:
         max_results: int = 100,
     ) -> str:
 
-        return self.search_text(
-            query=symbol,
-            path=path,
-            max_results=max_results,
-        )
-
-    # ========================================================
-    # GENERIC PROJECT VERIFICATION
-    # ========================================================
-
-    def run_project_tests(
-        self,
-    ) -> str:
-
-        command = (
-            self.profile.test_command
-        )
-
-        if not command:
-            raise ValueError(
-                "No project test command was detected."
-            )
-
-        return self._run_project_command(
-            command,
-            "tests",
-        )
-
-    def run_project_build(
-        self,
-    ) -> str:
-
-        command = (
-            self.profile.build_command
-        )
-
-        if not command:
-            raise ValueError(
-                "No project build command was detected."
-            )
-
-        return self._run_project_command(
-            command,
-            "build",
-        )
-
-    def run_project_lint(
-        self,
-    ) -> str:
-
-        command = (
-            self.profile.lint_command
-        )
-
-        if not command:
-            raise ValueError(
-                "No project lint command was detected."
-            )
-
-        return self._run_project_command(
-            command,
-            "lint",
-        )
-
-    def run_project_typecheck(
-        self,
-    ) -> str:
-
-        command = (
-            self.profile.typecheck_command
-        )
-
-        if not command:
-            raise ValueError(
-                "No project typecheck command was detected."
-            )
-
-        return self._run_project_command(
-            command,
-            "typecheck",
-        )
-
-    def validate_python(
-        self,
-    ) -> str:
-
-        output, code = (
-            self._run_with_code(
-                [
-                    sys.executable,
-                    "-m",
-                    "compileall",
-                    "-q",
-                    str(
-                        self.workspace.root
-                    ),
-                ],
-                timeout=180,
-            )
-        )
-
-        if self.state is not None:
-            self.state.last_validation_passed = (
-                code == 0
-            )
-
         return (
-            f"EXIT_CODE: {code}\n\n"
-            f"{output or 'Python compilation succeeded.'}"
-        )
-
-    def check_python_import(
-        self,
-        module: str,
-    ) -> str:
-
-        if not module:
-            raise ValueError(
-                "module cannot be empty"
+            self.search_text(
+                query=symbol,
+                path=path,
+                max_results=max_results,
             )
-
-        if not all(
-            part.replace(
-                "_",
-                "",
-            ).isalnum()
-            for part
-            in module.split(".")
-        ):
-            raise ValueError(
-                "Invalid Python module name."
-            )
-
-        command = [
-            sys.executable,
-            "-c",
-            (
-                f"import {module}; "
-                f"print('IMPORT_OK')"
-            ),
-        ]
-
-        output, code = (
-            self._run_with_code(
-                command,
-                timeout=30,
-            )
-        )
-
-        if code != 0:
-            raise ValueError(
-                output
-                or (
-                    f"Could not import "
-                    f"{module}"
-                )
-            )
-
-        return (
-            f"Successfully imported "
-            f"{module}."
-        )
-
-    # ========================================================
-    # VERIFICATION
-    # ========================================================
-
-    def verify_file_exists(
-        self,
-        path: str,
-    ) -> str:
-
-        file_path = (
-            self.workspace.resolve(
-                path
-            )
-        )
-
-        if not file_path.exists():
-            raise ValueError(
-                "File does not exist."
-            )
-
-        if not file_path.is_file():
-            raise ValueError(
-                "Path is not a file."
-            )
-
-        return (
-            "Verified file exists: "
-            f"{self.workspace.relative(file_path)}"
-        )
-
-    def verify_file_content(
-        self,
-        path: str,
-        expected_text: str,
-    ) -> str:
-
-        file_path = (
-            self.workspace.resolve(
-                path
-            )
-        )
-
-        text = (
-            read_text_file(
-                file_path
-            )
-        )
-
-        if (
-            expected_text
-            not in text
-        ):
-            raise ValueError(
-                "Expected text was not found."
-            )
-
-        return (
-            "Verified expected content exists in "
-            f"{self.workspace.relative(file_path)}"
-        )
-
-    def verify_line_count(
-        self,
-        path: str,
-        expected: int,
-        ignore_empty: bool = True,
-    ) -> str:
-
-        file_path = (
-            self.workspace.resolve(
-                path
-            )
-        )
-
-        text = (
-            read_text_file(
-                file_path
-            )
-        )
-
-        lines = (
-            text.splitlines()
-        )
-
-        if ignore_empty:
-            lines = [
-                line
-                for line
-                in lines
-                if line.strip()
-            ]
-
-        actual = (
-            len(lines)
-        )
-
-        if actual != int(
-            expected
-        ):
-            raise ValueError(
-                f"Expected {expected} lines, "
-                f"but found {actual}."
-            )
-
-        return (
-            f"Verified "
-            f"{self.workspace.relative(file_path)} "
-            f"contains {actual} "
-            f"{'non-empty ' if ignore_empty else ''}"
-            f"lines."
-        )
-
-    def count_matches(
-        self,
-        path: str,
-        text: str,
-    ) -> str:
-
-        file_path = (
-            self.workspace.resolve(
-                path
-            )
-        )
-
-        content = (
-            read_text_file(
-                file_path
-            )
-        )
-
-        count = (
-            content.count(
-                text
-            )
-        )
-
-        return (
-            f"{self.workspace.relative(file_path)} "
-            f"contains {count} occurrence(s) "
-            f"of {text!r}."
         )
 
     # ========================================================
@@ -1946,17 +2494,20 @@ class Tools:
         if not command_exists(
             "git"
         ):
+
             raise ValueError(
                 "Git is not installed."
             )
 
-        return self._run(
-            [
-                "git",
-                "status",
-                "--short",
-            ],
-            timeout=30,
+        return (
+            self._run(
+                [
+                    "git",
+                    "status",
+                    "--short",
+                ],
+                timeout=30,
+            )
         )
 
     def git_diff(
@@ -1966,18 +2517,21 @@ class Tools:
         if not command_exists(
             "git"
         ):
+
             raise ValueError(
                 "Git is not installed."
             )
 
-        return self._run(
-            [
-                "git",
-                "diff",
-                "--",
-                ".",
-            ],
-            timeout=30,
+        return (
+            self._run(
+                [
+                    "git",
+                    "diff",
+                    "--",
+                    ".",
+                ],
+                timeout=30,
+            )
         )
 
     def git_log_recent(
@@ -1988,6 +2542,7 @@ class Tools:
         if not command_exists(
             "git"
         ):
+
             raise ValueError(
                 "Git is not installed."
             )
@@ -1995,19 +2550,23 @@ class Tools:
         count = max(
             1,
             min(
-                int(count),
+                int(
+                    count
+                ),
                 30,
             ),
         )
 
-        return self._run(
-            [
-                "git",
-                "log",
-                f"-{count}",
-                "--oneline",
-            ],
-            timeout=30,
+        return (
+            self._run(
+                [
+                    "git",
+                    "log",
+                    f"-{count}",
+                    "--oneline",
+                ],
+                timeout=30,
+            )
         )
 
     # ========================================================
@@ -2020,14 +2579,30 @@ class Tools:
         evidence_id: str,
     ) -> str:
 
-        if self.memory is None:
+        if (
+            self.memory
+            is None
+        ):
+
             raise ValueError(
                 "Persistent memory unavailable."
             )
 
-        if self.state is None:
+        if (
+            self.state
+            is None
+        ):
+
             raise ValueError(
                 "Agent state unavailable."
+            )
+
+        if len(
+            fact
+        ) > 500:
+
+            raise ValueError(
+                "Fact is too long."
             )
 
         observation = next(
@@ -2043,20 +2618,22 @@ class Tools:
             None,
         )
 
-        if observation is None:
+        if (
+            observation
+            is None
+        ):
+
             raise ValueError(
                 "Unknown evidence_id."
             )
 
-        if not observation.success:
+        if not (
+            observation.success
+        ):
+
             raise ValueError(
                 "Evidence must come from "
                 "a successful observation."
-            )
-
-        if len(fact) > 500:
-            raise ValueError(
-                "Fact is too long."
             )
 
         self.memory.add_fact(
@@ -2090,24 +2667,30 @@ class Tools:
         )
 
         if (
-            self.state is not None
-            and purpose == "tests"
+            self.state
+            is not None
         ):
-            self.state.last_test_passed = (
-                code == 0
-            )
 
-        if (
-            self.state is not None
-            and purpose
-            in {
+            if (
+                purpose
+                == "tests"
+            ):
+
+                self.state.last_test_passed = (
+                    code == 0
+                )
+
+            elif purpose in {
                 "build",
                 "lint",
                 "typecheck",
-            }
-        ):
-            if code == 0:
-                self.state.last_validation_passed = True
+            }:
+
+                if code == 0:
+
+                    self.state.last_validation_passed = (
+                        True
+                    )
 
         return (
             f"COMMAND: "
@@ -2121,19 +2704,15 @@ class Tools:
         relative_path: str,
     ) -> None:
 
-        if self.state is None:
+        if (
+            self.state
+            is None
+        ):
             return
 
-        edited_files = getattr(
-            self.state,
-            "edited_files",
-            None,
+        self.state.edited_files.add(
+            relative_path
         )
-
-        if edited_files is not None:
-            edited_files.add(
-                relative_path
-            )
 
         self._invalidate_verification()
 
@@ -2141,20 +2720,19 @@ class Tools:
         self,
     ) -> None:
 
-        if self.state is None:
+        if (
+            self.state
+            is None
+        ):
             return
 
-        if hasattr(
-            self.state,
-            "last_test_passed",
-        ):
-            self.state.last_test_passed = False
+        self.state.last_test_passed = (
+            False
+        )
 
-        if hasattr(
-            self.state,
-            "last_validation_passed",
-        ):
-            self.state.last_validation_passed = False
+        self.state.last_validation_passed = (
+            False
+        )
 
     def _run(
         self,
@@ -2177,15 +2755,33 @@ class Tools:
         timeout: int,
     ) -> tuple[str, int]:
 
-        process = subprocess.run(
-            command,
-            cwd=self.workspace.root,
-            capture_output=True,
-            text=True,
-            errors="replace",
-            timeout=timeout,
-            shell=False,
-        )
+        try:
+
+            process = subprocess.run(
+                command,
+                cwd=self.command_root,
+                capture_output=True,
+                text=True,
+                errors="replace",
+                timeout=timeout,
+                shell=False,
+            )
+
+        except FileNotFoundError:
+
+            return (
+                f"Command not found: "
+                f"{command[0]}",
+                127,
+            )
+
+        except subprocess.TimeoutExpired:
+
+            return (
+                f"Command timed out after "
+                f"{timeout} seconds.",
+                124,
+            )
 
         output = ""
 
@@ -2212,7 +2808,7 @@ class Tools:
 
 
 # ============================================================
-# REGISTRY
+# TOOL REGISTRY
 # ============================================================
 
 def build_tool_registry(
@@ -2241,6 +2837,9 @@ def build_tool_registry(
         "create_file":
             tools.create_file,
 
+        "create_files":
+            tools.create_files,
+
         "apply_patch":
             tools.apply_patch,
 
@@ -2256,11 +2855,23 @@ def build_tool_registry(
         "undo_last_edit":
             tools.undo_last_edit,
 
-        "find_symbol":
-            tools.find_symbol,
+        "verify_file_exists":
+            tools.verify_file_exists,
 
-        "find_references":
-            tools.find_references,
+        "verify_files_exist":
+            tools.verify_files_exist,
+
+        "verify_directory_exists":
+            tools.verify_directory_exists,
+
+        "verify_file_content":
+            tools.verify_file_content,
+
+        "verify_line_count":
+            tools.verify_line_count,
+
+        "count_matches":
+            tools.count_matches,
 
         "run_project_tests":
             tools.run_project_tests,
@@ -2280,17 +2891,11 @@ def build_tool_registry(
         "check_python_import":
             tools.check_python_import,
 
-        "verify_file_exists":
-            tools.verify_file_exists,
+        "find_symbol":
+            tools.find_symbol,
 
-        "verify_file_content":
-            tools.verify_file_content,
-
-        "verify_line_count":
-            tools.verify_line_count,
-
-        "count_matches":
-            tools.count_matches,
+        "find_references":
+            tools.find_references,
 
         "git_status":
             tools.git_status,
@@ -2307,101 +2912,391 @@ def build_tool_registry(
 
 
 # ============================================================
-# TOOL DOCUMENTATION
+# TOOL ARGUMENT SCHEMAS
+# ============================================================
+
+TOOL_SCHEMAS = {
+
+    "inspect_project": {
+        "required": set(),
+        "allowed": {
+            "path",
+        },
+    },
+
+    "list_files": {
+        "required": set(),
+        "allowed": {
+            "path",
+            "depth",
+        },
+    },
+
+    "list_directories": {
+        "required": set(),
+        "allowed": {
+            "path",
+            "depth",
+        },
+    },
+
+    "find_file": {
+        "required": {
+            "name",
+        },
+        "allowed": {
+            "name",
+            "path",
+        },
+    },
+
+    "search_text": {
+        "required": {
+            "query",
+        },
+        "allowed": {
+            "query",
+            "path",
+            "max_results",
+        },
+    },
+
+    "read_file": {
+        "required": {
+            "path",
+        },
+        "allowed": {
+            "path",
+            "start_line",
+            "end_line",
+        },
+    },
+
+    "create_file": {
+        "required": {
+            "path",
+            "content",
+        },
+        "allowed": {
+            "path",
+            "content",
+        },
+    },
+
+    "create_files": {
+        "required": {
+            "files",
+        },
+        "allowed": {
+            "files",
+        },
+    },
+
+    "apply_patch": {
+        "required": {
+            "path",
+            "old_text",
+            "new_text",
+        },
+        "allowed": {
+            "path",
+            "old_text",
+            "new_text",
+        },
+    },
+
+    "delete_file": {
+        "required": {
+            "path",
+        },
+        "allowed": {
+            "path",
+        },
+    },
+
+    "create_directory": {
+        "required": {
+            "path",
+        },
+        "allowed": {
+            "path",
+        },
+    },
+
+    "delete_empty_directory": {
+        "required": {
+            "path",
+        },
+        "allowed": {
+            "path",
+        },
+    },
+
+    "undo_last_edit": {
+        "required": set(),
+        "allowed": set(),
+    },
+
+    "verify_file_exists": {
+        "required": {
+            "path",
+        },
+        "allowed": {
+            "path",
+        },
+    },
+
+    "verify_files_exist": {
+        "required": {
+            "paths",
+        },
+        "allowed": {
+            "paths",
+        },
+    },
+
+    "verify_directory_exists": {
+        "required": {
+            "path",
+        },
+        "allowed": {
+            "path",
+        },
+    },
+
+    "verify_file_content": {
+        "required": {
+            "path",
+            "expected_text",
+        },
+        "allowed": {
+            "path",
+            "expected_text",
+        },
+    },
+
+    "verify_line_count": {
+        "required": {
+            "path",
+            "expected",
+        },
+        "allowed": {
+            "path",
+            "expected",
+            "ignore_empty",
+        },
+    },
+
+    "count_matches": {
+        "required": {
+            "path",
+            "text",
+        },
+        "allowed": {
+            "path",
+            "text",
+        },
+    },
+
+    "run_project_tests": {
+        "required": set(),
+        "allowed": set(),
+    },
+
+    "run_project_build": {
+        "required": set(),
+        "allowed": set(),
+    },
+
+    "run_project_lint": {
+        "required": set(),
+        "allowed": set(),
+    },
+
+    "run_project_typecheck": {
+        "required": set(),
+        "allowed": set(),
+    },
+
+    "validate_python": {
+        "required": set(),
+        "allowed": set(),
+    },
+
+    "check_python_import": {
+        "required": {
+            "module",
+        },
+        "allowed": {
+            "module",
+        },
+    },
+
+    "find_symbol": {
+        "required": {
+            "symbol",
+        },
+        "allowed": {
+            "symbol",
+            "path",
+        },
+    },
+
+    "find_references": {
+        "required": {
+            "symbol",
+        },
+        "allowed": {
+            "symbol",
+            "path",
+            "max_results",
+        },
+    },
+
+    "git_status": {
+        "required": set(),
+        "allowed": set(),
+    },
+
+    "git_diff": {
+        "required": set(),
+        "allowed": set(),
+    },
+
+    "git_log_recent": {
+        "required": set(),
+        "allowed": {
+            "count",
+        },
+    },
+
+    "remember_fact": {
+        "required": {
+            "fact",
+            "evidence_id",
+        },
+        "allowed": {
+            "fact",
+            "evidence_id",
+        },
+    },
+}
+
+
+def validate_tool_arguments(
+    tool_name: str,
+    args: dict[str, Any],
+) -> tuple[bool, str]:
+
+    schema = (
+        TOOL_SCHEMAS.get(
+            tool_name
+        )
+    )
+
+    if schema is None:
+
+        names = sorted(
+            TOOL_SCHEMAS.keys()
+        )
+
+        return (
+            False,
+            (
+                f"Unknown tool: {tool_name}\n"
+                f"Available tools:\n"
+                + "\n".join(
+                    f"- {name}"
+                    for name
+                    in names
+                )
+            ),
+        )
+
+    provided = set(
+        args.keys()
+    )
+
+    missing = (
+        schema["required"]
+        - provided
+    )
+
+    extra = (
+        provided
+        - schema["allowed"]
+    )
+
+    if missing:
+
+        return (
+            False,
+            (
+                f"{tool_name} is missing "
+                f"required argument(s): "
+                f"{', '.join(sorted(missing))}"
+            ),
+        )
+
+    if extra:
+
+        return (
+            False,
+            (
+                f"{tool_name} does not accept: "
+                f"{', '.join(sorted(extra))}. "
+                f"Allowed arguments: "
+                f"{', '.join(sorted(schema['allowed'])) or '(none)'}"
+            ),
+        )
+
+    return (
+        True,
+        "",
+    )
+
+
+# ============================================================
+# SHORT TOOL DOCS
 # ============================================================
 
 TOOL_DOCS = """
-AVAILABLE TOOLS
+inspect_project(path=".") -> detect project type/capabilities
+list_files(path=".", depth=2) -> list files
+list_directories(path=".", depth=2) -> list folders
+find_file(name, path=".") -> find filename
+search_text(query, path=".", max_results=50) -> search text
+read_file(path,start_line=1,end_line=200) -> read existing file
 
-inspect_project {}
-Inspect detected project capabilities and top-level structure.
+create_file(path,content) -> create ONE new file
+create_files(files=[{"path":..., "content":...}]) -> create several new files
+apply_patch(path,old_text,new_text) -> modify existing exact text
+delete_file(path) -> delete file
+create_directory(path) -> create folder
+delete_empty_directory(path) -> delete empty folder
+undo_last_edit() -> undo most recent file edit
 
-list_files {"path": ".", "depth": 2}
-List files.
+verify_file_exists(path) -> verify a FILE
+verify_files_exist(paths) -> verify several files
+verify_directory_exists(path) -> verify a DIRECTORY
+verify_file_content(path,expected_text) -> check text exists
+verify_line_count(path,expected,ignore_empty=true) -> exact line count
+count_matches(path,text) -> count exact text occurrences
 
-list_directories {"path": ".", "depth": 2}
-List directories only.
+run_project_tests() -> detected ecosystem tests
+run_project_build() -> detected ecosystem build/compile
+run_project_lint() -> detected lint
+run_project_typecheck() -> detected typecheck
 
-find_file {"name": "App.tsx", "path": "."}
-Find a file by name.
+validate_python() -> Python syntax compilation; accepts NO args
+check_python_import(module) -> verify Python import
 
-search_text {"query": "login", "path": ".", "max_results": 50}
-Search literal text.
+find_symbol(symbol,path=".") -> Python symbol definition search
+find_references(symbol,path=".") -> text reference search
 
-read_file {"path": "src/app.js", "start_line": 1, "end_line": 150}
-Read an existing file.
+git_status()
+git_diff()
+git_log_recent(count=10)
 
-create_file {"path": "src/game.js", "content": "..."}
-Create a NEW file only.
-
-apply_patch {
-  "path": "src/game.js",
-  "old_text": "exact existing text",
-  "new_text": "replacement text"
-}
-Modify an EXISTING file only.
-
-delete_file {"path": "old.txt"}
-Delete an existing file.
-
-create_directory {"path": "src/game"}
-Create a new directory.
-
-delete_empty_directory {"path": "old"}
-Delete an empty directory only.
-
-undo_last_edit {}
-Undo the most recent reversible file edit.
-
-find_symbol {"symbol": "authenticate_user", "path": "."}
-Find Python function/class definitions.
-
-find_references {"symbol": "authenticate_user", "path": ".", "max_results": 100}
-Find symbol references as text.
-
-run_project_tests {}
-Run the project's detected test command.
-Do not use if the project capability card says tests are unavailable.
-
-run_project_build {}
-Run the project's detected build command.
-Do not use if unavailable.
-
-run_project_lint {}
-Run detected lint command.
-Do not use if unavailable.
-
-run_project_typecheck {}
-Run detected typecheck command.
-Do not use if unavailable.
-
-validate_python {}
-Python-only syntax compilation check.
-
-check_python_import {"module": "pygame"}
-Python-only module import check.
-
-verify_file_exists {"path": "src/game.js"}
-Verify that a file exists.
-
-verify_file_content {"path": "src/game.js", "expected_text": "function startGame"}
-Verify expected text exists.
-
-verify_line_count {"path": "fruits.txt", "expected": 20, "ignore_empty": true}
-Verify exact line count.
-
-count_matches {"path": "src/app.js", "text": "TODO"}
-Count literal matches.
-
-git_status {}
-Show Git changes.
-
-git_diff {}
-Show Git diff.
-
-git_log_recent {"count": 10}
-Show recent Git commits.
-
-remember_fact {"fact": "Build uses Vite.", "evidence_id": "obs-003"}
-Persist a stable fact backed by successful tool evidence.
+remember_fact(fact,evidence_id) -> save verified durable project fact
 """
