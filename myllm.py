@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -14,10 +15,13 @@ import lancedb
 from llama_cpp import Llama
 
 from myllm_tools import (
+    ProjectProfile,
     Workspace,
     Tools,
     TOOL_DOCS,
     build_tool_registry,
+    detect_project_profile,
+    profile_to_prompt,
     truncate_text,
 )
 
@@ -26,47 +30,57 @@ from myllm_tools import (
 # APPLICATION PATHS
 # ============================================================
 
-SCRIPT_DIR = Path(__file__).resolve().parent
+SCRIPT_DIR = (
+    Path(__file__)
+    .resolve()
+    .parent
+)
 
-APP_DIR = SCRIPT_DIR / ".myllm"
+APP_DIR = (
+    SCRIPT_DIR
+    / ".myllm"
+)
 
-CONFIG_FILE = APP_DIR / "config.json"
+CONFIG_FILE = (
+    APP_DIR
+    / "config.json"
+)
 
-MEMORY_ROOT = APP_DIR / "memory"
-
-
-# ============================================================
-# DEFAULT CONFIG
-# ============================================================
-
-DEFAULT_CONFIG = {
-    "model_path": "",
-    "project_root": str(SCRIPT_DIR),
-    "context_size": 8192,
-    "gpu_layers": 0,
-    "max_steps": 30,
-    "temperature": 0.1,
-
-    # 0 = minimal
-    # 1 = raw streamed LLM output
-    # 2 = level 1 + parsed actions + tool args/results
-    # 3 = level 2 + entire prompt/messages
-    "debug_level": 1,
-}
-
-
-MAX_IDENTICAL_ACTIONS = 2
-
-CONTEXT_COMPACT_RATIO = 0.70
-
-MAX_MODEL_OUTPUT_TOKENS = 1000
+MEMORY_ROOT = (
+    APP_DIR
+    / "memory"
+)
 
 
 # ============================================================
 # CONFIG
 # ============================================================
 
+DEFAULT_CONFIG = {
+    "model_path": "",
+    "project_root": str(
+        SCRIPT_DIR
+    ),
+    "context_size": 8192,
+    "gpu_layers": 0,
+    "max_steps": 30,
+    "temperature": 0.1,
+    "debug_level": 1,
+    "max_no_progress_steps": 6,
+    "recent_observations": 8,
+}
+
+
+MAX_IDENTICAL_ACTIONS = 2
+MAX_MODEL_OUTPUT_TOKENS = 1100
+
+
+# ============================================================
+# CONFIG STORAGE
+# ============================================================
+
 def ensure_app_directory() -> None:
+
     APP_DIR.mkdir(
         parents=True,
         exist_ok=True,
@@ -81,6 +95,7 @@ def ensure_app_directory() -> None:
 def save_config(
     config: dict[str, Any],
 ) -> None:
+
     ensure_app_directory()
 
     CONFIG_FILE.write_text(
@@ -94,18 +109,23 @@ def save_config(
 
 
 def load_config() -> dict[str, Any]:
+
     ensure_app_directory()
 
     if not CONFIG_FILE.exists():
+
         config = (
             DEFAULT_CONFIG.copy()
         )
 
-        save_config(config)
+        save_config(
+            config
+        )
 
         return config
 
     try:
+
         loaded = json.loads(
             CONFIG_FILE.read_text(
                 encoding="utf-8"
@@ -113,15 +133,20 @@ def load_config() -> dict[str, Any]:
         )
 
     except Exception:
+
         loaded = {}
 
     config = (
         DEFAULT_CONFIG.copy()
     )
 
-    config.update(loaded)
+    config.update(
+        loaded
+    )
 
-    save_config(config)
+    save_config(
+        config
+    )
 
     return config
 
@@ -143,12 +168,32 @@ class Observation:
 
 
 @dataclass
+class TaskConstraints:
+    requested_languages: set[str] = field(
+        default_factory=set
+    )
+
+    forbidden_languages: set[str] = field(
+        default_factory=set
+    )
+
+    requested_technologies: set[str] = field(
+        default_factory=set
+    )
+
+    forbidden_technologies: set[str] = field(
+        default_factory=set
+    )
+
+    browser_app: bool = False
+    frontend_required: bool = False
+
+
+@dataclass
 class AgentState:
     task: str
 
     step: int = 0
-
-    summary: str = ""
 
     observations: list[Observation] = field(
         default_factory=list
@@ -162,7 +207,6 @@ class AgentState:
         default_factory=set
     )
 
-    # Path, original content, existed_before
     edit_backups: list[
         tuple[Path, str, bool]
     ] = field(
@@ -170,15 +214,39 @@ class AgentState:
     )
 
     last_test_passed: bool = False
-
     last_validation_passed: bool = False
+
+    unavailable_capabilities: set[str] = field(
+        default_factory=set
+    )
+
+    no_progress_steps: int = 0
+
+    created_files: set[str] = field(
+        default_factory=set
+    )
+
+    modified_files: set[str] = field(
+        default_factory=set
+    )
+
+    read_files: set[str] = field(
+        default_factory=set
+    )
+
+    blockers: list[str] = field(
+        default_factory=list
+    )
+
+    latest_result: str = ""
 
 
 # ============================================================
-# UI HELPERS
+# UI
 # ============================================================
 
 def clear_screen() -> None:
+
     os.system(
         "cls"
         if os.name == "nt"
@@ -187,6 +255,7 @@ def clear_screen() -> None:
 
 
 def pause() -> None:
+
     input(
         "\nPress Enter to continue..."
     )
@@ -195,6 +264,7 @@ def pause() -> None:
 def print_header(
     title: str,
 ) -> None:
+
     print()
     print("=" * 70)
     print(title)
@@ -202,46 +272,12 @@ def print_header(
 
 
 # ============================================================
-# PROJECT DISCOVERY
+# PROJECT INFO
 # ============================================================
 
-def detect_project(
+def detect_environment(
     root: Path,
 ) -> dict[str, Any]:
-    try:
-        names = {
-            item.name
-            for item in root.iterdir()
-        }
-
-    except Exception:
-        names = set()
-
-    project_types = []
-
-    if (
-        "pyproject.toml" in names
-        or "requirements.txt" in names
-        or "setup.py" in names
-    ):
-        project_types.append(
-            "Python"
-        )
-
-    if "package.json" in names:
-        project_types.append(
-            "Node.js"
-        )
-
-    if "Cargo.toml" in names:
-        project_types.append(
-            "Rust"
-        )
-
-    if "go.mod" in names:
-        project_types.append(
-            "Go"
-        )
 
     return {
         "os": (
@@ -257,11 +293,6 @@ def detect_project(
             str(root)
         ),
 
-        "project_types": (
-            project_types
-            or ["unknown"]
-        ),
-
         "git_repository": (
             root / ".git"
         ).exists(),
@@ -269,10 +300,475 @@ def detect_project(
 
 
 # ============================================================
-# PROJECT MEMORY
+# TASK CONSTRAINTS
+# ============================================================
+
+def detect_task_constraints(
+    task: str,
+) -> TaskConstraints:
+
+    text = (
+        task.lower()
+    )
+
+    padded = (
+        f" {text} "
+    )
+
+    constraints = (
+        TaskConstraints()
+    )
+
+    # --------------------------------------------------------
+    # LANGUAGES
+    # --------------------------------------------------------
+
+    if (
+        "javascript" in text
+        or re.search(
+            r"\bjs\b",
+            text,
+        )
+    ):
+        constraints.requested_languages.add(
+            "javascript"
+        )
+
+    if (
+        "typescript" in text
+        or re.search(
+            r"\bts\b",
+            text,
+        )
+    ):
+        constraints.requested_languages.add(
+            "typescript"
+        )
+
+    if (
+        "python" in text
+    ):
+        constraints.requested_languages.add(
+            "python"
+        )
+
+    if (
+        re.search(
+            r"\bjava\b",
+            text,
+        )
+        and "javascript"
+        not in text
+    ):
+        constraints.requested_languages.add(
+            "java"
+        )
+
+    if (
+        re.search(
+            r"\brust\b",
+            text,
+        )
+    ):
+        constraints.requested_languages.add(
+            "rust"
+        )
+
+    if (
+        re.search(
+            r"\bgo\b",
+            text,
+        )
+        and (
+            "golang" in text
+            or "go app" in text
+            or "go project" in text
+        )
+    ):
+        constraints.requested_languages.add(
+            "go"
+        )
+
+    # --------------------------------------------------------
+    # TECHNOLOGIES
+    # --------------------------------------------------------
+
+    if "react" in text:
+
+        constraints.requested_technologies.add(
+            "react"
+        )
+
+        constraints.requested_languages.add(
+            "javascript"
+        )
+
+        constraints.browser_app = True
+        constraints.frontend_required = True
+
+    if "next.js" in text or "nextjs" in text:
+
+        constraints.requested_technologies.add(
+            "next.js"
+        )
+
+        constraints.requested_languages.add(
+            "javascript"
+        )
+
+        constraints.browser_app = True
+        constraints.frontend_required = True
+
+    if "vite" in text:
+
+        constraints.requested_technologies.add(
+            "vite"
+        )
+
+        constraints.browser_app = True
+
+    if "pygame" in text:
+
+        constraints.requested_technologies.add(
+            "pygame"
+        )
+
+        constraints.requested_languages.add(
+            "python"
+        )
+
+    # --------------------------------------------------------
+    # FRONTEND / BROWSER
+    # --------------------------------------------------------
+
+    frontend_phrases = [
+        "frontend",
+        "front-end",
+        "browser",
+        "web app",
+        "webapp",
+        "website",
+        "html",
+    ]
+
+    if any(
+        phrase in text
+        for phrase
+        in frontend_phrases
+    ):
+        constraints.browser_app = True
+        constraints.frontend_required = True
+
+    # --------------------------------------------------------
+    # NEGATIVE CONSTRAINTS
+    # --------------------------------------------------------
+
+    if (
+        "not python" in text
+        or "no python" in text
+        or "without python" in text
+    ):
+        constraints.forbidden_languages.add(
+            "python"
+        )
+
+    if (
+        "not pygame" in text
+        or "no pygame" in text
+    ):
+        constraints.forbidden_technologies.add(
+            "pygame"
+        )
+
+    return constraints
+
+
+def constraints_to_prompt(
+    constraints: TaskConstraints,
+) -> str:
+
+    return (
+        "REQUESTED LANGUAGES: "
+        + (
+            ", ".join(
+                sorted(
+                    constraints.requested_languages
+                )
+            )
+            or "not explicitly specified"
+        )
+        + "\n"
+        + "FORBIDDEN LANGUAGES: "
+        + (
+            ", ".join(
+                sorted(
+                    constraints.forbidden_languages
+                )
+            )
+            or "none"
+        )
+        + "\n"
+        + "REQUESTED TECHNOLOGIES: "
+        + (
+            ", ".join(
+                sorted(
+                    constraints.requested_technologies
+                )
+            )
+            or "not explicitly specified"
+        )
+        + "\n"
+        + "FORBIDDEN TECHNOLOGIES: "
+        + (
+            ", ".join(
+                sorted(
+                    constraints.forbidden_technologies
+                )
+            )
+            or "none"
+        )
+        + "\n"
+        + f"BROWSER APP REQUIRED: "
+        + str(
+            constraints.browser_app
+        )
+        + "\n"
+        + f"FRONTEND REQUIRED: "
+        + str(
+            constraints.frontend_required
+        )
+    )
+
+
+# ============================================================
+# CONSTRAINT VALIDATION
+# ============================================================
+
+def validate_tool_against_constraints(
+    tool_name: str,
+    args: dict[str, Any],
+    constraints: TaskConstraints,
+) -> tuple[bool, str]:
+
+    if tool_name not in {
+        "create_file",
+        "apply_patch",
+    }:
+        return (
+            True,
+            "",
+        )
+
+    path = str(
+        args.get(
+            "path",
+            "",
+        )
+    ).lower()
+
+    content = str(
+        args.get(
+            "content",
+            args.get(
+                "new_text",
+                "",
+            ),
+        )
+    ).lower()
+
+    requested = (
+        constraints.requested_languages
+    )
+
+    forbidden = (
+        constraints.forbidden_languages
+    )
+
+    technologies = (
+        constraints.requested_technologies
+    )
+
+    # --------------------------------------------------------
+    # JAVASCRIPT / TYPESCRIPT LOCK
+    # --------------------------------------------------------
+
+    if (
+        "javascript" in requested
+        or "typescript" in requested
+    ):
+
+        if path.endswith(
+            ".py"
+        ):
+
+            return (
+                False,
+                (
+                    "The user explicitly requested "
+                    "JavaScript/TypeScript. "
+                    "Creating a Python implementation "
+                    "violates the task."
+                ),
+            )
+
+        if (
+            "import pygame" in content
+            or "pygame." in content
+        ):
+
+            return (
+                False,
+                (
+                    "The user requested JavaScript/"
+                    "TypeScript, but this content uses "
+                    "Pygame/Python."
+                ),
+            )
+
+    # --------------------------------------------------------
+    # JAVA LOCK
+    # --------------------------------------------------------
+
+    if (
+        "java" in requested
+    ):
+
+        if path.endswith(
+            (
+                ".py",
+                ".js",
+                ".jsx",
+                ".ts",
+                ".tsx",
+            )
+        ):
+
+            return (
+                False,
+                (
+                    "The user explicitly requested Java. "
+                    "Do not replace the implementation "
+                    "with another language."
+                ),
+            )
+
+    # --------------------------------------------------------
+    # PYTHON LOCK
+    # --------------------------------------------------------
+
+    if (
+        "python" in requested
+        and not constraints.browser_app
+    ):
+
+        if path.endswith(
+            (
+                ".java",
+                ".rs",
+                ".go",
+            )
+        ):
+
+            return (
+                False,
+                (
+                    "The user explicitly requested Python."
+                ),
+            )
+
+    # --------------------------------------------------------
+    # FORBIDDEN PYTHON
+    # --------------------------------------------------------
+
+    if (
+        "python" in forbidden
+    ):
+
+        if (
+            path.endswith(
+                ".py"
+            )
+            or "import pygame" in content
+        ):
+
+            return (
+                False,
+                "Python is explicitly forbidden.",
+            )
+
+    # --------------------------------------------------------
+    # BROWSER FRONTEND
+    # --------------------------------------------------------
+
+    if (
+        constraints.browser_app
+        and "python"
+        not in requested
+    ):
+
+        if path.endswith(
+            ".py"
+        ):
+
+            return (
+                False,
+                (
+                    "This task requires a browser/frontend "
+                    "application. A Python desktop program "
+                    "would violate that requirement."
+                ),
+            )
+
+    # --------------------------------------------------------
+    # REACT LOCK
+    # --------------------------------------------------------
+
+    if (
+        "react" in technologies
+    ):
+
+        if path.endswith(
+            ".py"
+        ):
+
+            return (
+                False,
+                (
+                    "React was explicitly requested. "
+                    "Do not create a Python implementation."
+                ),
+            )
+
+    # --------------------------------------------------------
+    # PYGAME FORBIDDEN
+    # --------------------------------------------------------
+
+    if (
+        "pygame"
+        in constraints.forbidden_technologies
+    ):
+
+        if (
+            "pygame" in content
+        ):
+
+            return (
+                False,
+                "Pygame is explicitly forbidden.",
+            )
+
+    return (
+        True,
+        "",
+    )
+
+
+# ============================================================
+# LANCEDB MEMORY
 # ============================================================
 
 class ProjectMemory:
+
     TABLE_NAME = (
         "project_facts"
     )
@@ -281,6 +777,7 @@ class ProjectMemory:
         self,
         workspace: Workspace,
     ):
+
         self.project_id = (
             hashlib.sha256(
                 str(
@@ -303,10 +800,15 @@ class ProjectMemory:
             str(memory_dir)
         )
 
-    def _open(self):
+    def _open(
+        self,
+    ):
+
         try:
-            return self.db.open_table(
-                self.TABLE_NAME
+            return (
+                self.db.open_table(
+                    self.TABLE_NAME
+                )
             )
 
         except Exception:
@@ -318,6 +820,7 @@ class ProjectMemory:
         evidence: str,
         evidence_id: str,
     ) -> None:
+
         row = {
             "project":
                 self.project_id,
@@ -335,15 +838,19 @@ class ProjectMemory:
                 int(time.time()),
         }
 
-        table = self._open()
+        table = (
+            self._open()
+        )
 
         if table is None:
+
             self.db.create_table(
                 self.TABLE_NAME,
                 data=[row],
             )
 
         else:
+
             table.add(
                 [row]
             )
@@ -352,12 +859,16 @@ class ProjectMemory:
         self,
         limit: int = 30,
     ) -> list[dict[str, Any]]:
-        table = self._open()
+
+        table = (
+            self._open()
+        )
 
         if table is None:
             return []
 
         try:
+
             return (
                 table.search()
                 .where(
@@ -373,13 +884,14 @@ class ProjectMemory:
 
 
 # ============================================================
-# ACTION SCHEMA
+# MODEL OUTPUT
 # ============================================================
 
 ACTION_SCHEMA = {
     "type": "object",
 
     "properties": {
+
         "type": {
             "type": "string",
             "enum": [
@@ -415,103 +927,94 @@ ACTION_SCHEMA = {
 # ============================================================
 
 SYSTEM_PROMPT = f"""
-You are a local assistant connected to REAL project tools through
-the surrounding Python application.
+You are a local software engineering assistant connected to REAL
+project tools through the surrounding Python controller.
 
-You can have normal conversations and you can autonomously inspect
-and modify files inside the selected workspace.
+You can:
+- chat normally;
+- inspect projects;
+- create and modify files;
+- verify work;
+- run detected project tests/build/lint/typecheck commands.
 
-IMPORTANT CAPABILITY RULE:
+The controller executes your tool requests.
 
-When an appropriate tool exists, DO NOT tell the user that you cannot
-access files, create files, inspect the project, edit code, or run tests.
+IMPORTANT:
+Never claim that you cannot access or create files when an appropriate
+tool is available.
 
-The surrounding application executes your tool calls for you.
+HARD REQUIREMENTS:
+The user request may contain explicit language/framework/platform
+requirements. These are mandatory.
 
-For example:
+Examples:
+- If the user asks for JavaScript, do not silently create Python.
+- If the user asks for React, do not replace React with Pygame.
+- If the user asks for a browser frontend, do not replace it with a
+  desktop Python application.
 
-User:
-Create fruits.txt containing exactly 20 fruit names.
+The controller may reject a tool request that violates hard requirements.
 
-Correct behavior:
-1. Call create_file.
-2. Verify the result, for example with verify_line_count or read_file.
-3. Return final only after verification.
+PROJECT CAPABILITY RULES:
+Only use project commands reported as AVAILABLE in the capability card.
+Never invent test commands or test cases.
 
-Incorrect behavior:
-"I cannot create files."
+Do not call run_project_tests if TEST COMMAND is unavailable.
+Do not call run_project_build if BUILD COMMAND is unavailable.
+Do not call run_project_lint if LINT COMMAND is unavailable.
+Do not call run_project_typecheck if TYPECHECK COMMAND is unavailable.
 
-TOOL SELECTION RULES:
+For a newly created Python file with no tests:
+use validate_python instead of inventing pytest tests.
 
-CREATE new file
--> create_file
+TOOL CHOICE:
+CREATE new file -> create_file
+READ file -> read_file
+MODIFY existing text -> apply_patch
+DELETE file -> delete_file
+FIND filename -> find_file
+SEARCH text -> search_text
 
-READ file
--> read_file
+After modifying behavior:
+- verify the result;
+- prefer project build/test/typecheck when available;
+- use narrow verification tools when appropriate.
 
-MODIFY existing exact text
--> apply_patch
+Never use create_file on an existing file.
+Never use apply_patch to create a new file.
+Never repeatedly retry a capability already confirmed unavailable.
 
-DELETE file
--> delete_file
+Take exactly ONE tool action per model turn.
 
-FIND filename
--> find_file
+If no tool is needed, return type="final".
 
-SEARCH contents
--> search_text
-
-RUN one pytest case
--> run_test_case
-
-RUN one test file
--> run_test_file
-
-RUN all tests
--> run_all_tests
-
-VERIFY exact line count
--> verify_line_count
-
-NEVER use apply_patch to create a new file.
-NEVER use create_file to overwrite an existing file.
-
-If the user's request is casual conversation or can be answered directly,
-return type="final" without using tools.
-
-When project work is required:
-- choose exactly ONE tool action at a time;
-- inspect only what is necessary;
-- prefer narrow reads;
-- make small changes;
-- observe tool results;
-- adapt after failures;
-- verify mutations before claiming success;
-- do not reveal private chain-of-thought.
+Do not reveal private chain-of-thought.
+The "message" field should contain only a short action description
+or final user-facing answer.
 
 AVAILABLE TOOLS:
 
 {TOOL_DOCS}
 
-Return tool actions as:
+Tool response example:
 
 {{
   "type": "tool",
   "tool": "create_file",
   "args": {{
-    "path": "fruits.txt",
-    "content": "Apple\\nBanana"
+    "path": "src/game.js",
+    "content": "..."
   }},
-  "message": "Creating the requested file."
+  "message": "Creating the JavaScript game implementation."
 }}
 
-Return direct/final answers as:
+Final response example:
 
 {{
   "type": "final",
   "tool": "",
   "args": {{}},
-  "message": "Your answer here."
+  "message": "Created and verified the requested application."
 }}
 """
 
@@ -526,32 +1029,47 @@ class CodingAgent:
         self,
         config: dict[str, Any],
     ):
+
         self.config = config
 
-        model_path = Path(
-            config["model_path"]
-        ).resolve()
+        model_path = (
+            Path(
+                config[
+                    "model_path"
+                ]
+            ).resolve()
+        )
 
-        project_root = Path(
-            config["project_root"]
-        ).resolve()
+        project_root = (
+            Path(
+                config[
+                    "project_root"
+                ]
+            ).resolve()
+        )
 
         if not model_path.exists():
+
             raise ValueError(
                 "Configured model does not exist."
             )
 
         if not project_root.exists():
+
             raise ValueError(
                 "Configured workspace does not exist."
             )
 
-        self.workspace = Workspace(
-            project_root
+        self.workspace = (
+            Workspace(
+                project_root
+            )
         )
 
-        self.memory = ProjectMemory(
-            self.workspace
+        self.memory = (
+            ProjectMemory(
+                self.workspace
+            )
         )
 
         threads = max(
@@ -560,7 +1078,9 @@ class CodingAgent:
         )
 
         print()
-        print("🧠 Loading model...")
+        print(
+            "🧠 Loading model..."
+        )
 
         self.llm = Llama(
             model_path=str(
@@ -568,11 +1088,15 @@ class CodingAgent:
             ),
 
             n_ctx=int(
-                config["context_size"]
+                config[
+                    "context_size"
+                ]
             ),
 
             n_gpu_layers=int(
-                config["gpu_layers"]
+                config[
+                    "gpu_layers"
+                ]
             ),
 
             n_threads=threads,
@@ -585,7 +1109,9 @@ class CodingAgent:
         )
 
         self.n_ctx = int(
-            config["context_size"]
+            config[
+                "context_size"
+            ]
         )
 
         print(
@@ -596,7 +1122,10 @@ class CodingAgent:
     # DEBUG
     # ========================================================
 
-    def debug_level(self) -> int:
+    def debug_level(
+        self,
+    ) -> int:
+
         return int(
             self.config.get(
                 "debug_level",
@@ -610,6 +1139,7 @@ class CodingAgent:
         value: Any,
         minimum_level: int = 1,
     ) -> None:
+
         if (
             self.debug_level()
             < minimum_level
@@ -617,66 +1147,99 @@ class CodingAgent:
             return
 
         print()
-        print("─" * 70)
-        print(f"🔎 {title}")
-        print("─" * 70)
+        print(
+            "─" * 70
+        )
 
-        if isinstance(value, str):
-            print(value)
+        print(
+            f"🔎 {title}"
+        )
+
+        print(
+            "─" * 70
+        )
+
+        if isinstance(
+            value,
+            str,
+        ):
+
+            print(
+                value
+            )
 
         else:
-            try:
-                print(
-                    json.dumps(
-                        value,
-                        indent=2,
-                        ensure_ascii=False,
-                    )
+
+            print(
+                json.dumps(
+                    value,
+                    indent=2,
+                    ensure_ascii=False,
+                    default=str,
                 )
+            )
 
-            except Exception:
-                print(value)
-
-        print("─" * 70)
+        print(
+            "─" * 70
+        )
 
     def debug_messages(
         self,
         messages: list[dict[str, str]],
     ) -> None:
-        if self.debug_level() < 3:
+
+        if (
+            self.debug_level()
+            < 3
+        ):
             return
 
         print()
-        print("=" * 70)
-        print("📨 FULL MODEL INPUT")
-        print("=" * 70)
+        print(
+            "=" * 70
+        )
 
-        for index, message in enumerate(
+        print(
+            "📨 FULL MODEL INPUT"
+        )
+
+        print(
+            "=" * 70
+        )
+
+        for (
+            index,
+            message,
+        ) in enumerate(
             messages,
             start=1,
         ):
+
             print()
             print(
                 f"[{index}] "
                 f"{message['role'].upper()}"
             )
 
-            print("-" * 70)
-
             print(
-                message["content"]
+                "-" * 70
             )
 
-        print("=" * 70)
+            print(
+                message[
+                    "content"
+                ]
+            )
 
     # ========================================================
-    # TOKEN ESTIMATE
+    # TOKEN COUNT
     # ========================================================
 
     def token_count(
         self,
         messages: list[dict[str, str]],
     ) -> int:
+
         text = "\n".join(
             f"{message['role']}:\n"
             f"{message['content']}"
@@ -686,6 +1249,7 @@ class CodingAgent:
         )
 
         try:
+
             return len(
                 self.llm.tokenize(
                     text.encode(
@@ -696,19 +1260,21 @@ class CodingAgent:
             )
 
         except Exception:
+
             return max(
                 1,
                 len(text) // 4,
             )
 
     # ========================================================
-    # STREAMED MODEL CALL
+    # MODEL CALL
     # ========================================================
 
     def call_model(
         self,
         messages: list[dict[str, str]],
     ) -> dict[str, Any]:
+
         self.debug_messages(
             messages
         )
@@ -743,66 +1309,108 @@ class CodingAgent:
 
         full_content = ""
 
-        if self.debug_level() >= 1:
+        if (
+            self.debug_level()
+            >= 1
+        ):
+
             print()
-            print("─" * 70)
-            print("🧠 RAW LLM STREAM")
-            print("─" * 70)
+            print(
+                "─" * 70
+            )
+
+            print(
+                "🧠 RAW LLM STREAM"
+            )
+
+            print(
+                "─" * 70
+            )
 
         for chunk in stream:
-            choices = chunk.get(
-                "choices",
-                [],
+
+            choices = (
+                chunk.get(
+                    "choices",
+                    [],
+                )
             )
 
             if not choices:
                 continue
 
-            delta = choices[0].get(
-                "delta",
-                {},
+            delta = (
+                choices[0].get(
+                    "delta",
+                    {},
+                )
             )
 
-            text = delta.get(
-                "content",
-                "",
+            text = (
+                delta.get(
+                    "content",
+                    "",
+                )
             )
 
             if not text:
                 continue
 
-            full_content += text
+            full_content += (
+                text
+            )
 
-            if self.debug_level() >= 1:
+            if (
+                self.debug_level()
+                >= 1
+            ):
+
                 print(
                     text,
                     end="",
                     flush=True,
                 )
 
-        if self.debug_level() >= 1:
+        if (
+            self.debug_level()
+            >= 1
+        ):
+
             print()
-            print("─" * 70)
+            print(
+                "─" * 70
+            )
 
         try:
+
             parsed = json.loads(
                 full_content
             )
 
         except json.JSONDecodeError as error:
+
             self.debug_print(
                 "JSON PARSE ERROR",
                 {
-                    "error": str(error),
-                    "raw": full_content,
+                    "error":
+                        str(error),
+
+                    "raw":
+                        full_content,
                 },
                 minimum_level=1,
             )
 
             return {
-                "type": "invalid",
-                "tool": "",
-                "args": {},
+                "type":
+                    "invalid",
+
+                "tool":
+                    "",
+
+                "args":
+                    {},
+
                 "message":
                     full_content,
             }
@@ -819,7 +1427,10 @@ class CodingAgent:
     # MEMORY
     # ========================================================
 
-    def memory_card(self) -> str:
+    def memory_card(
+        self,
+    ) -> str:
+
         facts = (
             self.memory.load_facts(
                 limit=30
@@ -827,14 +1438,18 @@ class CodingAgent:
         )
 
         if not facts:
+
             return (
-                "(no verified project memory yet)"
+                "(no verified project memory)"
             )
 
         lines = []
         seen = set()
 
-        for row in reversed(facts):
+        for row in reversed(
+            facts
+        ):
+
             fact = str(
                 row.get(
                     "fact",
@@ -848,72 +1463,331 @@ class CodingAgent:
             ):
                 continue
 
-            seen.add(fact)
+            seen.add(
+                fact
+            )
 
             lines.append(
                 f"- {fact}"
             )
 
-        return "\n".join(
-            lines[:20]
+        return (
+            "\n".join(
+                lines[:20]
+            )
         )
 
     # ========================================================
-    # FAILURE HINT
+    # WORKING STATE
     # ========================================================
 
-    def tool_failure_hint(
+    def state_card(
         self,
-        tool_name: str,
-        output: str,
+        state: AgentState,
     ) -> str:
-        text = output.lower()
 
-        if (
-            tool_name == "apply_patch"
-            and (
-                "file does not exist"
-                in text
-            )
-        ):
-            return (
-                "CONTROLLER HINT: "
-                "apply_patch only modifies "
-                "an existing file. "
-                "Use create_file when creating "
-                "a new file."
+        def items(
+            values,
+        ) -> str:
+
+            if not values:
+                return "(none)"
+
+            return "\n".join(
+                f"- {value}"
+                for value
+                in sorted(values)
             )
 
-        if (
-            tool_name == "apply_patch"
-            and (
-                "old_text cannot be empty"
-                in text
+        blockers = (
+            "\n".join(
+                f"- {item}"
+                for item
+                in state.blockers[-5:]
             )
-        ):
-            return (
-                "CONTROLLER HINT: "
-                "apply_patch requires existing "
-                "non-empty old_text. "
-                "Use create_file for a new file."
+            or "(none)"
+        )
+
+        return (
+            f"GOAL:\n"
+            f"{state.task}\n\n"
+
+            f"CREATED FILES:\n"
+            f"{items(state.created_files)}\n\n"
+
+            f"MODIFIED FILES:\n"
+            f"{items(state.modified_files)}\n\n"
+
+            f"READ FILES:\n"
+            f"{items(state.read_files)}\n\n"
+
+            f"KNOWN BLOCKERS:\n"
+            f"{blockers}\n\n"
+
+            f"LATEST RESULT:\n"
+            f"{state.latest_result or '(none)'}"
+        )
+
+    def update_state(
+        self,
+        state: AgentState,
+        tool_name: str,
+        args: dict[str, Any],
+        success: bool,
+        output: str,
+    ) -> bool:
+
+        progress = False
+
+        path = str(
+            args.get(
+                "path",
+                "",
+            )
+        )
+
+        if success:
+
+            if (
+                tool_name
+                == "create_file"
+                and path
+            ):
+
+                if (
+                    path
+                    not in state.created_files
+                ):
+
+                    progress = True
+
+                state.created_files.add(
+                    path
+                )
+
+            elif (
+                tool_name
+                == "apply_patch"
+                and path
+            ):
+
+                state.modified_files.add(
+                    path
+                )
+
+                progress = True
+
+            elif (
+                tool_name
+                == "read_file"
+                and path
+            ):
+
+                if (
+                    path
+                    not in state.read_files
+                ):
+
+                    progress = True
+
+                state.read_files.add(
+                    path
+                )
+
+            elif (
+                tool_name.startswith(
+                    "verify_"
+                )
+                or tool_name
+                in {
+                    "run_project_tests",
+                    "run_project_build",
+                    "run_project_lint",
+                    "run_project_typecheck",
+                    "validate_python",
+                    "check_python_import",
+                }
+            ):
+
+                progress = True
+
+        else:
+
+            lowered = (
+                output.lower()
             )
 
-        if (
-            tool_name == "create_file"
-            and "already exists" in text
-        ):
-            return (
-                "CONTROLLER HINT: "
-                "The file already exists. "
-                "Read it first, then use "
-                "apply_patch if modification "
-                "is required."
-            )
+            new_blocker = None
 
-        return ""
+            if (
+                "no module named pytest"
+                in lowered
+            ):
+
+                state.unavailable_capabilities.add(
+                    "project_tests"
+                )
+
+                new_blocker = (
+                    "Project tests are unavailable "
+                    "because pytest is not installed."
+                )
+
+            elif (
+                "no project test command"
+                in lowered
+            ):
+
+                state.unavailable_capabilities.add(
+                    "project_tests"
+                )
+
+                new_blocker = (
+                    "No project test command is available."
+                )
+
+            elif (
+                "no project build command"
+                in lowered
+            ):
+
+                state.unavailable_capabilities.add(
+                    "project_build"
+                )
+
+                new_blocker = (
+                    "No project build command is available."
+                )
+
+            elif (
+                "no project lint command"
+                in lowered
+            ):
+
+                state.unavailable_capabilities.add(
+                    "project_lint"
+                )
+
+                new_blocker = (
+                    "No project lint command is available."
+                )
+
+            elif (
+                "no project typecheck command"
+                in lowered
+            ):
+
+                state.unavailable_capabilities.add(
+                    "project_typecheck"
+                )
+
+                new_blocker = (
+                    "No project typecheck command is available."
+                )
+
+            if (
+                new_blocker
+                and new_blocker
+                not in state.blockers
+            ):
+
+                state.blockers.append(
+                    new_blocker
+                )
+
+                progress = True
+
+        state.latest_result = (
+            truncate_text(
+                output,
+                500,
+            )
+        )
+
+        return progress
 
     # ========================================================
-    # EXECUTE TOOL
+    # TRIM HISTORY
+    # ========================================================
+
+    def trim_history(
+        self,
+        base_messages: list[dict[str, str]],
+        messages: list[dict[str, str]],
+        state: AgentState,
+        profile_card: str,
+        constraints_card: str,
+        memory_card: str,
+    ) -> list[dict[str, str]]:
+
+        keep_recent = int(
+            self.config.get(
+                "recent_observations",
+                8,
+            )
+        )
+
+        if (
+            self.token_count(
+                messages
+            )
+            < int(
+                self.n_ctx
+                * 0.78
+            )
+        ):
+            return messages
+
+        print(
+            "🧹 Trimming old observations..."
+        )
+
+        recent = (
+            messages[
+                max(
+                    2,
+                    len(messages)
+                    - keep_recent * 2
+                ):
+            ]
+        )
+
+        return [
+            {
+                "role":
+                    "system",
+
+                "content":
+                    SYSTEM_PROMPT,
+            },
+
+            {
+                "role":
+                    "user",
+
+                "content": (
+                    f"USER REQUEST:\n"
+                    f"{state.task}\n\n"
+
+                    f"HARD TASK CONSTRAINTS:\n"
+                    f"{constraints_card}\n\n"
+
+                    f"PROJECT CAPABILITIES:\n"
+                    f"{profile_card}\n\n"
+
+                    f"PERSISTENT MEMORY:\n"
+                    f"{memory_card}\n\n"
+
+                    f"CURRENT WORKING STATE:\n"
+                    f"{self.state_card(state)}"
+                ),
+            },
+
+            *recent,
+        ]
+
+    # ========================================================
+    # TOOL EXECUTION
     # ========================================================
 
     def execute_tool(
@@ -922,17 +1796,21 @@ class CodingAgent:
         name: str,
         args: dict[str, Any],
     ) -> tuple[bool, str]:
+
         registry = (
             build_tool_registry(
                 tools
             )
         )
 
-        function = registry.get(
-            name
+        function = (
+            registry.get(
+                name
+            )
         )
 
         if function is None:
+
             return (
                 False,
                 f"Unknown tool: {name}",
@@ -941,19 +1819,27 @@ class CodingAgent:
         self.debug_print(
             "TOOL CALL",
             {
-                "tool": name,
-                "args": args,
+                "tool":
+                    name,
+
+                "args":
+                    args,
             },
             minimum_level=2,
         )
 
         try:
-            result = function(
-                **args
+
+            result = (
+                function(
+                    **args
+                )
             )
 
-            output = truncate_text(
-                str(result)
+            output = (
+                truncate_text(
+                    str(result)
+                )
             )
 
             self.debug_print(
@@ -968,6 +1854,7 @@ class CodingAgent:
             )
 
         except Exception as error:
+
             output = (
                 f"{type(error).__name__}: "
                 f"{error}"
@@ -985,111 +1872,48 @@ class CodingAgent:
             )
 
     # ========================================================
-    # COMPACTION
+    # CAPABILITY BLOCKING
     # ========================================================
 
-    def compact(
+    def capability_block(
         self,
         state: AgentState,
-        messages: list[dict[str, str]],
-        memory_card: str,
-    ) -> list[dict[str, str]]:
-        print(
-            "🧹 Compacting context..."
-        )
+        tool_name: str,
+    ) -> str:
 
-        transcript = "\n\n".join(
-            f"{message['role'].upper()}:\n"
-            f"{message['content']}"
+        mapping = {
+            "run_project_tests":
+                "project_tests",
 
-            for message
-            in messages[1:]
-        )
+            "run_project_build":
+                "project_build",
 
-        compact_prompt = f"""
-Summarize the current agent state.
+            "run_project_lint":
+                "project_lint",
 
-Preserve:
-- original task
-- verified discoveries
-- relevant files
-- edits already made
-- current errors
-- test results
-- tool failures that matter
-- unresolved work
-- constraints
+            "run_project_typecheck":
+                "project_typecheck",
+        }
 
-Do not invent anything.
-
-TASK:
-{state.task}
-
-MEMORY:
-{memory_card}
-
-HISTORY:
-{truncate_text(transcript, 20000)}
-"""
-
-        response = (
-            self.llm.create_chat_completion(
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Produce a concise factual "
-                            "working-state summary."
-                        ),
-                    },
-
-                    {
-                        "role": "user",
-                        "content":
-                            compact_prompt,
-                    },
-                ],
-
-                temperature=0.0,
-
-                max_tokens=700,
+        capability = (
+            mapping.get(
+                tool_name
             )
         )
 
-        summary = (
-            response["choices"][0]
-            ["message"]["content"]
-        )
+        if (
+            capability
+            and capability
+            in state.unavailable_capabilities
+        ):
 
-        state.summary = summary
+            return (
+                f"{tool_name} has already been "
+                "confirmed unavailable for this task. "
+                "Choose another verification method."
+            )
 
-        self.debug_print(
-            "COMPACTED STATE",
-            summary,
-            minimum_level=2,
-        )
-
-        return [
-            {
-                "role": "system",
-                "content":
-                    SYSTEM_PROMPT,
-            },
-
-            {
-                "role": "user",
-                "content": (
-                    f"ORIGINAL TASK:\n"
-                    f"{state.task}\n\n"
-
-                    f"PROJECT MEMORY:\n"
-                    f"{memory_card}\n\n"
-
-                    f"CURRENT WORKING STATE:\n"
-                    f"{summary}"
-                ),
-            },
-        ]
+        return ""
 
     # ========================================================
     # COMPLETION GATE
@@ -1099,27 +1923,23 @@ HISTORY:
         self,
         state: AgentState,
     ) -> tuple[bool, str]:
+
         if not state.edited_files:
             return (
                 True,
                 "",
             )
 
-        # This is deliberately permissive enough for
-        # non-Python file creation tasks.
-        #
-        # Verification tools do not currently set one global
-        # verified flag, so we also inspect whether a successful
-        # verification observation exists.
-
         verification_tools = {
             "verify_file_exists",
             "verify_file_content",
             "verify_line_count",
-            "run_test_case",
-            "run_test_file",
-            "run_all_tests",
+            "run_project_tests",
+            "run_project_build",
+            "run_project_lint",
+            "run_project_typecheck",
             "validate_python",
+            "check_python_import",
         }
 
         verified = any(
@@ -1140,63 +1960,100 @@ HISTORY:
         return (
             False,
             (
-                "A file was modified or created, "
-                "but the result has not yet been "
-                "verified. Use an appropriate "
-                "verification tool before finishing."
+                "Files were created or modified, "
+                "but no successful verification "
+                "has occurred yet."
             ),
         )
 
     # ========================================================
-    # AGENT LOOP
+    # RUN
     # ========================================================
 
     def run(
         self,
         task: str,
     ) -> str:
-        state = AgentState(
-            task=task
+
+        state = (
+            AgentState(
+                task=task
+            )
+        )
+
+        constraints = (
+            detect_task_constraints(
+                task
+            )
+        )
+
+        profile = (
+            detect_project_profile(
+                self.workspace.root
+            )
         )
 
         tools = Tools(
             workspace=self.workspace,
             memory=self.memory,
             state=state,
+            profile=profile,
         )
 
         memory_card = (
             self.memory_card()
         )
 
-        environment = detect_project(
-            self.workspace.root
+        profile_card = (
+            profile_to_prompt(
+                profile
+            )
+        )
+
+        constraints_card = (
+            constraints_to_prompt(
+                constraints
+            )
+        )
+
+        environment = (
+            detect_environment(
+                self.workspace.root
+            )
         )
 
         messages = [
             {
-                "role": "system",
+                "role":
+                    "system",
+
                 "content":
                     SYSTEM_PROMPT,
             },
 
             {
-                "role": "user",
+                "role":
+                    "user",
+
                 "content": (
                     f"USER REQUEST:\n"
                     f"{task}\n\n"
 
+                    f"HARD TASK CONSTRAINTS:\n"
+                    f"{constraints_card}\n\n"
+
+                    f"PROJECT CAPABILITIES:\n"
+                    f"{profile_card}\n\n"
+
                     f"ENVIRONMENT:\n"
                     f"{json.dumps(environment, indent=2)}\n\n"
 
-                    f"VERIFIED PROJECT MEMORY:\n"
+                    f"PERSISTENT VERIFIED MEMORY:\n"
                     f"{memory_card}\n\n"
 
-                    "If this request can be answered "
-                    "without tools, answer directly. "
-                    "If the request asks you to perform "
-                    "a project/file action, use the "
-                    "appropriate real tool."
+                    "Respect hard task constraints. "
+                    "Do not silently change the requested "
+                    "language/framework/platform."
                 ),
             },
         ]
@@ -1207,37 +2064,38 @@ HISTORY:
             ]
         )
 
+        max_no_progress = int(
+            self.config.get(
+                "max_no_progress_steps",
+                6,
+            )
+        )
+
         for step in range(
             1,
             max_steps + 1,
         ):
-            state.step = step
+
+            state.step = (
+                step
+            )
+
+            messages = (
+                self.trim_history(
+                    messages[:2],
+                    messages,
+                    state,
+                    profile_card,
+                    constraints_card,
+                    memory_card,
+                )
+            )
 
             used = (
                 self.token_count(
                     messages
                 )
             )
-
-            threshold = int(
-                self.n_ctx
-                * CONTEXT_COMPACT_RATIO
-            )
-
-            if used >= threshold:
-                messages = (
-                    self.compact(
-                        state,
-                        messages,
-                        memory_card,
-                    )
-                )
-
-                used = (
-                    self.token_count(
-                        messages
-                    )
-                )
 
             print()
             print(
@@ -1248,6 +2106,7 @@ HISTORY:
             )
 
             try:
+
                 action = (
                     self.call_model(
                         messages
@@ -1255,6 +2114,7 @@ HISTORY:
                 )
 
             except Exception as error:
+
                 return (
                     "Model invocation failed: "
                     f"{type(error).__name__}: "
@@ -1293,7 +2153,11 @@ HISTORY:
             # FINAL
             # =================================================
 
-            if action_type == "final":
+            if (
+                action_type
+                == "final"
+            ):
+
                 allowed, reason = (
                     self.completion_allowed(
                         state
@@ -1301,12 +2165,16 @@ HISTORY:
                 )
 
                 if allowed:
-                    return model_message
+                    return (
+                        model_message
+                    )
 
                 print(
                     f"🚫 Completion rejected: "
                     f"{reason}"
                 )
+
+                state.no_progress_steps += 1
 
                 messages.append(
                     {
@@ -1323,10 +2191,13 @@ HISTORY:
 
                 messages.append(
                     {
-                        "role": "user",
+                        "role":
+                            "user",
+
                         "content": (
                             "CONTROLLER:\n"
-                            f"{reason}"
+                            f"{reason}\n"
+                            "Use an available verification tool."
                         ),
                     }
                 )
@@ -1337,10 +2208,18 @@ HISTORY:
             # INVALID
             # =================================================
 
-            if action_type != "tool":
+            if (
+                action_type
+                != "tool"
+            ):
+
+                state.no_progress_steps += 1
+
                 messages.append(
                     {
-                        "role": "user",
+                        "role":
+                            "user",
+
                         "content": (
                             "CONTROLLER ERROR:\n"
                             "Return either type='tool' "
@@ -1355,12 +2234,17 @@ HISTORY:
                 args,
                 dict,
             ):
+
+                state.no_progress_steps += 1
+
                 messages.append(
                     {
-                        "role": "user",
+                        "role":
+                            "user",
+
                         "content": (
                             "CONTROLLER ERROR:\n"
-                            "args must be a JSON object."
+                            "Tool args must be a JSON object."
                         ),
                     }
                 )
@@ -1368,7 +2252,107 @@ HISTORY:
                 continue
 
             # =================================================
-            # LOOP DETECTION
+            # TASK CONSTRAINT VALIDATION
+            # =================================================
+
+            allowed, reason = (
+                validate_tool_against_constraints(
+                    tool_name,
+                    args,
+                    constraints,
+                )
+            )
+
+            if not allowed:
+
+                print()
+                print(
+                    f"🚫 CONTROLLER BLOCK: "
+                    f"{reason}"
+                )
+
+                state.no_progress_steps += 1
+
+                messages.append(
+                    {
+                        "role":
+                            "assistant",
+
+                        "content":
+                            json.dumps(
+                                action,
+                                ensure_ascii=False,
+                            ),
+                    }
+                )
+
+                messages.append(
+                    {
+                        "role":
+                            "user",
+
+                        "content": (
+                            "CONTROLLER BLOCK:\n"
+                            f"{reason}\n\n"
+                            "Respect the user's hard "
+                            "language/framework requirements "
+                            "and choose a compatible action."
+                        ),
+                    }
+                )
+
+                continue
+
+            # =================================================
+            # CAPABILITY VALIDATION
+            # =================================================
+
+            capability_reason = (
+                self.capability_block(
+                    state,
+                    tool_name,
+                )
+            )
+
+            if capability_reason:
+
+                print()
+                print(
+                    f"🚫 CONTROLLER BLOCK: "
+                    f"{capability_reason}"
+                )
+
+                state.no_progress_steps += 1
+
+                messages.append(
+                    {
+                        "role":
+                            "assistant",
+
+                        "content":
+                            json.dumps(
+                                action,
+                                ensure_ascii=False,
+                            ),
+                    }
+                )
+
+                messages.append(
+                    {
+                        "role":
+                            "user",
+
+                        "content": (
+                            "CONTROLLER BLOCK:\n"
+                            f"{capability_reason}"
+                        ),
+                    }
+                )
+
+                continue
+
+            # =================================================
+            # EXACT LOOP DETECTION
             # =================================================
 
             fingerprint = (
@@ -1383,7 +2367,9 @@ HISTORY:
                         },
                         sort_keys=True,
                         ensure_ascii=False,
-                    ).encode("utf-8")
+                    ).encode(
+                        "utf-8"
+                    )
                 ).hexdigest()
             )
 
@@ -1403,16 +2389,18 @@ HISTORY:
                 count
                 > MAX_IDENTICAL_ACTIONS
             ):
+
                 warning = (
-                    "The same exact tool call "
-                    "has already been attempted "
-                    "multiple times. Choose a "
-                    "different approach."
+                    "The exact same tool call has "
+                    "already been attempted multiple "
+                    "times. Choose another approach."
                 )
 
                 print(
                     f"🔁 {warning}"
                 )
+
+                state.no_progress_steps += 1
 
                 messages.append(
                     {
@@ -1429,7 +2417,9 @@ HISTORY:
 
                 messages.append(
                     {
-                        "role": "user",
+                        "role":
+                            "user",
+
                         "content": (
                             "CONTROLLER:\n"
                             f"{warning}"
@@ -1440,7 +2430,7 @@ HISTORY:
                 continue
 
             # =================================================
-            # TOOL
+            # EXECUTION
             # =================================================
 
             print()
@@ -1453,36 +2443,61 @@ HISTORY:
                     model_message
                 )
 
-            success, output = (
-                self.execute_tool(
-                    tools,
-                    tool_name,
-                    args,
-                )
+            (
+                success,
+                output,
+            ) = self.execute_tool(
+                tools,
+                tool_name,
+                args,
             )
 
             observation_id = (
                 f"obs-{step:03d}"
             )
 
-            observation = Observation(
-                id=observation_id,
-                tool=tool_name,
-                args=args,
-                text=output,
-                success=success,
+            observation = (
+                Observation(
+                    id=observation_id,
+                    tool=tool_name,
+                    args=args,
+                    text=output,
+                    success=success,
+                )
             )
 
             state.observations.append(
                 observation
             )
 
-            if len(
-                state.observations
-            ) > 100:
+            if (
+                len(
+                    state.observations
+                )
+                > 100
+            ):
+
                 state.observations = (
                     state.observations[-100:]
                 )
+
+            progress = (
+                self.update_state(
+                    state,
+                    tool_name,
+                    args,
+                    success,
+                    output,
+                )
+            )
+
+            if progress:
+
+                state.no_progress_steps = 0
+
+            else:
+
+                state.no_progress_steps += 1
 
             icon = (
                 "📦"
@@ -1492,8 +2507,28 @@ HISTORY:
 
             print(
                 f"{icon} "
-                f"{truncate_text(output, 1500)}"
+                f"{truncate_text(output, 1600)}"
             )
+
+            # -------------------------------------------------
+            # AUTO CAPABILITY LEARNING
+            # -------------------------------------------------
+
+            lowered = (
+                output.lower()
+            )
+
+            if (
+                not success
+                and (
+                    "no module named pytest"
+                    in lowered
+                )
+            ):
+
+                state.unavailable_capabilities.add(
+                    "project_tests"
+                )
 
             messages.append(
                 {
@@ -1513,30 +2548,48 @@ HISTORY:
                 f"{observation_id}\n"
                 f"success={success}\n"
                 f"tool={tool_name}\n\n"
-                f"{output}"
+                f"{output}\n\n"
+                f"CURRENT WORKING STATE:\n"
+                f"{self.state_card(state)}"
             )
 
-            if not success:
-                hint = (
-                    self.tool_failure_hint(
-                        tool_name,
-                        output,
-                    )
+            if (
+                not success
+                and tool_name
+                == "apply_patch"
+                and (
+                    "file does not exist"
+                    in lowered
+                    or "old_text cannot be empty"
+                    in lowered
+                )
+            ):
+
+                observation_message += (
+                    "\n\nCONTROLLER HINT:\n"
+                    "apply_patch modifies an existing file. "
+                    "Use create_file when the target does not exist."
                 )
 
-                if hint:
-                    observation_message += (
-                        f"\n\n{hint}"
-                    )
+            if (
+                not success
+                and tool_name
+                == "create_file"
+                and "already exists"
+                in lowered
+            ):
 
-                    print()
-                    print(
-                        f"💡 {hint}"
-                    )
+                observation_message += (
+                    "\n\nCONTROLLER HINT:\n"
+                    "The file already exists. Read it, "
+                    "then use apply_patch if modification is needed."
+                )
 
             messages.append(
                 {
-                    "role": "user",
+                    "role":
+                        "user",
+
                     "content":
                         observation_message,
                 }
@@ -1547,8 +2600,26 @@ HISTORY:
                 and tool_name
                 == "remember_fact"
             ):
+
                 memory_card = (
                     self.memory_card()
+                )
+
+            # =================================================
+            # NO-PROGRESS CIRCUIT BREAKER
+            # =================================================
+
+            if (
+                state.no_progress_steps
+                >= max_no_progress
+            ):
+
+                return (
+                    "🛑 Agent stopped because it made "
+                    f"no meaningful progress for "
+                    f"{state.no_progress_steps} consecutive steps.\n\n"
+                    f"Latest state:\n"
+                    f"{self.state_card(state)}"
                 )
 
         return (
@@ -1565,16 +2636,24 @@ def find_gguf_files(
     start: Path,
     max_results: int = 100,
 ) -> list[Path]:
+
     if not start.exists():
         return []
 
     found = []
 
     try:
-        for path in start.rglob(
-            "*.gguf"
+
+        for path in (
+            start.rglob(
+                "*.gguf"
+            )
         ):
-            if ".git" in path.parts:
+
+            if (
+                ".git"
+                in path.parts
+            ):
                 continue
 
             found.append(
@@ -1600,6 +2679,7 @@ def find_gguf_files(
 def model_selection_menu(
     config: dict[str, Any],
 ) -> None:
+
     clear_screen()
 
     print_header(
@@ -1615,67 +2695,89 @@ def model_selection_menu(
     models = []
     seen = set()
 
-    for location in search_locations:
-        for model in find_gguf_files(
-            location
+    for location in (
+        search_locations
+    ):
+
+        for model in (
+            find_gguf_files(
+                location
+            )
         ):
-            key = str(
-                model
-            ).lower()
+
+            key = (
+                str(model)
+                .lower()
+            )
 
             if key in seen:
                 continue
 
-            seen.add(key)
+            seen.add(
+                key
+            )
 
             models.append(
                 model
             )
 
     if models:
+
         print()
         print(
             "Detected GGUF models:\n"
         )
 
-        for index, model in enumerate(
+        for (
+            index,
+            model,
+        ) in enumerate(
             models,
             start=1,
         ):
+
             marker = ""
 
             try:
-                current = Path(
-                    config[
-                        "model_path"
-                    ]
-                ).resolve()
 
-                if current == model:
+                configured = (
+                    Path(
+                        config[
+                            "model_path"
+                        ]
+                    ).resolve()
+                )
+
+                if (
+                    configured
+                    == model
+                ):
                     marker = (
-                        "  ✅ current"
+                        " ✅ current"
                     )
 
             except Exception:
                 pass
 
             try:
-                size_gb = (
+
+                size = (
                     model.stat().st_size
                     / 1024**3
                 )
 
-                size = (
-                    f"{size_gb:.2f} GB"
+                size_text = (
+                    f"{size:.2f} GB"
                 )
 
             except Exception:
-                size = "?"
+
+                size_text = "?"
 
             print(
                 f"{index}. "
                 f"{model.name} "
-                f"[{size}]"
+                f"[{size_text}]"
                 f"{marker}"
             )
 
@@ -1687,28 +2789,32 @@ def model_selection_menu(
         print()
         print(
             f"{manual_index}. "
-            "Enter model path manually"
+            "Enter path manually"
         )
 
         print(
             "0. Back"
         )
 
-        choice = input(
+        selected = input(
             "\nSelect model: "
         ).strip()
 
-        if choice == "0":
+        if selected == "0":
             return
 
         try:
-            number = int(choice)
+
+            number = int(
+                selected
+            )
 
             if (
                 1
                 <= number
                 <= len(models)
             ):
+
                 config[
                     "model_path"
                 ] = str(
@@ -1740,7 +2846,9 @@ def model_selection_menu(
 
     entered = input(
         "\nFull GGUF path: "
-    ).strip().strip('"')
+    ).strip().strip(
+        '"'
+    )
 
     if not entered:
         return
@@ -1751,21 +2859,14 @@ def model_selection_menu(
         .resolve()
     )
 
-    if not path.exists():
-        print(
-            "\n❌ File does not exist."
-        )
-
-        pause()
-
-        return
-
     if (
-        path.suffix.lower()
+        not path.exists()
+        or path.suffix.lower()
         != ".gguf"
     ):
+
         print(
-            "\n❌ File must be .gguf"
+            "\n❌ Invalid GGUF path."
         )
 
         pause()
@@ -1774,9 +2875,13 @@ def model_selection_menu(
 
     config[
         "model_path"
-    ] = str(path)
+    ] = str(
+        path
+    )
 
-    save_config(config)
+    save_config(
+        config
+    )
 
     print(
         "\n✅ Model selected."
@@ -1792,6 +2897,7 @@ def model_selection_menu(
 def project_selection_menu(
     config: dict[str, Any],
 ) -> None:
+
     clear_screen()
 
     print_header(
@@ -1800,7 +2906,7 @@ def project_selection_menu(
 
     print()
     print(
-        "Current:"
+        "Current project:"
     )
 
     print(
@@ -1812,7 +2918,9 @@ def project_selection_menu(
     entered = input(
         "\nNew project folder "
         "(Enter to cancel): "
-    ).strip().strip('"')
+    ).strip().strip(
+        '"'
+    )
 
     if not entered:
         return
@@ -1827,6 +2935,7 @@ def project_selection_menu(
         not path.exists()
         or not path.is_dir()
     ):
+
         print(
             "\n❌ Invalid directory."
         )
@@ -1837,9 +2946,13 @@ def project_selection_menu(
 
     config[
         "project_root"
-    ] = str(path)
+    ] = str(
+        path
+    )
 
-    save_config(config)
+    save_config(
+        config
+    )
 
     print(
         "\n✅ Project selected."
@@ -1855,7 +2968,9 @@ def project_selection_menu(
 def settings_menu(
     config: dict[str, Any],
 ) -> None:
+
     while True:
+
         clear_screen()
 
         print_header(
@@ -1864,36 +2979,48 @@ def settings_menu(
 
         print(
             f"\n1. Context size"
-            f"      : "
+            f"           : "
             f"{config['context_size']}"
         )
 
         print(
             f"2. GPU layers"
-            f"        : "
+            f"             : "
             f"{config['gpu_layers']}"
         )
 
         print(
             f"3. Max agent steps"
-            f"   : "
+            f"        : "
             f"{config['max_steps']}"
         )
 
         print(
-            f"4. Temperature"
-            f"       : "
+            f"4. Max no-progress steps"
+            f"  : "
+            f"{config['max_no_progress_steps']}"
+        )
+
+        print(
+            f"5. Temperature"
+            f"            : "
             f"{config['temperature']}"
         )
 
         print(
-            f"5. Debug level"
-            f"       : "
+            f"6. Debug level"
+            f"            : "
             f"{config['debug_level']}"
         )
 
         print(
-            "6. Reset defaults"
+            f"7. Recent observations"
+            f"    : "
+            f"{config['recent_observations']}"
+        )
+
+        print(
+            "8. Reset defaults"
         )
 
         print(
@@ -1905,53 +3032,35 @@ def settings_menu(
         ).strip()
 
         if choice == "0":
-            save_config(config)
+
+            save_config(
+                config
+            )
+
             return
 
-        if choice == "1":
-            print()
-            print("1. 4096")
-            print("2. 8192")
-            print("3. 16384")
-            print("4. 32768")
-            print("5. Custom")
+        elif choice == "1":
 
-            selected = input(
-                "\nSelect: "
-            ).strip()
+            try:
 
-            mapping = {
-                "1": 4096,
-                "2": 8192,
-                "3": 16384,
-                "4": 32768,
-            }
-
-            if selected in mapping:
-                config[
-                    "context_size"
-                ] = (
-                    mapping[selected]
+                value = int(
+                    input(
+                        "Context size: "
+                    )
                 )
 
-            elif selected == "5":
-                try:
-                    value = int(
-                        input(
-                            "Context: "
-                        )
-                    )
+                if value >= 1024:
+                    config[
+                        "context_size"
+                    ] = value
 
-                    if value >= 1024:
-                        config[
-                            "context_size"
-                        ] = value
-
-                except ValueError:
-                    pass
+            except ValueError:
+                pass
 
         elif choice == "2":
+
             try:
+
                 config[
                     "gpu_layers"
                 ] = int(
@@ -1965,7 +3074,9 @@ def settings_menu(
                 pass
 
         elif choice == "3":
+
             try:
+
                 value = int(
                     input(
                         "Max steps: "
@@ -1981,14 +3092,38 @@ def settings_menu(
                 pass
 
         elif choice == "4":
+
             try:
+
+                value = int(
+                    input(
+                        "Max no-progress steps: "
+                    )
+                )
+
+                if value > 0:
+                    config[
+                        "max_no_progress_steps"
+                    ] = value
+
+            except ValueError:
+                pass
+
+        elif choice == "5":
+
+            try:
+
                 value = float(
                     input(
                         "Temperature: "
                     )
                 )
 
-                if 0 <= value <= 2:
+                if (
+                    0
+                    <= value
+                    <= 2
+                ):
                     config[
                         "temperature"
                     ] = value
@@ -1996,7 +3131,8 @@ def settings_menu(
             except ValueError:
                 pass
 
-        elif choice == "5":
+        elif choice == "6":
+
             print()
             print(
                 "0. Minimal"
@@ -2011,11 +3147,11 @@ def settings_menu(
             )
 
             print(
-                "3. Everything including prompts"
+                "3. Full prompts"
             )
 
             selected = input(
-                "\nDebug level: "
+                "Debug level: "
             ).strip()
 
             if selected in {
@@ -2024,13 +3160,34 @@ def settings_menu(
                 "2",
                 "3",
             }:
+
                 config[
                     "debug_level"
                 ] = int(
                     selected
                 )
 
-        elif choice == "6":
+        elif choice == "7":
+
+            try:
+
+                value = int(
+                    input(
+                        "Recent observations "
+                        "to retain: "
+                    )
+                )
+
+                if value >= 2:
+                    config[
+                        "recent_observations"
+                    ] = value
+
+            except ValueError:
+                pass
+
+        elif choice == "8":
+
             model_path = (
                 config.get(
                     "model_path",
@@ -2041,7 +3198,9 @@ def settings_menu(
             project_root = (
                 config.get(
                     "project_root",
-                    str(SCRIPT_DIR),
+                    str(
+                        SCRIPT_DIR
+                    ),
                 )
             )
 
@@ -2059,7 +3218,65 @@ def settings_menu(
                 "project_root"
             ] = project_root
 
-        save_config(config)
+        save_config(
+            config
+        )
+
+
+# ============================================================
+# SYSTEM INFO
+# ============================================================
+
+def system_information_menu(
+    config: dict[str, Any],
+) -> None:
+
+    clear_screen()
+
+    print_header(
+        "🔎 SYSTEM INFORMATION"
+    )
+
+    project = Path(
+        config[
+            "project_root"
+        ]
+    )
+
+    if project.exists():
+
+        profile = (
+            detect_project_profile(
+                project
+            )
+        )
+
+        print()
+        print(
+            profile_to_prompt(
+                profile
+            )
+        )
+
+    print()
+    print(
+        f"Application directory:\n"
+        f"{APP_DIR}"
+    )
+
+    print()
+    print(
+        f"Config file:\n"
+        f"{CONFIG_FILE}"
+    )
+
+    print()
+    print(
+        f"Memory directory:\n"
+        f"{MEMORY_ROOT}"
+    )
+
+    pause()
 
 
 # ============================================================
@@ -2069,11 +3286,13 @@ def settings_menu(
 def chat_menu(
     config: dict[str, Any],
 ) -> None:
+
     if not config.get(
         "model_path"
     ):
+
         print(
-            "\n⚠️ Select a model first."
+            "\n⚠️ No model selected."
         )
 
         pause()
@@ -2087,30 +3306,40 @@ def chat_menu(
         ):
             return
 
-    model_path = Path(
-        config["model_path"]
+    model_path = (
+        Path(
+            config[
+                "model_path"
+            ]
+        )
     )
 
-    project_path = Path(
-        config["project_root"]
+    project_path = (
+        Path(
+            config[
+                "project_root"
+            ]
+        )
     )
 
     if not model_path.exists():
+
         print(
-            "\n❌ Configured model "
-            "does not exist."
+            "\n❌ Model does not exist."
         )
 
         pause()
+
         return
 
     if not project_path.exists():
+
         print(
-            "\n❌ Configured project "
-            "does not exist."
+            "\n❌ Project does not exist."
         )
 
         pause()
+
         return
 
     clear_screen()
@@ -2140,35 +3369,51 @@ def chat_menu(
     )
 
     print()
-    print("Loading...")
+    print(
+        "Loading..."
+    )
 
     try:
-        agent = CodingAgent(
-            config
+
+        agent = (
+            CodingAgent(
+                config
+            )
         )
 
     except Exception as error:
+
         print(
             "\n❌ Model failed to load:"
         )
 
-        print(error)
+        print(
+            error
+        )
 
         pause()
+
         return
 
     print()
-    print("Commands:")
+    print(
+        "Commands:"
+    )
+
     print(
         "/back   Return to main menu"
     )
+
     print(
         "/help   Show commands"
     )
 
     while True:
+
         print()
-        print("-" * 70)
+        print(
+            "-" * 70
+        )
 
         task = input(
             "\n👤 > "
@@ -2190,6 +3435,7 @@ def chat_menu(
             return
 
         if normalized == "/help":
+
             print()
             print(
                 "/back - return to menu"
@@ -2206,72 +3452,28 @@ def chat_menu(
             "🚀 Sending to model..."
         )
 
-        result = agent.run(
-            task
-        )
-
-        print()
-        print("=" * 70)
-        print("🤖 RESPONSE")
-        print("=" * 70)
-        print(result)
-
-
-# ============================================================
-# SYSTEM INFO
-# ============================================================
-
-def system_information_menu(
-    config: dict[str, Any],
-) -> None:
-    clear_screen()
-
-    print_header(
-        "🔎 SYSTEM INFORMATION"
-    )
-
-    project = Path(
-        config[
-            "project_root"
-        ]
-    )
-
-    if project.exists():
-        print()
-        print(
-            json.dumps(
-                detect_project(
-                    project
-                ),
-                indent=2,
+        result = (
+            agent.run(
+                task
             )
         )
 
-    print()
-    print(
-        f"Script directory:\n"
-        f"{SCRIPT_DIR}"
-    )
+        print()
+        print(
+            "=" * 70
+        )
 
-    print()
-    print(
-        f"Application directory:\n"
-        f"{APP_DIR}"
-    )
+        print(
+            "🤖 RESPONSE"
+        )
 
-    print()
-    print(
-        f"Config:\n"
-        f"{CONFIG_FILE}"
-    )
+        print(
+            "=" * 70
+        )
 
-    print()
-    print(
-        f"Memory:\n"
-        f"{MEMORY_ROOT}"
-    )
-
-    pause()
+        print(
+            result
+        )
 
 
 # ============================================================
@@ -2281,6 +3483,7 @@ def system_information_menu(
 def show_status(
     config: dict[str, Any],
 ) -> None:
+
     model_path = (
         config.get(
             "model_path",
@@ -2289,11 +3492,15 @@ def show_status(
     )
 
     if model_path:
+
         model_name = (
-            Path(model_path).name
+            Path(
+                model_path
+            ).name
         )
 
     else:
+
         model_name = (
             "Not selected"
         )
@@ -2324,9 +3531,13 @@ def show_status(
 # ============================================================
 
 def main_menu() -> None:
-    config = load_config()
+
+    config = (
+        load_config()
+    )
 
     while True:
+
         clear_screen()
 
         print(
@@ -2341,24 +3552,31 @@ def main_menu() -> None:
             "╚══════════════════════════════════════╝"
         )
 
-        show_status(config)
+        show_status(
+            config
+        )
 
         print()
         print(
             "1. 💬 Chat / Coding Agent"
         )
+
         print(
             "2. ⚙️  Settings"
         )
+
         print(
             "3. 🤖 Model Selection"
         )
+
         print(
             "4. 📁 Project Selection"
         )
+
         print(
             "5. 🔎 System Information"
         )
+
         print(
             "0. 🚪 Exit"
         )
@@ -2368,29 +3586,42 @@ def main_menu() -> None:
         ).strip()
 
         if choice == "1":
-            chat_menu(config)
+
+            chat_menu(
+                config
+            )
 
         elif choice == "2":
-            settings_menu(config)
+
+            settings_menu(
+                config
+            )
 
         elif choice == "3":
+
             model_selection_menu(
                 config
             )
 
         elif choice == "4":
+
             project_selection_menu(
                 config
             )
 
         elif choice == "5":
+
             system_information_menu(
                 config
             )
 
         elif choice == "0":
+
             print()
-            print("👋 Goodbye.")
+            print(
+                "👋 Goodbye."
+            )
+
             break
 
 

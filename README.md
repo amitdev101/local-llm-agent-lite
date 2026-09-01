@@ -1,161 +1,137 @@
-# local-llm-agent-lite
+# 🤖 MyLLM
 
-A lightweight, private Windows coding agent optimized for Qwen Coder GGUF models
-running locally through `llama-cpp-python`, with a ChatGPT-style browser interface.
+**Version 0.1.4**
 
-## Phase 1 setup
+A fast, private coding agent optimized for running Qwen Coder GGUF models locally
+on Windows.
 
-Use 64-bit Python 3.12. If the existing `.venv` still references a missing Python
-installation, rename it before creating a replacement:
+- 🔒 Local and private
+- ⚡ Optimized for small Qwen Coder models
+- 🧰 Built-in file, search, edit, and verification tools
+- 🧠 Optional verified project memory
+- 📁 Restricted to the selected workspace
+- ↩️ Reversible file operations during the current run
+
+## 🚀 Install
+
+Use 64-bit Python 3.12:
 
 ```powershell
-Rename-Item .venv .venv-broken
 py -3.12 -m venv .venv
 .venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-The CPU wheel index required by `llama-cpp-python` is already declared in
-`requirements.txt`.
+## ⚡ Quickstart
 
-## Fast CLI quickstart (`myllm.py`)
-
-`myllm.py` is the lightweight terminal version of the coding agent. It uses a
-small, constrained JSON action format and focused file tools, which can make tool
-calling more reliable and responsive with small Qwen Coder models. Use the web
-application when you need multiple chats, background generation, cancellation,
-persistent chat history, or approval dialogs.
-
-For the quickest first run:
-
-1. Complete the **Phase 1 setup** above and activate `.venv`.
-2. Put a Qwen Coder `.gguf` model in the project-local `models` folder. A
-   `Q4_K_M` model in the 3B–4B range is a practical CPU starting point.
-3. Start the terminal agent:
+1. 📦 Place a Qwen Coder `.gguf` model in the `models` folder.
+2. ▶️ Start MyLLM:
 
    ```powershell
    python myllm.py
    ```
 
-4. Select **3. Model Selection** and choose the detected GGUF model.
-5. Select **4. Project Selection** and enter the directory the agent may access.
-6. Select **1. Chat / Coding Agent**, wait for the model to load, and enter a task.
+3. 🤖 Choose **Model Selection** and select the detected model.
+4. 📁 Choose **Project Selection** and select your workspace.
+5. 💬 Choose **Chat / Coding Agent** and enter a task.
 
-For example:
+The model remains loaded while the chat screen is open, making follow-up prompts
+faster.
+
+## 💡 Example prompts
 
 ```text
 Inspect this project and explain its entry point. Do not change any files.
 ```
 
-Or, to exercise its coding tools:
+```text
+Create hello.py, verify that it exists, and validate its Python syntax.
+```
 
 ```text
-Create hello.py that prints "Hello from my local LLM", verify the file, and validate the Python syntax.
+Find the cause of this error, fix it, and run the available project checks.
 ```
 
-Use `/back` to return to the main menu. The selected model, project and tuning
-values are saved in `.myllm/config.json`; verified project-memory records are
-kept below `.myllm/memory`.
-
-### Faster settings for a low-end CPU
-
-Open **2. Settings** before starting the chat. Begin with these values:
-
-- **Context size:** `4096` for faster, lower-memory work; use `8192` when the
-  task genuinely needs more history.
-- **GPU layers:** `0` for the standard CPU build. Intel Iris Xe acceleration
-  requires a separately installed compatible `llama-cpp-python` backend.
-- **Maximum steps:** `12` for everyday tasks. Raise it only for a task that
-  legitimately needs a longer tool sequence.
-- **Temperature:** `0.1` for predictable tool calls.
-- **Debug level:** `0` for a quieter terminal or `1` to see the raw model stream.
-
-The script automatically uses memory mapping and chooses CPU threads based on the
-machine. Model size and context length have a larger effect on responsiveness than
-debug output. The model is loaded once when entering the chat screen, so keep that
-screen open for follow-up tasks to avoid another load.
-
-> **Safety:** `myllm.py` restricts paths to the selected project, but its current
-> CLI tools do not show the web application's approval dialog before file deletion.
-> Select the project directory carefully, use version control, and phrase read-only
-> requests explicitly when no changes are wanted. Press `Ctrl+C` to interrupt the
-> process; unlike the web application, the CLI does not yet provide a per-run Stop
-> button.
-
-## Start the application
-
-Activate the environment, then start both the backend and frontend:
-
-```powershell
-python main.py
+```text
+Search for repeated error handling, explain the duplication, and suggest a simpler design.
 ```
 
-Open the local URL printed at startup if the browser is not already on that page.
-The default is [http://127.0.0.1:8000](http://127.0.0.1:8000); if that port is
-occupied, the application selects the next available port. The web interface provides
-chat, model load/unload controls, status, and a local performance benchmark.
+## ⌨️ Commands
 
-The interface includes streamed chat, recent sessions, the selected workspace tree,
-model and thinking-mode selectors, model metadata, and always-visible context/RAM
-status. New `.gguf` files placed in `models` are discovered automatically when the
-model selector is opened or a new chat starts. The selected model loads immediately
-in the background after the web app becomes available. A yellow model dot means
-unloaded/loading and a green dot means loaded. Turn off **Load model immediately** in Settings, or set
-`LOAD_MODEL_ON_STARTUP = False` in `config.py`, to use lazy first-chat loading.
+- `/help` — show available commands
+- `/back` — return to the main menu
+- `Ctrl+C` — interrupt MyLLM
 
-Multiple chats are stored independently and can be reopened from the sidebar. Because
-the local runtime processes one generation at a time, choosing **New chat** during an
-active response asks for confirmation before stopping it; cancelling the prompt leaves
-the current generation running.
+## 🏎️ Recommended low-end settings
 
-The agent can list and read files, search text, edit files atomically, and execute
-PowerShell commands. Reads inside the selected workspace are allowed automatically.
-File deletion, mutating shell commands, destructive Git commands, package/network
-operations, and access outside the workspace require an exact one-time approval in
-the UI. Use **Stop** or `Ctrl+C` to interrupt an active run. If a direct action request
-produces only explanatory prose or a tool-shaped code block, the agent normalizes
-Qwen's native, tagged, bare-JSON, or fenced-JSON format and retries invalid protocol
-responses up to `MAX_TOOL_PROTOCOL_RETRIES`. This safeguard can be changed with
-`RETRY_ACTION_WITHOUT_TOOL` in `config.py`.
+- 🧠 **Context:** `4096` for speed; `8192` for longer tasks
+- 🎮 **GPU layers:** `0` with the standard CPU build
+- 🔁 **Maximum steps:** `12` for everyday tasks
+- 🛑 **No-progress steps:** `3`–`6`
+- 🎯 **Temperature:** `0.1` for predictable tool calls
+- 🔍 **Debug:** `0` for quiet output; `1` for the raw model stream
+- 📦 **Model:** a 3B–4B `Q4_K_M` GGUF is a practical starting point
 
-Recent chats are stored locally in `data/chat_sessions.jsonl`, with exactly one JSON
-object—and therefore one line—per chat. Each object contains the chat ID, title,
-metadata, and complete message list. Chats can be renamed, pinned, unpinned, and
-deleted from the sidebar. Changes are saved with an atomic file replacement so the
-line count continues to match the number of stored chats.
+Model size and context length have the greatest effect on RAM usage and response
+speed.
 
-On the first launch after upgrading from the earlier event-based format, the app
-automatically consolidates the existing records. It keeps the original file at
-`data/chat_sessions.legacy-backup.jsonl` before writing the simpler format.
-Semantic memory is optional: place the configured Nomic embedding GGUF in `models` to
-enable LanceDB retrieval; ordinary chat continues to work when it is absent.
+## ✨ Features
 
-## Configuration
+- 🧭 Preserves requested languages and frameworks
+- 🔎 Detects Node, React, Next.js, Vite, Python, Maven, Gradle, Rust, and Go projects
+- ✅ Discovers available test, build, lint, and type-check commands
+- 🗂️ Tracks created, modified, and inspected files
+- 🚧 Tracks blockers and unavailable project capabilities
+- 🔄 Stops repeated actions with a no-progress circuit breaker
+- ✂️ Trims old observations while preserving working state
+- ↩️ Can undo file creation, modification, and deletion during the current run
+- 🧾 Saves project facts only when backed by successful tool evidence
+- 🧱 Blocks file access outside the selected workspace
 
-User-overridable defaults and their inline hints live in `config.py`. The first-run
-workspace is the project-local `workspace` folder. Each selected workspace keeps its
-own UI/runtime profile in `.llmAgentLite/settings.json`, so model, context, generation,
-and agent tuning follow that workspace. `data/user_settings.json` only remembers the
-last selected workspace. The default context is 8,192 tokens, history uses an automatic
-context-aware budget, and output is unlimited by default (`MAX_NEW_TOKENS = -1`). The
-agent instructions live separately in `system_prompt.py`.
+## 💾 Local data
 
-Operational events are written with Python's standard `logging` module to the rotating
-`logs/app.log` file. Logs record lifecycle, model, tool, workspace, and chat-management
-events without recording full prompt or response text.
+- ⚙️ Settings: `.myllm/config.json`
+- 🧠 Verified project memory: `.myllm/memory`
+- 🤖 Models: `models/*.gguf`
 
-Thinking choices appear only for models whose metadata/family supports them. Qwen3
-currently exposes **None** and **Thinking**; unsupported levels are not shown.
-The bundled default is `qwen2.5-coder-3b-instruct-q4_k_m.gguf`; its GGUF chat template
-is detected automatically and it runs in non-thinking mode.
+## 🛡️ Safety
 
-## API
+- 📁 Tools are restricted to the selected workspace
+- 🚪 Paths outside the workspace are blocked
+- 🗑️ File deletion inside the workspace does not yet ask for approval
+- ↩️ File changes can be undone only during the current run
+- 💾 Use version control for important projects
+- 👀 Clearly say **do not change files** when requesting a read-only review
 
-Interactive API documentation is available while the application runs:
+## ⚠️ Current limitations
 
-[http://127.0.0.1:8000/api/docs](http://127.0.0.1:8000/api/docs)
+- ✅ Command exit codes need stricter verification handling
+- 🕒 Verification is not yet tied to the latest edit revision
+- 🔁 Equivalent relative and absolute paths may evade duplicate detection
+- 🧩 Mixed-language task constraints may need manual clarification
+- ⏹️ There is no dedicated Stop button
 
-The benchmark reports process memory, inference latency, token counts, and generation
-speed. The implemented scope is described in `plans/plan.md`; deferred robustness and richer
-thinking controls remain in `plans/phase2.md`.
+## 🕵️ Journey — clues newest first
+
+- **0.1.4 · The Agent Found Its Map** — Project detection, hard task constraints,
+  working-state tracking, verified memory, undo, and a no-progress escape route
+  turned a simple loop into a project-aware investigator.
+- **`66ac99e` · The Notebook Appeared** — The once-empty guide finally revealed
+  how to summon the agent.
+- **`d0bfa35` · The Monolith Split in Two** — Simplicity won: reasoning stayed
+  with the agent while focused tools moved behind a cleaner boundary.
+- **`7a48927` · The Hidden Room Moved Home** — Configuration and memory began
+  following the script instead of the terminal's current directory.
+- **`61da581` · The First Voice** — A single script loaded a local model and began
+  acting inside a chosen project.
+- **`4b40790` · The Ingredients Arrived** — The local runtime dependencies entered
+  the scene.
+- **`7694b20` · The Empty Room** — One tiny README, one initial commit, and no clue
+  yet what the project would become.
+
+## 🏷️ Versioning
+
+- Current development series: `0.1.x`
+- Compatible updates increment the patch number: `0.1.4` → `0.1.5`
+- Breaking configuration or storage changes may increment the minor version
