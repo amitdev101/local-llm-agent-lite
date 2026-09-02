@@ -1,6 +1,6 @@
 # 🤖 MyLLM
 
-**Version 0.1.4**
+**Version 0.1.5**
 
 A fast, private coding agent optimized for running Qwen Coder GGUF models locally
 on Windows.
@@ -78,21 +78,32 @@ speed.
 
 ## ✨ Features
 
+- 🧠 Remembers the active project, file, goal, language, and technology across follow-ups
+- 🎯 Uses explicit file paths first instead of scanning unrelated projects
 - 🧭 Preserves requested languages and frameworks
 - 🔎 Detects Node, React, Next.js, Vite, Python, Maven, Gradle, Rust, and Go projects
+- 🗺️ Finds the relevant nested project root before running project commands
 - ✅ Discovers available test, build, lint, and type-check commands
-- 🗂️ Tracks created, modified, and inspected files
+- 📚 Creates several files in one tool call for faster project scaffolding
+- 📝 Supports both focused patches and safe full-file replacement
+- 📦 Stores large generated content as reusable payload references to keep prompts compact
+- 🗂️ Tracks created, modified, inspected, and active files
 - 🚧 Tracks blockers and unavailable project capabilities
+- 🧪 Detects small unfinished stubs and directs the model to implement them
+- 🧰 Validates tool names and arguments before execution
 - 🔄 Stops repeated actions with a no-progress circuit breaker
 - ✂️ Trims old observations while preserving working state
+- 🕒 Requires verification after the latest file mutation
 - ↩️ Can undo file creation, modification, and deletion during the current run
 - 🧾 Saves project facts only when backed by successful tool evidence
+- 🚫 Rejects fake binary files created through text tools
 - 🧱 Blocks file access outside the selected workspace
 
 ## 💾 Local data
 
 - ⚙️ Settings: `.myllm/config.json`
 - 🧠 Verified project memory: `.myllm/memory`
+- 📦 Temporary large-content payloads: `.myllm/payloads`
 - 🤖 Models: `models/*.gguf`
 
 ## 🛡️ Safety
@@ -106,14 +117,19 @@ speed.
 
 ## ⚠️ Current limitations
 
-- ✅ Command exit codes need stricter verification handling
-- 🕒 Verification is not yet tied to the latest edit revision
+- ✅ Failed command exit codes still need to propagate as failed tool results
+- 🎯 A successful check can validate the latest revision without proving it covered every changed file
+- 📚 An unexpected I/O error during multi-file creation may leave a partial batch
 - 🔁 Equivalent relative and absolute paths may evade duplicate detection
 - 🧩 Mixed-language task constraints may need manual clarification
+- 🧪 Stub detection may be too strict for intentionally small source files
 - ⏹️ There is no dedicated Stop button
 
 ## 🕵️ Journey — clues newest first
 
+- **0.1.5 · The Agent Remembered the Case** — Follow-ups retained their target,
+  large payloads stopped crowding the prompt, multi-file creation accelerated the
+  work, and every new edit reopened verification.
 - **0.1.4 · The Agent Found Its Map** — Project detection, hard task constraints,
   working-state tracking, verified memory, undo, and a no-progress escape route
   turned a simple loop into a project-aware investigator.
@@ -133,5 +149,5 @@ speed.
 ## 🏷️ Versioning
 
 - Current development series: `0.1.x`
-- Compatible updates increment the patch number: `0.1.4` → `0.1.5`
+- Compatible updates increment the patch number: `0.1.5` → `0.1.6`
 - Breaking configuration or storage changes may increment the minor version

@@ -1,7 +1,7 @@
 --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 
-# Core LLM runtime (prebuilt CPU wheel from the index above)
-llama-cpp-python
+# Core LLM runtime (prebuilt Windows CPU wheel from the index above)
+llama-cpp-python==0.3.35
 
 # API and configuration
 fastapi==0.115.14
@@ -15,5 +15,5 @@ python-dotenv==1.2.1
 httpx==0.28.1
 psutil>=7.0,<8
 
-# Phase 6: local embeddings and persistent vector storage
+# Local embeddings and persistent vector storage (imported lazily)
 lancedb==0.37.1

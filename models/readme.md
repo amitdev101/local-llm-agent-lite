@@ -1,0 +1,1 @@
+Place your .gguf model files here and it will be automatically detected on next run.

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
-import os
 import platform
 import re
-import sys
 import time
+
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -18,8 +18,25 @@ from llama_cpp import (
     LlamaRAMCache,
 )
 
+from myllm_constants import (
+    APP_DIR,
+    CONFIG_FILE,
+    DEFAULT_CONFIG,
+    KNOWN_FILE_EXTENSIONS,
+    MAX_IDENTICAL_ACTIONS,
+    MAX_MODEL_OUTPUT_TOKENS,
+    MAX_SESSION_MESSAGES,
+    MEMORY_ROOT,
+    PAYLOAD_ROOT,
+    SMALL_STUB_LINES,
+)
+
+from myllm_menu import (
+    main_menu,
+)
+
 from myllm_tools import (
-    ProjectProfile,
+    PayloadStore,
     Workspace,
     Tools,
     TOOL_DOCS,
@@ -31,78 +48,10 @@ from myllm_tools import (
     validate_tool_arguments,
 )
 
-
-# ============================================================
-# PATHS
-# ============================================================
-
-SCRIPT_DIR = (
-    Path(__file__)
-    .resolve()
-    .parent
-)
-
-APP_DIR = (
-    SCRIPT_DIR
-    / ".myllm"
-)
-
-CONFIG_FILE = (
-    APP_DIR
-    / "config.json"
-)
-
-MEMORY_ROOT = (
-    APP_DIR
-    / "memory"
-)
-
-
-# ============================================================
-# DEFAULTS
-# ============================================================
-
-DEFAULT_CONFIG = {
-    "model_path": "",
-    "project_root": str(
-        SCRIPT_DIR
-    ),
-
-    "context_size": 8192,
-
-    "gpu_layers": 0,
-
-    "max_steps": 20,
-
-    "max_no_progress_steps": 5,
-
-    "temperature": 0.0,
-
-    "debug_level": 1,
-
-    "recent_observations": 6,
-
-    # RAM prompt/state cache
-    "prompt_cache_enabled": True,
-
-    # 512 MB default
-    "prompt_cache_mb": 512,
-
-    # Trim dynamic agent history before it gets huge
-    "trim_context_ratio": 0.72,
-}
-
-
-MAX_IDENTICAL_ACTIONS = 2
-
-MAX_MODEL_OUTPUT_TOKENS = 700
-
-MAX_SESSION_MESSAGES = 12
-
-
 # ============================================================
 # CONFIG
 # ============================================================
+
 
 def ensure_app_directory() -> None:
 
@@ -112,6 +61,11 @@ def ensure_app_directory() -> None:
     )
 
     MEMORY_ROOT.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    PAYLOAD_ROOT.mkdir(
         parents=True,
         exist_ok=True,
     )
@@ -139,46 +93,33 @@ def load_config() -> dict[str, Any]:
 
     if not CONFIG_FILE.exists():
 
-        config = (
-            DEFAULT_CONFIG.copy()
-        )
+        config = DEFAULT_CONFIG.copy()
 
-        save_config(
-            config
-        )
+        save_config(config)
 
         return config
 
     try:
 
-        loaded = json.loads(
-            CONFIG_FILE.read_text(
-                encoding="utf-8"
-            )
-        )
+        loaded = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
 
     except Exception:
 
         loaded = {}
 
-    config = (
-        DEFAULT_CONFIG.copy()
-    )
+    config = DEFAULT_CONFIG.copy()
 
-    config.update(
-        loaded
-    )
+    config.update(loaded)
 
-    save_config(
-        config
-    )
+    save_config(config)
 
     return config
 
 
 # ============================================================
-# DATA
+# STATE
 # ============================================================
+
 
 @dataclass
 class Observation:
@@ -193,29 +134,19 @@ class Observation:
 
     success: bool
 
-    timestamp: float = field(
-        default_factory=time.time
-    )
+    timestamp: float = field(default_factory=time.time)
 
 
 @dataclass
 class TaskConstraints:
 
-    requested_languages: set[str] = field(
-        default_factory=set
-    )
+    requested_languages: set[str] = field(default_factory=set)
 
-    forbidden_languages: set[str] = field(
-        default_factory=set
-    )
+    forbidden_languages: set[str] = field(default_factory=set)
 
-    requested_technologies: set[str] = field(
-        default_factory=set
-    )
+    requested_technologies: set[str] = field(default_factory=set)
 
-    forbidden_technologies: set[str] = field(
-        default_factory=set
-    )
+    forbidden_technologies: set[str] = field(default_factory=set)
 
     browser_app: bool = False
 
@@ -225,13 +156,11 @@ class TaskConstraints:
 @dataclass
 class SessionContext:
 
-    recent_messages: list[
-        dict[str, str]
-    ] = field(
-        default_factory=list
-    )
+    recent_messages: list[dict[str, str]] = field(default_factory=list)
 
-    active_target: str = ""
+    active_root: str = ""
+
+    active_file: str = ""
 
     active_language: str = ""
 
@@ -239,13 +168,11 @@ class SessionContext:
 
     active_task_description: str = ""
 
-    touched_files: set[str] = field(
-        default_factory=set
-    )
+    touched_files: set[str] = field(default_factory=set)
 
-    last_constraints: TaskConstraints = field(
-        default_factory=TaskConstraints
-    )
+    payload_refs: set[str] = field(default_factory=set)
+
+    last_constraints: TaskConstraints = field(default_factory=TaskConstraints)
 
 
 @dataclass
@@ -255,43 +182,29 @@ class AgentState:
 
     step: int = 0
 
-    observations: list[Observation] = field(
-        default_factory=list
-    )
+    observations: list[Observation] = field(default_factory=list)
 
-    action_counts: dict[str, int] = field(
-        default_factory=dict
-    )
+    action_counts: dict[str, int] = field(default_factory=dict)
 
-    edited_files: set[str] = field(
-        default_factory=set
-    )
+    edited_files: set[str] = field(default_factory=set)
 
     edit_backups: list[
-        tuple[Path, str, bool]
-    ] = field(
-        default_factory=list
-    )
+        tuple[
+            Path,
+            str,
+            bool,
+        ]
+    ] = field(default_factory=list)
 
-    created_files: set[str] = field(
-        default_factory=set
-    )
+    created_files: set[str] = field(default_factory=set)
 
-    modified_files: set[str] = field(
-        default_factory=set
-    )
+    modified_files: set[str] = field(default_factory=set)
 
-    read_files: set[str] = field(
-        default_factory=set
-    )
+    read_files: set[str] = field(default_factory=set)
 
-    blockers: list[str] = field(
-        default_factory=list
-    )
+    blockers: list[str] = field(default_factory=list)
 
-    unavailable_capabilities: set[str] = field(
-        default_factory=set
-    )
+    unavailable_capabilities: set[str] = field(default_factory=set)
 
     no_progress_steps: int = 0
 
@@ -301,224 +214,104 @@ class AgentState:
 
     latest_result: str = ""
 
+    mutation_revision: int = 0
 
-# ============================================================
-# UI
-# ============================================================
+    verified_revision: int = -1
 
-def clear_screen() -> None:
+    implementation_required: bool = False
 
-    os.system(
-        "cls"
-        if os.name == "nt"
-        else "clear"
-    )
-
-
-def pause() -> None:
-
-    input(
-        "\nPress Enter to continue..."
-    )
-
-
-def print_header(
-    title: str,
-) -> None:
-
-    print()
-    print(
-        "=" * 70
-    )
-    print(
-        title
-    )
-    print(
-        "=" * 70
-    )
+    implementation_target: str = ""
 
 
 # ============================================================
-# ENVIRONMENT
+# TASK CONSTRAINTS
 # ============================================================
 
-def detect_environment(
-    root: Path,
-) -> dict[str, Any]:
-
-    return {
-        "os":
-            (
-                f"{platform.system()} "
-                f"{platform.release()}"
-            ),
-
-        "python":
-            sys.version.split()[0],
-
-        "workspace":
-            str(root),
-
-        "git_repository":
-            (
-                root
-                / ".git"
-            ).exists(),
-    }
-
-
-# ============================================================
-# CONSTRAINT DETECTION
-# ============================================================
 
 def detect_task_constraints(
     task: str,
 ) -> TaskConstraints:
 
-    text = (
-        task.lower()
-    )
+    text = task.lower()
 
-    result = (
-        TaskConstraints()
-    )
+    result = TaskConstraints()
 
-    # ========================================================
-    # LANGUAGE
-    # ========================================================
-
-    if (
-        "javascript"
-        in text
-        or re.search(
-            r"\bjs\b",
-            text,
-        )
+    if "javascript" in text or re.search(
+        r"\bjs\b",
+        text,
     ):
 
-        result.requested_languages.add(
-            "javascript"
-        )
+        result.requested_languages.add("javascript")
 
-    if (
-        "typescript"
-        in text
-        or re.search(
-            r"\bts\b",
-            text,
-        )
+    if "typescript" in text or re.search(
+        r"\bts\b",
+        text,
     ):
 
-        result.requested_languages.add(
-            "typescript"
-        )
+        result.requested_languages.add("typescript")
 
-    if (
-        "python"
-        in text
-    ):
+    if "python" in text:
 
-        result.requested_languages.add(
-            "python"
-        )
+        result.requested_languages.add("python")
 
     if (
         re.search(
             r"\bjava\b",
             text,
         )
-        and "javascript"
-        not in text
+        and "javascript" not in text
     ):
 
-        result.requested_languages.add(
-            "java"
-        )
+        result.requested_languages.add("java")
 
     if re.search(
         r"\brust\b",
         text,
     ):
 
-        result.requested_languages.add(
-            "rust"
-        )
+        result.requested_languages.add("rust")
 
-    if (
-        "golang"
-        in text
-        or "go project"
-        in text
-        or "go application"
-        in text
-    ):
+    if "golang" in text or "go project" in text or "go application" in text:
 
-        result.requested_languages.add(
-            "go"
-        )
-
-    # ========================================================
-    # TECHNOLOGY
-    # ========================================================
+        result.requested_languages.add("go")
 
     if "react" in text:
 
-        result.requested_technologies.add(
-            "react"
-        )
+        result.requested_technologies.add("react")
 
-        result.requested_languages.add(
-            "javascript"
-        )
+        result.requested_languages.add("javascript")
 
         result.browser_app = True
+
         result.frontend_required = True
 
-    if (
-        "next.js"
-        in text
-        or "nextjs"
-        in text
-    ):
+    if "next.js" in text or "nextjs" in text:
 
-        result.requested_technologies.add(
-            "next.js"
-        )
+        result.requested_technologies.add("next.js")
 
-        result.requested_languages.add(
-            "javascript"
-        )
+        result.requested_languages.add("javascript")
 
         result.browser_app = True
+
         result.frontend_required = True
 
     if "vite" in text:
 
-        result.requested_technologies.add(
-            "vite"
-        )
+        result.requested_technologies.add("vite")
 
         result.browser_app = True
+
         result.frontend_required = True
 
     if "pygame" in text:
 
-        result.requested_technologies.add(
-            "pygame"
-        )
+        result.requested_technologies.add("pygame")
 
-        result.requested_languages.add(
-            "python"
-        )
-
-    # ========================================================
-    # FRONTEND
-    # ========================================================
+        result.requested_languages.add("python")
 
     if any(
         phrase in text
-        for phrase
-        in [
+        for phrase in [
             "frontend",
             "front-end",
             "browser",
@@ -529,39 +322,30 @@ def detect_task_constraints(
     ):
 
         result.browser_app = True
-        result.frontend_required = True
 
-    # ========================================================
-    # NEGATIVE
-    # ========================================================
+        result.frontend_required = True
 
     if any(
         phrase in text
-        for phrase
-        in [
+        for phrase in [
             "no python",
             "not python",
             "without python",
         ]
     ):
 
-        result.forbidden_languages.add(
-            "python"
-        )
+        result.forbidden_languages.add("python")
 
     if any(
         phrase in text
-        for phrase
-        in [
+        for phrase in [
             "no pygame",
             "not pygame",
             "without pygame",
         ]
     ):
 
-        result.forbidden_technologies.add(
-            "pygame"
-        )
+        result.forbidden_technologies.add("pygame")
 
     return result
 
@@ -571,52 +355,29 @@ def inherit_constraints(
     previous: TaskConstraints,
 ) -> TaskConstraints:
 
-    # Only inherit positive constraints when the
-    # current message did not specify replacements.
+    if not (current.requested_languages):
 
-    if not (
-        current.requested_languages
-    ):
+        current.requested_languages = set(previous.requested_languages)
 
-        current.requested_languages = set(
-            previous.requested_languages
-        )
+    if not (current.requested_technologies):
 
-    if not (
-        current.requested_technologies
-    ):
+        current.requested_technologies = set(previous.requested_technologies)
 
-        current.requested_technologies = set(
-            previous.requested_technologies
-        )
+    if not (current.forbidden_languages):
 
-    if not (
-        current.forbidden_languages
-    ):
+        current.forbidden_languages = set(previous.forbidden_languages)
 
-        current.forbidden_languages = set(
-            previous.forbidden_languages
-        )
+    if not (current.forbidden_technologies):
 
-    if not (
-        current.forbidden_technologies
-    ):
-
-        current.forbidden_technologies = set(
-            previous.forbidden_technologies
-        )
+        current.forbidden_technologies = set(previous.forbidden_technologies)
 
     if not current.browser_app:
 
-        current.browser_app = (
-            previous.browser_app
-        )
+        current.browser_app = previous.browser_app
 
-    if not current.frontend_required:
+    if not (current.frontend_required):
 
-        current.frontend_required = (
-            previous.frontend_required
-        )
+        current.frontend_required = previous.frontend_required
 
     return current
 
@@ -630,111 +391,156 @@ def constraints_to_prompt(
         fallback: str,
     ) -> str:
 
-        return (
-            ", ".join(
-                sorted(
-                    values
-                )
-            )
-            or fallback
-        )
+        return ", ".join(sorted(values)) or fallback
 
     return (
         f"REQUIRED LANGUAGES: "
         f"{show(constraints.requested_languages, 'not specified')}\n"
-
         f"FORBIDDEN LANGUAGES: "
         f"{show(constraints.forbidden_languages, 'none')}\n"
-
         f"REQUIRED TECHNOLOGIES: "
         f"{show(constraints.requested_technologies, 'not specified')}\n"
-
         f"FORBIDDEN TECHNOLOGIES: "
         f"{show(constraints.forbidden_technologies, 'none')}\n"
-
         f"BROWSER APP REQUIRED: "
         f"{constraints.browser_app}\n"
-
         f"FRONTEND REQUIRED: "
         f"{constraints.frontend_required}"
     )
 
 
 # ============================================================
-# CONTROLLER CONSTRAINT CHECK
+# FOLLOW-UP DETECTION
 # ============================================================
+
+
+def is_short_followup(
+    task: str,
+) -> bool:
+
+    text = task.strip().lower()
+
+    exact = {
+        "continue",
+        "continue it",
+        "complete it",
+        "finish it",
+        "fix it",
+        "do it",
+        "yes",
+        "go ahead",
+        "proceed",
+        "keep going",
+    }
+
+    if text in exact:
+
+        return True
+
+    if len(text.split()) <= 8 and any(
+        phrase in text
+        for phrase in [
+            "complete it",
+            "finish it",
+            "continue",
+            "fix that",
+            "fix it",
+            "the game",
+            "that file",
+        ]
+    ):
+
+        return True
+
+    return False
+
+
+# ============================================================
+# EXPLICIT PATH DETECTION
+# ============================================================
+
+
+def extract_explicit_workspace_path(
+    task: str,
+    workspace: Workspace,
+) -> str | None:
+
+    extensions = "|".join(KNOWN_FILE_EXTENSIONS)
+
+    pattern = rf"([A-Za-z]:\\" rf'[^\r\n<>|?*"]+?' rf"\.(?:{extensions}))"
+
+    matches = re.findall(
+        pattern,
+        task,
+        flags=re.IGNORECASE,
+    )
+
+    for raw in matches:
+
+        raw = raw.strip().rstrip(".,;:")
+
+        try:
+
+            resolved = Path(raw).resolve()
+
+            relative = resolved.relative_to(workspace.root)
+
+            return str(relative)
+
+        except Exception:
+
+            continue
+
+    return None
+
+
+# ============================================================
+# HARD CONSTRAINT CHECK
+# ============================================================
+
 
 def validate_single_mutation(
     path: str,
     content: str,
     constraints: TaskConstraints,
-) -> tuple[bool, str]:
+) -> tuple[
+    bool,
+    str,
+]:
 
-    path_lower = (
-        path.lower()
-    )
+    path_lower = path.lower()
 
-    content_lower = (
-        content.lower()
-    )
+    content_lower = content.lower()
 
-    languages = (
-        constraints.requested_languages
-    )
+    languages = constraints.requested_languages
 
-    technologies = (
-        constraints.requested_technologies
-    )
+    technologies = constraints.requested_technologies
 
-    forbidden_languages = (
-        constraints.forbidden_languages
-    )
+    if "javascript" in languages or "typescript" in languages:
 
-    forbidden_technologies = (
-        constraints.forbidden_technologies
-    )
-
-    # JS / TS
-    if (
-        "javascript"
-        in languages
-        or "typescript"
-        in languages
-    ):
-
-        if path_lower.endswith(
-            ".py"
-        ):
+        if path_lower.endswith(".py"):
 
             return (
                 False,
                 (
                     "The active task requires "
                     "JavaScript/TypeScript. "
-                    "A Python implementation "
-                    "is not allowed."
+                    "Python is not allowed."
                 ),
             )
 
-        if (
-            "pygame"
-            in content_lower
-        ):
+        if "pygame" in content_lower:
 
             return (
                 False,
                 (
                     "The active task requires "
                     "JavaScript/TypeScript. "
-                    "Pygame is not compatible."
+                    "Pygame is not allowed."
                 ),
             )
 
-    # Java
-    if (
-        "java"
-        in languages
-    ):
+    if "java" in languages:
 
         if path_lower.endswith(
             (
@@ -752,81 +558,40 @@ def validate_single_mutation(
                 False,
                 (
                     "The active task requires Java. "
-                    "Do not replace it with another "
-                    "implementation language."
+                    "Do not substitute another language."
                 ),
             )
 
-    # Forbidden Python
-    if (
-        "python"
-        in forbidden_languages
-    ):
+    if "python" in constraints.forbidden_languages:
 
-        if (
-            path_lower.endswith(
-                ".py"
-            )
-            or "pygame"
-            in content_lower
-        ):
+        if path_lower.endswith(".py") or "pygame" in content_lower:
 
             return (
                 False,
                 "Python is explicitly forbidden.",
             )
 
-    # Browser app
     if (
         constraints.browser_app
-        and "python"
-        not in languages
-    ):
-
-        if path_lower.endswith(
-            ".py"
-        ):
-
-            return (
-                False,
-                (
-                    "The task requires a browser/frontend "
-                    "application. Do not replace it with "
-                    "a Python desktop application."
-                ),
-            )
-
-    if (
-        "react"
-        in technologies
-    ):
-
-        if (
-            path_lower.endswith(
-                ".py"
-            )
-            or "pygame"
-            in content_lower
-        ):
-
-            return (
-                False,
-                (
-                    "React is a hard requirement. "
-                    "Python/Pygame is not allowed."
-                ),
-            )
-
-    if (
-        "pygame"
-        in forbidden_technologies
-        and "pygame"
-        in content_lower
+        and "python" not in languages
+        and path_lower.endswith(".py")
     ):
 
         return (
             False,
-            "Pygame is explicitly forbidden.",
+            (
+                "The task requires a browser application, "
+                "not a Python desktop application."
+            ),
+        )
+
+    if "react" in technologies and (
+        path_lower.endswith(".py") or "pygame" in content_lower
+    ):
+
+        return (
+            False,
+            ("React is a hard requirement. " "Python/Pygame is not allowed."),
         )
 
     return (
@@ -839,88 +604,108 @@ def validate_tool_against_constraints(
     tool_name: str,
     args: dict[str, Any],
     constraints: TaskConstraints,
-) -> tuple[bool, str]:
+    payload_store: PayloadStore,
+) -> tuple[
+    bool,
+    str,
+]:
 
-    if (
-        tool_name
-        == "create_file"
-    ):
+    def get_text(
+        inline_key: str,
+        ref_key: str,
+        source: dict[str, Any],
+    ) -> str:
 
-        return (
-            validate_single_mutation(
-                str(
-                    args.get(
-                        "path",
-                        ""
-                    )
-                ),
-                str(
-                    args.get(
-                        "content",
-                        ""
-                    )
-                ),
-                constraints,
-            )
+        inline = source.get(inline_key)
+
+        if isinstance(
+            inline,
+            str,
+        ):
+
+            return inline
+
+        ref = source.get(ref_key)
+
+        if isinstance(
+            ref,
+            str,
+        ):
+
+            try:
+
+                return payload_store.load(ref)
+
+            except Exception:
+
+                return ""
+
+        return ""
+
+    if tool_name in {
+        "create_file",
+        "replace_file",
+    }:
+
+        return validate_single_mutation(
+            str(
+                args.get(
+                    "path",
+                    "",
+                )
+            ),
+            get_text(
+                "content",
+                "content_ref",
+                args,
+            ),
+            constraints,
         )
 
-    if (
-        tool_name
-        == "apply_patch"
-    ):
+    if tool_name == "apply_patch":
 
-        return (
-            validate_single_mutation(
-                str(
-                    args.get(
-                        "path",
-                        ""
-                    )
-                ),
-                str(
-                    args.get(
-                        "new_text",
-                        ""
-                    )
-                ),
-                constraints,
-            )
+        return validate_single_mutation(
+            str(
+                args.get(
+                    "path",
+                    "",
+                )
+            ),
+            get_text(
+                "new_text",
+                "new_text_ref",
+                args,
+            ),
+            constraints,
         )
 
-    if (
-        tool_name
-        == "create_files"
-    ):
+    if tool_name == "create_files":
 
-        files = (
+        for item in (
             args.get(
                 "files",
-                []
+                [],
             )
             or []
-        )
+        ):
 
-        for item in files:
-
-            allowed, reason = (
-                validate_single_mutation(
-                    str(
-                        item.get(
-                            "path",
-                            ""
-                        )
-                    ),
-                    str(
-                        item.get(
-                            "content",
-                            ""
-                        )
-                    ),
-                    constraints,
-                )
+            allowed, reason = validate_single_mutation(
+                str(
+                    item.get(
+                        "path",
+                        "",
+                    )
+                ),
+                get_text(
+                    "content",
+                    "content_ref",
+                    item,
+                ),
+                constraints,
             )
 
             if not allowed:
+
                 return (
                     False,
                     reason,
@@ -936,44 +721,28 @@ def validate_tool_against_constraints(
 # PROJECT MEMORY
 # ============================================================
 
+
 class ProjectMemory:
 
-    TABLE_NAME = (
-        "project_facts"
-    )
+    TABLE_NAME = "project_facts"
 
     def __init__(
         self,
         workspace: Workspace,
     ):
 
-        self.project_id = (
-            hashlib.sha256(
-                str(
-                    workspace.root
-                ).encode(
-                    "utf-8"
-                )
-            ).hexdigest()[:16]
-        )
+        self.project_id = hashlib.sha256(
+            str(workspace.root).encode("utf-8")
+        ).hexdigest()[:16]
 
-        memory_dir = (
-            MEMORY_ROOT
-            / self.project_id
-        )
+        memory_dir = MEMORY_ROOT / self.project_id
 
         memory_dir.mkdir(
             parents=True,
             exist_ok=True,
         )
 
-        self.db = (
-            lancedb.connect(
-                str(
-                    memory_dir
-                )
-            )
-        )
+        self.db = lancedb.connect(str(memory_dir))
 
     def _open(
         self,
@@ -981,13 +750,10 @@ class ProjectMemory:
 
         try:
 
-            return (
-                self.db.open_table(
-                    self.TABLE_NAME
-                )
-            )
+            return self.db.open_table(self.TABLE_NAME)
 
         except Exception:
+
             return None
 
     def add_fact(
@@ -998,112 +764,82 @@ class ProjectMemory:
     ) -> None:
 
         row = {
-            "project":
-                self.project_id,
-
-            "fact":
-                fact.strip(),
-
-            "evidence":
-                evidence.strip(),
-
-            "evidence_id":
-                evidence_id,
-
-            "created_at":
-                int(
-                    time.time()
-                ),
+            "project": self.project_id,
+            "fact": fact.strip(),
+            "evidence": evidence.strip(),
+            "evidence_id": evidence_id,
+            "created_at": int(time.time()),
         }
 
-        table = (
-            self._open()
-        )
+        table = self._open()
 
         if table is None:
 
             self.db.create_table(
                 self.TABLE_NAME,
-                data=[
-                    row
-                ],
+                data=[row],
             )
 
         else:
 
-            table.add(
-                [
-                    row
-                ]
-            )
+            table.add([row])
 
     def load_facts(
         self,
         limit: int = 30,
     ) -> list[dict[str, Any]]:
 
-        table = (
-            self._open()
-        )
+        table = self._open()
 
         if table is None:
+
             return []
 
         try:
 
             return (
                 table.search()
-                .where(
-                    f"project = "
-                    f"'{self.project_id}'"
-                )
-                .limit(
-                    limit
-                )
+                .where(f"project = " f"'{self.project_id}'")
+                .limit(limit)
                 .to_list()
             )
 
         except Exception:
+
             return []
 
 
 # ============================================================
-# ACTION FORMAT
+# ACTION SCHEMA
 # ============================================================
 
+TOOL_NAMES = sorted(TOOL_SCHEMAS.keys())
+
+
 ACTION_SCHEMA = {
-
-    "type":
-        "object",
-
+    "type": "object",
     "properties": {
-
         "type": {
-            "type":
-                "string",
-
+            "type": "string",
             "enum": [
                 "tool",
                 "final",
             ],
         },
-
         "tool": {
-            "type":
-                "string",
+            "type": "string",
+            "enum": [
+                "",
+                *TOOL_NAMES,
+            ],
         },
-
         "args": {
-            "type":
-                "object",
+            "type": "object",
         },
-
         "message": {
-            "type":
-                "string",
+            "type": "string",
         },
     },
-
     "required": [
         "type",
         "tool",
@@ -1114,85 +850,213 @@ ACTION_SCHEMA = {
 
 
 # ============================================================
-# STATIC SYSTEM PROMPT
+# SEMANTIC ACTION VALIDATION
+# ============================================================
+
+
+def validate_action_semantics(
+    action: dict[str, Any],
+) -> tuple[
+    bool,
+    str,
+]:
+
+    action_type = str(
+        action.get(
+            "type",
+            "",
+        )
+    )
+
+    tool_name = str(
+        action.get(
+            "tool",
+            "",
+        )
+    )
+
+    args = (
+        action.get(
+            "args",
+            {},
+        )
+        or {}
+    )
+
+    if not isinstance(
+        args,
+        dict,
+    ):
+
+        return (
+            False,
+            "args must be a JSON object.",
+        )
+
+    if action_type == "final":
+
+        if tool_name:
+
+            return (
+                False,
+                (
+                    "type='final' cannot contain a tool. "
+                    f"You supplied tool='{tool_name}'. "
+                    "If you intend to execute the tool, "
+                    "return type='tool'."
+                ),
+            )
+
+        if args:
+
+            return (
+                False,
+                (
+                    "type='final' must use args={}. "
+                    "Tool arguments are only valid "
+                    "with type='tool'."
+                ),
+            )
+
+        return (
+            True,
+            "",
+        )
+
+    if action_type == "tool":
+
+        if not tool_name:
+
+            return (
+                False,
+                ("type='tool' requires " "a non-empty tool name."),
+            )
+
+        return (
+            True,
+            "",
+        )
+
+    return (
+        False,
+        ("type must be either " "'tool' or 'final'."),
+    )
+
+
+# ============================================================
+# SYSTEM PROMPT
 # ============================================================
 
 SYSTEM_PROMPT = f"""
-You are a local software engineering agent.
+You are a local software engineering agent connected to REAL tools.
 
-You are connected to REAL tools executed by a Python controller.
+The Python controller executes your tool actions.
 
-Use tools only when filesystem/project work is required.
-For ordinary conversation, answer directly.
+For ordinary conversation, return type="final".
+For real file/project work, use tools.
 
-IMPORTANT:
-The user may give explicit language, framework, directory, or platform
-requirements. These are HARD constraints.
+ACTION FORMAT IS STRICT.
+
+A tool action MUST look like:
+
+{{
+  "type": "tool",
+  "tool": "read_file",
+  "args": {{"path": "src/file.java"}},
+  "message": "Reading the target file."
+}}
+
+A final answer MUST look like:
+
+{{
+  "type": "final",
+  "tool": "",
+  "args": {{}},
+  "message": "Final response."
+}}
+
+NEVER use type="final" when tool is non-empty.
+NEVER use type="tool" with an empty tool name.
+
+HARD CONSTRAINTS
+The user's requested language, framework, platform and target path are
+mandatory.
+
+SESSION CONTINUITY
+The controller gives ACTIVE ROOT, ACTIVE FILE and ACTIVE GOAL.
+
+When the user says:
+continue
+complete it
+finish it
+fix it
+the game
+that file
+
+use the active target instead of rediscovering the repository.
+
+TARGETED EDIT RULE
+When an explicit target file is known:
+1. Read it.
+2. If enough evidence exists, edit it immediately.
+3. Do not repeatedly search or reread it.
+
+FILE RULES
+
+create_file:
+new text file only.
+
+create_files:
+multiple new text files.
+
+replace_file:
+complete rewrite of an existing text file.
+Use it when a tiny stub must become a real implementation.
+
+apply_patch:
+small localized exact-text change.
+
+PAYLOAD REFERENCES
+Large generated text may be stored outside conversation history.
 
 Examples:
-- JavaScript must not silently become Python.
-- Java must not silently become JavaScript.
-- React must not become Pygame.
-- Browser frontend must not become a Python desktop application.
 
-The controller may block violations.
+content_ref="p-1e6fbcc7d3141a42"
+old_text_ref="p-..."
+new_text_ref="p-..."
 
-SESSION CONTINUITY:
-The controller may provide an ACTIVE TARGET and RECENT CONVERSATION.
+If a payload reference already exists, reuse it.
+Do not regenerate the same large source code simply to retry an action.
 
-If the user says:
-- "complete it"
-- "fix it"
-- "change that"
-- "the game"
-- "that file"
+BINARY RULE
+Text tools cannot create real .png/.jpg/.jar/.class files.
+Never write fake binary placeholder strings.
 
-use ACTIVE TARGET and RECENT CONVERSATION before searching the entire repo.
+For Java Swing/AWT applications, draw graphics programmatically unless
+the user explicitly asks for external image assets.
 
-Do not rediscover the whole repository if a specific active target is known.
+PROJECT CAPABILITIES
+Only use project commands reported by the controller.
 
-PROJECT CAPABILITIES:
-Only run a project build/test/lint/typecheck if the capability card says
-that command is available.
+Simple Java source projects can use run_project_build, which may call
+javac.
 
-Do not invent tool names.
-Do not invent pytest test names.
-Do not invent build commands.
+Do not invent tools.
+Do not invent tests.
+Do not invent commands.
 
-For simple Java source projects:
-run_project_build may use javac.
-
-For Python scripts with no tests:
-validate_python is appropriate.
-
-CREATE:
-create_file or create_files
-
-EDIT EXISTING:
-read_file, then apply_patch
-
-VERIFY DIRECTORY:
-verify_directory_exists
-
-VERIFY FILE:
-verify_file_exists or verify_files_exist
-
-Each model turn must choose exactly ONE tool action or return final.
-
-When multiple new files are needed, prefer create_files over several
-create_file calls.
-
-After modifications, prefer ONE strong verification rather than many
-redundant checks:
-1. project build
-2. project tests
-3. typecheck
-4. lint
+VERIFICATION
+After the latest mutation, prefer one strong verification:
+1. run_project_build
+2. run_project_tests
+3. run_project_typecheck
+4. run_project_lint
 5. narrow file verification
 
-Do not reveal private chain-of-thought.
+Take exactly ONE tool action per model inference.
 
-Keep the message field short.
+Do not reveal private chain-of-thought.
+Keep message short.
 
 TOOLS:
 
@@ -1204,6 +1068,7 @@ TOOLS:
 # AGENT
 # ============================================================
 
+
 class CodingAgent:
 
     def __init__(
@@ -1211,103 +1076,60 @@ class CodingAgent:
         config: dict[str, Any],
     ):
 
-        self.config = (
-            config
-        )
+        self.config = config
 
-        model_path = (
-            Path(
-                config[
-                    "model_path"
-                ]
-            ).resolve()
-        )
+        model_path = Path(config["model_path"]).resolve()
 
-        project_root = (
-            Path(
-                config[
-                    "project_root"
-                ]
-            ).resolve()
-        )
+        project_root = Path(config["project_root"]).resolve()
 
         if not model_path.exists():
 
-            raise ValueError(
-                "Configured model does not exist."
-            )
+            raise ValueError("Configured model does not exist.")
 
         if not project_root.exists():
 
-            raise ValueError(
-                "Configured workspace does not exist."
-            )
+            raise ValueError("Configured workspace does not exist.")
 
-        self.workspace = (
-            Workspace(
-                project_root
-            )
+        self.workspace = Workspace(project_root)
+
+        self.memory = ProjectMemory(self.workspace)
+
+        self.payload_store = PayloadStore(
+            PAYLOAD_ROOT,
+            max_files=int(
+                config.get(
+                    "payload_max_files",
+                    250,
+                )
+            ),
         )
 
-        self.memory = (
-            ProjectMemory(
-                self.workspace
-            )
-        )
+        self.payload_store.cleanup()
 
-        self.session = (
-            SessionContext()
-        )
+        self.session = SessionContext()
+
+        import os
 
         threads = max(
             1,
-            (
-                os.cpu_count()
-                or 4
-            )
-            - 2,
+            (os.cpu_count() or 4) - 2,
         )
 
         print()
-        print(
-            "🧠 Loading model..."
-        )
+
+        print("🧠 Loading model...")
 
         self.llm = Llama(
-            model_path=str(
-                model_path
-            ),
-
-            n_ctx=int(
-                config[
-                    "context_size"
-                ]
-            ),
-
-            n_gpu_layers=int(
-                config[
-                    "gpu_layers"
-                ]
-            ),
-
+            model_path=str(model_path),
+            n_ctx=int(config["context_size"]),
+            n_gpu_layers=int(config["gpu_layers"]),
             n_threads=threads,
-
             n_threads_batch=threads,
-
             use_mmap=True,
-
             verbose=False,
         )
 
-        self.n_ctx = int(
-            config[
-                "context_size"
-            ]
-        )
-
-        # ====================================================
-        # PROMPT / STATE CACHE
-        # ====================================================
+        self.n_ctx = int(config["context_size"])
 
         self.prompt_cache = None
 
@@ -1323,43 +1145,98 @@ class CodingAgent:
                 int(
                     config.get(
                         "prompt_cache_mb",
-                        512,
+                        1024,
                     )
                 ),
             )
 
             try:
 
-                self.prompt_cache = (
-                    LlamaRAMCache(
-                        capacity_bytes=(
-                            cache_mb
-                            * 1024
-                            * 1024
-                        )
-                    )
+                self.prompt_cache = LlamaRAMCache(
+                    capacity_bytes=(cache_mb * 1024 * 1024)
                 )
 
-                self.llm.set_cache(
-                    self.prompt_cache
-                )
+                self.llm.set_cache(self.prompt_cache)
 
-                print(
-                    f"⚡ Prompt cache enabled: "
-                    f"{cache_mb} MB"
-                )
+                print(f"⚡ Prompt cache enabled: " f"{cache_mb} MB")
 
             except Exception as error:
 
                 self.prompt_cache = None
 
-                print(
-                    "⚠️ Prompt cache could not "
-                    f"be enabled: {error}"
-                )
+                print("⚠️ Prompt cache could not " f"be enabled: {error}")
 
-        print(
-            "✅ Model loaded."
+        print(f"📦 Payload store: " f"{PAYLOAD_ROOT}")
+
+        print("✅ Model loaded.")
+
+    # ========================================================
+    # SESSION
+    # ========================================================
+
+    def reset_session(
+        self,
+    ) -> None:
+
+        self.session = SessionContext()
+
+    def append_session_message(
+        self,
+        role: str,
+        content: str,
+    ) -> None:
+
+        self.session.recent_messages.append(
+            {
+                "role": role,
+                "content": content,
+            }
+        )
+
+        if len(self.session.recent_messages) > MAX_SESSION_MESSAGES:
+
+            self.session.recent_messages = self.session.recent_messages[
+                -MAX_SESSION_MESSAGES:
+            ]
+
+    def session_card(
+        self,
+    ) -> str:
+
+        recent = []
+
+        for message in self.session.recent_messages[-6:]:
+
+            recent.append(f"{message['role'].upper()}: " f"{message['content']}")
+
+        touched = (
+            "\n".join(f"- {path}" for path in sorted(self.session.touched_files)[-10:])
+            or "(none)"
+        )
+
+        payloads = (
+            "\n".join(
+                f"- {payload}" for payload in sorted(self.session.payload_refs)[-10:]
+            )
+            or "(none)"
+        )
+
+        return (
+            f"ACTIVE ROOT: "
+            f"{self.session.active_root or '(none)'}\n"
+            f"ACTIVE FILE: "
+            f"{self.session.active_file or '(none)'}\n"
+            f"ACTIVE LANGUAGE: "
+            f"{self.session.active_language or '(none)'}\n"
+            f"ACTIVE TECHNOLOGY: "
+            f"{self.session.active_technology or '(none)'}\n"
+            f"ACTIVE GOAL: "
+            f"{self.session.active_task_description or '(none)'}\n\n"
+            f"TOUCHED FILES:\n"
+            f"{touched}\n\n"
+            f"AVAILABLE PAYLOAD REFS:\n"
+            f"{payloads}\n\n"
+            f"RECENT CONVERSATION:\n" + ("\n".join(recent) or "(none)")
         )
 
     # ========================================================
@@ -1384,33 +1261,24 @@ class CodingAgent:
         minimum_level: int = 1,
     ) -> None:
 
-        if (
-            self.debug_level()
-            < minimum_level
-        ):
+        if self.debug_level() < minimum_level:
+
             return
 
         print()
-        print(
-            "─" * 70
-        )
 
-        print(
-            f"🔎 {title}"
-        )
+        print("─" * 70)
 
-        print(
-            "─" * 70
-        )
+        print(f"🔎 {title}")
+
+        print("─" * 70)
 
         if isinstance(
             value,
             str,
         ):
 
-            print(
-                value
-            )
+            print(value)
 
         else:
 
@@ -1423,87 +1291,26 @@ class CodingAgent:
                 )
             )
 
-        print(
-            "─" * 70
-        )
-
-    def debug_messages(
-        self,
-        messages: list[
-            dict[str, str]
-        ],
-    ) -> None:
-
-        if (
-            self.debug_level()
-            < 3
-        ):
-            return
-
-        print()
-        print(
-            "=" * 70
-        )
-
-        print(
-            "📨 FULL MODEL INPUT"
-        )
-
-        print(
-            "=" * 70
-        )
-
-        for (
-            index,
-            message,
-        ) in enumerate(
-            messages,
-            start=1,
-        ):
-
-            print()
-            print(
-                f"[{index}] "
-                f"{message['role'].upper()}"
-            )
-
-            print(
-                "-" * 70
-            )
-
-            print(
-                message[
-                    "content"
-                ]
-            )
+        print("─" * 70)
 
     # ========================================================
-    # TOKEN COUNT
+    # TOKENS
     # ========================================================
 
     def token_count(
         self,
-        messages: list[
-            dict[str, str]
-        ],
+        messages: list[dict[str, str]],
     ) -> int:
 
         text = "\n".join(
-            (
-                f"{message['role']}:\n"
-                f"{message['content']}"
-            )
-            for message
-            in messages
+            (f"{message['role']}:\n" f"{message['content']}") for message in messages
         )
 
         try:
 
             return len(
                 self.llm.tokenize(
-                    text.encode(
-                        "utf-8"
-                    ),
+                    text.encode("utf-8"),
                     add_bos=False,
                 )
             )
@@ -1512,112 +1319,78 @@ class CodingAgent:
 
             return max(
                 1,
-                len(
-                    text
-                )
-                // 4,
+                len(text) // 4,
             )
 
     # ========================================================
-    # MODEL CALL
+    # MODEL
     # ========================================================
 
     def call_model(
         self,
-        messages: list[
-            dict[str, str]
-        ],
+        messages: list[dict[str, str]],
     ) -> dict[str, Any]:
 
-        self.debug_messages(
-            messages
-        )
+        if self.debug_level() >= 3:
 
-        stream = (
-            self.llm.create_chat_completion(
-                messages=messages,
-
-                response_format={
-                    "type":
-                        "json_object",
-
-                    "schema":
-                        ACTION_SCHEMA,
-                },
-
-                temperature=float(
-                    self.config[
-                        "temperature"
-                    ]
-                ),
-
-                top_p=0.9,
-
-                max_tokens=(
-                    MAX_MODEL_OUTPUT_TOKENS
-                ),
-
-                stream=True,
+            self.debug_print(
+                "FULL MODEL INPUT",
+                messages,
+                minimum_level=3,
             )
+
+        stream = self.llm.create_chat_completion(
+            messages=messages,
+            response_format={
+                "type": "json_object",
+                "schema": ACTION_SCHEMA,
+            },
+            temperature=float(self.config["temperature"]),
+            top_p=0.9,
+            max_tokens=(MAX_MODEL_OUTPUT_TOKENS),
+            stream=True,
         )
 
         full_content = ""
 
-        if (
-            self.debug_level()
-            >= 1
-        ):
+        if self.debug_level() >= 1:
 
             print()
-            print(
-                "─" * 70
-            )
 
-            print(
-                "🧠 RAW LLM STREAM"
-            )
+            print("─" * 70)
 
-            print(
-                "─" * 70
-            )
+            print("🧠 RAW LLM STREAM")
+
+            print("─" * 70)
 
         for chunk in stream:
 
-            choices = (
-                chunk.get(
-                    "choices",
-                    [],
-                )
+            choices = chunk.get(
+                "choices",
+                [],
             )
 
             if not choices:
+
                 continue
 
-            delta = (
-                choices[0].get(
-                    "delta",
-                    {},
-                )
+            delta = choices[0].get(
+                "delta",
+                {},
             )
 
-            text = (
-                delta.get(
-                    "content",
-                    "",
-                )
+            text = delta.get(
+                "content",
+                "",
             )
 
             if not text:
+
                 continue
 
-            full_content += (
-                text
-            )
+            full_content += text
 
-            if (
-                self.debug_level()
-                >= 1
-            ):
+            if self.debug_level() >= 1:
 
                 print(
                     text,
@@ -1625,88 +1398,228 @@ class CodingAgent:
                     flush=True,
                 )
 
-        if (
-            self.debug_level()
-            >= 1
-        ):
+        if self.debug_level() >= 1:
 
             print()
-            print(
-                "─" * 70
-            )
+
+            print("─" * 70)
 
         try:
 
-            parsed = (
-                json.loads(
-                    full_content
-                )
-            )
+            return json.loads(full_content)
 
         except json.JSONDecodeError as error:
 
-            self.debug_print(
-                "JSON PARSE ERROR",
-                {
-                    "error":
-                        str(
-                            error
-                        ),
-
-                    "raw":
-                        full_content,
-                },
-                minimum_level=1,
-            )
-
             return {
-                "type":
-                    "invalid",
-
-                "tool":
-                    "",
-
-                "args":
-                    {},
-
-                "message":
-                    full_content,
+                "type": "invalid",
+                "tool": "",
+                "args": {},
+                "message": ("Invalid JSON returned by model: " f"{error}"),
             }
 
-        self.debug_print(
-            "PARSED MODEL ACTION",
-            parsed,
-            minimum_level=2,
+    # ========================================================
+    # PAYLOAD EXTERNALIZATION
+    # ========================================================
+
+    def payload_threshold(
+        self,
+    ) -> int:
+
+        return max(
+            200,
+            int(
+                self.config.get(
+                    "payload_externalize_chars",
+                    700,
+                )
+            ),
         )
 
-        return parsed
+    def _externalize_string_field(
+        self,
+        args: dict[str, Any],
+        inline_key: str,
+        ref_key: str,
+    ) -> tuple[
+        str | None,
+        int,
+    ]:
+
+        value = args.get(inline_key)
+
+        if not isinstance(
+            value,
+            str,
+        ):
+
+            existing_ref = args.get(ref_key)
+
+            if isinstance(
+                existing_ref,
+                str,
+            ):
+
+                self.session.payload_refs.add(existing_ref)
+
+            return (
+                None,
+                0,
+            )
+
+        if len(value) < self.payload_threshold():
+
+            return (
+                None,
+                len(value),
+            )
+
+        payload_id = self.payload_store.save(value)
+
+        self.session.payload_refs.add(payload_id)
+
+        args.pop(
+            inline_key,
+            None,
+        )
+
+        args[ref_key] = payload_id
+
+        return (
+            payload_id,
+            len(value),
+        )
+
+    def externalize_action_for_history(
+        self,
+        action: dict[str, Any],
+    ) -> tuple[
+        dict[str, Any],
+        list[str],
+    ]:
+
+        compact = copy.deepcopy(action)
+
+        args = compact.get("args")
+
+        if not isinstance(
+            args,
+            dict,
+        ):
+
+            return (
+                compact,
+                [],
+            )
+
+        tool_name = str(
+            compact.get(
+                "tool",
+                "",
+            )
+        )
+
+        notes = []
+
+        if tool_name in {
+            "create_file",
+            "replace_file",
+        }:
+
+            payload_id, chars = self._externalize_string_field(
+                args,
+                "content",
+                "content_ref",
+            )
+
+            if payload_id:
+
+                notes.append(
+                    f"content stored as " f"{payload_id} " f"({chars:,} chars)"
+                )
+
+        elif tool_name == "apply_patch":
+
+            old_ref, old_chars = self._externalize_string_field(
+                args,
+                "old_text",
+                "old_text_ref",
+            )
+
+            new_ref, new_chars = self._externalize_string_field(
+                args,
+                "new_text",
+                "new_text_ref",
+            )
+
+            if old_ref:
+
+                notes.append(
+                    f"old_text stored as " f"{old_ref} " f"({old_chars:,} chars)"
+                )
+
+            if new_ref:
+
+                notes.append(
+                    f"new_text stored as " f"{new_ref} " f"({new_chars:,} chars)"
+                )
+
+        elif tool_name == "create_files":
+
+            files = args.get("files")
+
+            if isinstance(
+                files,
+                list,
+            ):
+
+                for item in files:
+
+                    if not isinstance(
+                        item,
+                        dict,
+                    ):
+
+                        continue
+
+                    payload_id, chars = self._externalize_string_field(
+                        item,
+                        "content",
+                        "content_ref",
+                    )
+
+                    if payload_id:
+
+                        notes.append(
+                            f"{item.get('path', 'file')} "
+                            f"stored as "
+                            f"{payload_id} "
+                            f"({chars:,} chars)"
+                        )
+
+        return (
+            compact,
+            notes,
+        )
 
     # ========================================================
-    # MEMORY CARD
+    # MEMORY
     # ========================================================
 
     def memory_card(
         self,
     ) -> str:
 
-        facts = (
-            self.memory.load_facts(
-                limit=20
-            )
-        )
+        facts = self.memory.load_facts(limit=20)
 
         if not facts:
 
-            return (
-                "(none)"
-            )
+            return "(none)"
 
         lines = []
+
         seen = set()
 
-        for row in reversed(
-            facts
-        ):
+        for row in reversed(facts):
 
             fact = str(
                 row.get(
@@ -1715,202 +1628,94 @@ class CodingAgent:
                 )
             ).strip()
 
-            if (
-                not fact
-                or fact
-                in seen
-            ):
+            if not fact or fact in seen:
+
                 continue
 
-            seen.add(
-                fact
-            )
+            seen.add(fact)
 
-            lines.append(
-                f"- {fact}"
-            )
+            lines.append(f"- {fact}")
 
-        return (
-            "\n".join(
-                lines[:15]
-            )
-        )
-
-    # ========================================================
-    # SESSION CARD
-    # ========================================================
-
-    def session_card(
-        self,
-    ) -> str:
-
-        recent = []
-
-        for message in (
-            self.session.recent_messages[
-                -6:
-            ]
-        ):
-
-            recent.append(
-                f"{message['role'].upper()}: "
-                f"{message['content']}"
-            )
-
-        return (
-            f"ACTIVE TARGET: "
-            f"{self.session.active_target or '(none)'}\n"
-
-            f"ACTIVE LANGUAGE: "
-            f"{self.session.active_language or '(none)'}\n"
-
-            f"ACTIVE TECHNOLOGY: "
-            f"{self.session.active_technology or '(none)'}\n"
-
-            f"ACTIVE TASK: "
-            f"{self.session.active_task_description or '(none)'}\n"
-
-            f"RECENT TOUCHED FILES:\n"
-            + (
-                "\n".join(
-                    f"- {path}"
-                    for path
-                    in sorted(
-                        self.session.touched_files
-                    )[-10:]
-                )
-                or "(none)"
-            )
-            + "\n\nRECENT CONVERSATION:\n"
-            + (
-                "\n".join(
-                    recent
-                )
-                or "(none)"
-            )
-        )
-
-    # ========================================================
-    # WORKING STATE
-    # ========================================================
-
-    def state_card(
-        self,
-        state: AgentState,
-    ) -> str:
-
-        def format_items(
-            values,
-        ) -> str:
-
-            if not values:
-                return "(none)"
-
-            return "\n".join(
-                f"- {value}"
-                for value
-                in sorted(
-                    values
-                )
-            )
-
-        blockers = (
-            "\n".join(
-                f"- {item}"
-                for item
-                in state.blockers[
-                    -5:
-                ]
-            )
-            or "(none)"
-        )
-
-        return (
-            f"GOAL:\n"
-            f"{state.task}\n\n"
-
-            f"CREATED:\n"
-            f"{format_items(state.created_files)}\n\n"
-
-            f"MODIFIED:\n"
-            f"{format_items(state.modified_files)}\n\n"
-
-            f"READ:\n"
-            f"{format_items(state.read_files)}\n\n"
-
-            f"BLOCKERS:\n"
-            f"{blockers}\n\n"
-
-            f"LATEST RESULT:\n"
-            f"{state.latest_result or '(none)'}"
-        )
+        return "\n".join(lines[:15])
 
     # ========================================================
     # ACTIVE TARGET
     # ========================================================
 
-    def derive_active_root(
+    def apply_explicit_target(
         self,
-    ) -> Path:
+        task: str,
+    ) -> None:
 
-        target = (
-            self.session.active_target
+        target = extract_explicit_workspace_path(
+            task,
+            self.workspace,
         )
 
         if not target:
 
-            return (
-                self.workspace.root
-            )
+            return
+
+        self.session.active_file = target
+
+        parent = str(Path(target).parent)
+
+        if parent == ".":
+
+            parent = ""
+
+        self.session.active_root = parent
+
+        self.session.touched_files.add(target)
+
+    def derive_active_root(
+        self,
+    ) -> Path:
+
+        if self.session.active_root:
+
+            try:
+
+                candidate = self.workspace.resolve(self.session.active_root)
+
+                if candidate.exists():
+
+                    return candidate
+
+            except Exception:
+
+                pass
+
+        if self.session.active_file:
+
+            try:
+
+                return self.workspace.resolve(self.session.active_file).parent
+
+            except Exception:
+
+                pass
+
+        return self.workspace.root
+
+    def normalize_workspace_path(
+        self,
+        path: str,
+    ) -> str:
+
+        if not path:
+
+            return ""
 
         try:
 
-            resolved = (
-                self.workspace.resolve(
-                    target
-                )
-            )
+            return self.workspace.relative(self.workspace.resolve(path))
 
         except Exception:
 
-            return (
-                self.workspace.root
-            )
+            return path
 
-        if resolved.is_file():
-
-            return (
-                resolved.parent
-            )
-
-        if resolved.exists():
-
-            return (
-                resolved
-            )
-
-        # If target does not exist yet,
-        # use its parent when possible.
-
-        parent = (
-            resolved.parent
-        )
-
-        if parent.exists():
-
-            return (
-                parent
-            )
-
-        return (
-            self.workspace.root
-        )
-
-    # ========================================================
-    # DETECT TARGET FROM TOOL
-    # ========================================================
-
-    def update_session_target_from_tool(
+    def record_tool_targets(
         self,
         tool_name: str,
         args: dict[str, Any],
@@ -1918,118 +1723,248 @@ class CodingAgent:
     ) -> None:
 
         if not success:
+
             return
 
-        path = ""
-
         if tool_name in {
-            "create_directory",
-            "verify_directory_exists",
-        }:
-
-            path = str(
-                args.get(
-                    "path",
-                    ""
-                )
-            )
-
-            if path:
-
-                self.session.active_target = (
-                    path
-                )
-
-        elif tool_name in {
             "create_file",
+            "replace_file",
             "apply_patch",
             "read_file",
             "verify_file_exists",
         }:
 
-            path = str(
-                args.get(
-                    "path",
-                    ""
+            path = self.normalize_workspace_path(
+                str(
+                    args.get(
+                        "path",
+                        "",
+                    )
                 )
             )
 
             if path:
 
-                self.session.touched_files.add(
-                    path
-                )
+                self.session.touched_files.add(path)
 
-                parent = str(
-                    Path(
-                        path
-                    ).parent
-                )
+                if not self.session.active_file and tool_name in {
+                    "create_file",
+                    "replace_file",
+                    "apply_patch",
+                }:
 
-                if (
-                    parent
-                    and parent
-                    != "."
-                ):
+                    self.session.active_file = path
 
-                    self.session.active_target = (
-                        parent
-                    )
+                    parent = str(Path(path).parent)
 
-        elif (
-            tool_name
-            == "create_files"
-        ):
+                    if parent != ".":
 
-            files = (
+                        self.session.active_root = parent
+
+        elif tool_name == "create_files":
+
+            for item in (
                 args.get(
                     "files",
-                    []
+                    [],
                 )
                 or []
-            )
+            ):
 
-            parents = []
-
-            for item in files:
-
-                path = str(
-                    item.get(
-                        "path",
-                        ""
+                path = self.normalize_workspace_path(
+                    str(
+                        item.get(
+                            "path",
+                            "",
+                        )
                     )
                 )
 
-                if not path:
-                    continue
+                if path:
 
-                self.session.touched_files.add(
-                    path
-                )
-
-                parent = str(
-                    Path(
-                        path
-                    ).parent
-                )
-
-                if parent:
-                    parents.append(
-                        parent
-                    )
-
-            if parents:
-
-                common = os.path.commonpath(
-                    parents
-                )
-
-                self.session.active_target = (
-                    common
-                )
+                    self.session.touched_files.add(path)
 
     # ========================================================
-    # UPDATE STATE
+    # STATE
+    # ========================================================
+
+    def state_card(
+        self,
+        state: AgentState,
+    ) -> str:
+
+        def show(
+            values,
+        ) -> str:
+
+            if not values:
+
+                return "(none)"
+
+            return "\n".join(f"- {value}" for value in sorted(values))
+
+        blockers = (
+            "\n".join(f"- {blocker}" for blocker in state.blockers[-5:]) or "(none)"
+        )
+
+        return (
+            f"GOAL:\n"
+            f"{state.task}\n\n"
+            f"PRIMARY FILE:\n"
+            f"{self.session.active_file or '(none)'}\n\n"
+            f"PRIMARY ROOT:\n"
+            f"{self.session.active_root or '(none)'}\n\n"
+            f"CREATED:\n"
+            f"{show(state.created_files)}\n\n"
+            f"MODIFIED:\n"
+            f"{show(state.modified_files)}\n\n"
+            f"READ:\n"
+            f"{show(state.read_files)}\n\n"
+            f"BLOCKERS:\n"
+            f"{blockers}\n\n"
+            f"MUTATION REVISION: "
+            f"{state.mutation_revision}\n"
+            f"VERIFIED REVISION: "
+            f"{state.verified_revision}\n\n"
+            f"IMPLEMENTATION REQUIRED: "
+            f"{state.implementation_required}\n"
+            f"IMPLEMENTATION TARGET: "
+            f"{state.implementation_target or '(none)'}\n\n"
+            f"LATEST RESULT:\n"
+            f"{state.latest_result or '(none)'}"
+        )
+
+    # ========================================================
+    # IMPLEMENTATION PHASE
+    # ========================================================
+
+    def maybe_enter_implementation_phase(
+        self,
+        state: AgentState,
+        tool_name: str,
+        args: dict[str, Any],
+        success: bool,
+        output: str,
+    ) -> str:
+
+        if not success:
+
+            return ""
+
+        if tool_name != "read_file":
+
+            return ""
+
+        active_file = self.session.active_file
+
+        if not active_file:
+
+            return ""
+
+        requested = self.normalize_workspace_path(
+            str(
+                args.get(
+                    "path",
+                    "",
+                )
+            )
+        )
+
+        if requested.lower() != active_file.lower():
+
+            return ""
+
+        task_text = (state.task + " " + self.session.active_task_description).lower()
+
+        if not any(
+            word in task_text
+            for word in [
+                "complete",
+                "finish",
+                "implement",
+                "continue",
+                "build",
+                "make",
+                "fix",
+            ]
+        ):
+
+            return ""
+
+        match = re.search(
+            r"TOTAL_LINES:\s*(\d+)",
+            output,
+        )
+
+        if not match:
+
+            return ""
+
+        line_count = int(match.group(1))
+
+        if line_count > SMALL_STUB_LINES:
+
+            return ""
+
+        state.implementation_required = True
+
+        state.implementation_target = active_file
+
+        return (
+            "The active target is only "
+            f"{line_count} lines and appears "
+            "to be a stub. Implement it now. "
+            "Do not search, reread, or create "
+            "unrelated assets first. "
+            "Prefer replace_file for a full rewrite."
+        )
+
+    def implementation_phase_block(
+        self,
+        state: AgentState,
+        tool_name: str,
+        args: dict[str, Any],
+    ) -> str:
+
+        if not (state.implementation_required):
+
+            return ""
+
+        target = state.implementation_target
+
+        if tool_name not in {
+            "replace_file",
+            "apply_patch",
+        }:
+
+            return (
+                "The active target has already been "
+                "inspected and is an incomplete stub. "
+                f"Implement {target} now. "
+                "Do not search, reread, create directories, "
+                "or create unrelated assets first."
+            )
+
+        requested = self.normalize_workspace_path(
+            str(
+                args.get(
+                    "path",
+                    "",
+                )
+            )
+        )
+
+        if requested.lower() != target.lower():
+
+            return (
+                "Implementation is currently required on "
+                f"{target}. Edit that target."
+            )
+
+        return ""
+
+    # ========================================================
+    # STATE UPDATE
     # ========================================================
 
     def update_state(
@@ -2043,298 +1978,185 @@ class CodingAgent:
 
         progress = False
 
-        path = str(
-            args.get(
-                "path",
-                ""
+        path = self.normalize_workspace_path(
+            str(
+                args.get(
+                    "path",
+                    "",
+                )
             )
         )
 
         if success:
 
-            if (
-                tool_name
-                == "create_file"
-                and path
-            ):
+            if tool_name == "create_file" and path:
 
-                if (
-                    path
-                    not in state.created_files
-                ):
+                if path not in state.created_files:
+
                     progress = True
 
-                state.created_files.add(
-                    path
-                )
+                state.created_files.add(path)
 
-            elif (
-                tool_name
-                == "create_files"
-            ):
+            elif tool_name == "create_files":
 
                 for item in (
                     args.get(
                         "files",
-                        []
+                        [],
                     )
                     or []
                 ):
 
-                    item_path = str(
-                        item.get(
-                            "path",
-                            ""
+                    item_path = self.normalize_workspace_path(
+                        str(
+                            item.get(
+                                "path",
+                                "",
+                            )
                         )
                     )
 
                     if not item_path:
+
                         continue
 
-                    if (
-                        item_path
-                        not in state.created_files
-                    ):
+                    if item_path not in state.created_files:
+
                         progress = True
 
-                    state.created_files.add(
-                        item_path
-                    )
+                    state.created_files.add(item_path)
 
             elif (
                 tool_name
-                == "apply_patch"
+                in {
+                    "replace_file",
+                    "apply_patch",
+                }
                 and path
             ):
 
-                state.modified_files.add(
-                    path
-                )
+                state.modified_files.add(path)
 
                 progress = True
-
-            elif (
-                tool_name
-                == "read_file"
-                and path
-            ):
 
                 if (
-                    path
-                    not in state.read_files
+                    state.implementation_required
+                    and path.lower() == state.implementation_target.lower()
                 ):
+
+                    state.implementation_required = False
+
+            elif tool_name == "read_file" and path:
+
+                if path not in state.read_files:
+
                     progress = True
 
-                state.read_files.add(
-                    path
-                )
+                state.read_files.add(path)
 
-            elif (
-                tool_name.startswith(
-                    "verify_"
-                )
-                or tool_name in {
-                    "run_project_tests",
-                    "run_project_build",
-                    "run_project_lint",
-                    "run_project_typecheck",
-                    "validate_python",
-                    "check_python_import",
-                }
-            ):
+            elif tool_name == "create_directory":
 
                 progress = True
+
+            elif tool_name.startswith("verify_") or tool_name in {
+                "run_project_tests",
+                "run_project_build",
+                "run_project_lint",
+                "run_project_typecheck",
+                "validate_python",
+                "check_python_import",
+            }:
+
+                progress = True
+
+                state.verified_revision = state.mutation_revision
 
         else:
 
-            lowered = (
-                output.lower()
-            )
+            lowered = output.lower()
 
             new_blocker = None
 
-            if (
-                "no project test command"
-                in lowered
-            ):
+            if "no project test command" in lowered:
 
-                state.unavailable_capabilities.add(
-                    "tests"
-                )
+                state.unavailable_capabilities.add("tests")
 
-                new_blocker = (
-                    "Project tests unavailable."
-                )
+                new_blocker = "Project tests unavailable."
 
-            elif (
-                "no project build command"
-                in lowered
-            ):
+            elif "no project build command" in lowered:
 
-                state.unavailable_capabilities.add(
-                    "build"
-                )
+                state.unavailable_capabilities.add("build")
 
-                new_blocker = (
-                    "Project build unavailable."
-                )
+                new_blocker = "Project build unavailable."
 
-            elif (
-                "no project lint command"
-                in lowered
-            ):
+            elif "no project lint command" in lowered:
 
-                state.unavailable_capabilities.add(
-                    "lint"
-                )
+                state.unavailable_capabilities.add("lint")
 
-                new_blocker = (
-                    "Project lint unavailable."
-                )
+                new_blocker = "Project lint unavailable."
 
-            elif (
-                "no project typecheck command"
-                in lowered
-            ):
+            elif "no project typecheck command" in lowered:
 
-                state.unavailable_capabilities.add(
-                    "typecheck"
-                )
+                state.unavailable_capabilities.add("typecheck")
 
-                new_blocker = (
-                    "Project typecheck unavailable."
-                )
+                new_blocker = "Project typecheck unavailable."
 
-            if (
-                new_blocker
-                and new_blocker
-                not in state.blockers
-            ):
+            if new_blocker and new_blocker not in state.blockers:
 
-                state.blockers.append(
-                    new_blocker
-                )
+                state.blockers.append(new_blocker)
 
                 progress = True
 
-        state.latest_result = (
-            truncate_text(
-                output,
-                450,
-            )
+        state.latest_result = truncate_text(
+            output,
+            450,
         )
 
         return progress
 
     # ========================================================
-    # EXECUTE
+    # EXECUTION
     # ========================================================
 
     def execute_tool(
         self,
         tools: Tools,
-        name: str,
+        tool_name: str,
         args: dict[str, Any],
-    ) -> tuple[bool, str]:
+    ) -> tuple[
+        bool,
+        str,
+    ]:
 
-        valid, reason = (
-            validate_tool_arguments(
-                name,
-                args,
-            )
-        )
+        registry = build_tool_registry(tools)
 
-        if not valid:
-
-            return (
-                False,
-                (
-                    "CONTROLLER TOOL SCHEMA ERROR:\n"
-                    f"{reason}"
-                ),
-            )
-
-        registry = (
-            build_tool_registry(
-                tools
-            )
-        )
-
-        function = (
-            registry.get(
-                name
-            )
-        )
+        function = registry.get(tool_name)
 
         if function is None:
 
             return (
                 False,
-                (
-                    f"Unknown tool: {name}\n"
-                    "Do not invent tool names."
-                ),
+                f"Unknown tool: {tool_name}",
             )
-
-        self.debug_print(
-            "TOOL CALL",
-            {
-                "tool":
-                    name,
-
-                "args":
-                    args,
-            },
-            minimum_level=2,
-        )
 
         try:
 
-            result = (
-                function(
-                    **args
-                )
-            )
-
-            output = (
-                truncate_text(
-                    str(
-                        result
-                    )
-                )
-            )
-
-            self.debug_print(
-                "TOOL RESULT",
-                output,
-                minimum_level=2,
-            )
+            result = function(**args)
 
             return (
                 True,
-                output,
+                truncate_text(str(result)),
             )
 
         except Exception as error:
 
-            output = (
-                f"{type(error).__name__}: "
-                f"{error}"
-            )
-
-            self.debug_print(
-                "TOOL ERROR",
-                output,
-                minimum_level=2,
-            )
-
             return (
                 False,
-                output,
+                (f"{type(error).__name__}: " f"{error}"),
             )
 
     # ========================================================
-    # ERROR HINT
+    # HINTS / CAPABILITY
     # ========================================================
 
     def controller_hint(
@@ -2343,93 +2165,42 @@ class CodingAgent:
         output: str,
     ) -> str:
 
-        lowered = (
-            output.lower()
-        )
+        lowered = output.lower()
 
-        if (
-            tool_name
-            == "create_directory"
-            and "directory already exists"
-            in lowered
-        ):
+        if tool_name == "create_directory" and "directory already exists" in lowered:
+
+            return "The directory already exists. " "Do not recreate or verify it."
+
+        if tool_name == "create_file" and "already exists" in lowered:
 
             return (
-                "The directory already exists. "
-                "Do not recreate or verify it. "
-                "Continue with the requested child "
-                "directory or files."
+                "The file exists. Use replace_file "
+                "for a full rewrite or apply_patch."
             )
 
-        if (
-            tool_name
-            == "verify_file_exists"
-            and "not a file"
-            in lowered
-        ):
+        if tool_name == "apply_patch" and "old_text was not found" in lowered:
 
             return (
-                "This path is a directory. "
-                "Use verify_directory_exists only "
-                "if verification is actually needed."
+                "Use exact RAW_CONTENT or an existing "
+                "old_text_ref. If most of the file changes, "
+                "use replace_file."
             )
 
-        if (
-            tool_name
-            == "create_file"
-            and "already exists"
-            in lowered
-        ):
+        if "binary" in lowered:
 
             return (
-                "The file already exists. "
-                "Read it and use apply_patch."
+                "Do not create fake binary/image files. "
+                "Use programmatic graphics instead."
             )
 
-        if (
-            tool_name
-            == "apply_patch"
-            and (
-                "file does not exist"
-                in lowered
-                or
-                "old_text cannot be empty"
-                in lowered
-            )
-        ):
+        if "payload does not exist" in lowered:
 
             return (
-                "apply_patch only modifies an "
-                "existing file. Use create_file "
-                "for a new file."
-            )
-
-        if (
-            "tool schema error"
-            in lowered
-        ):
-
-            return (
-                "Use the exact documented tool "
-                "signature. Do not add arguments "
-                "that the tool does not accept."
-            )
-
-        if (
-            "unknown tool"
-            in lowered
-        ):
-
-            return (
-                "Choose one of the documented tools. "
-                "Do not invent a replacement tool name."
+                "The payload reference is unavailable. "
+                "Generate the required content again once."
             )
 
         return ""
-
-    # ========================================================
-    # CAPABILITY BLOCK
-    # ========================================================
 
     def capability_block(
         self,
@@ -2438,81 +2209,47 @@ class CodingAgent:
     ) -> str:
 
         mapping = {
-            "run_project_tests":
-                "tests",
-
-            "run_project_build":
-                "build",
-
-            "run_project_lint":
-                "lint",
-
-            "run_project_typecheck":
-                "typecheck",
+            "run_project_tests": "tests",
+            "run_project_build": "build",
+            "run_project_lint": "lint",
+            "run_project_typecheck": "typecheck",
         }
 
-        capability = (
-            mapping.get(
-                tool_name
-            )
-        )
+        capability = mapping.get(tool_name)
 
-        if (
-            capability
-            and capability
-            in state.unavailable_capabilities
-        ):
+        if capability and capability in state.unavailable_capabilities:
 
-            return (
-                f"{tool_name} is already confirmed "
-                "unavailable. Choose another "
-                "verification method."
-            )
+            return f"{tool_name} is already " "confirmed unavailable."
 
         return ""
 
     # ========================================================
-    # COMPLETION GATE
+    # COMPLETION
     # ========================================================
 
     def completion_allowed(
         self,
         state: AgentState,
-    ) -> tuple[bool, str]:
+    ) -> tuple[
+        bool,
+        str,
+    ]:
 
-        if not (
-            state.edited_files
-        ):
+        if state.implementation_required:
+
+            return (
+                False,
+                ("The active stub has not yet " "been implemented."),
+            )
+
+        if state.mutation_revision == 0:
 
             return (
                 True,
                 "",
             )
 
-        verification_tools = {
-            "verify_file_exists",
-            "verify_files_exist",
-            "verify_file_content",
-            "verify_line_count",
-            "run_project_tests",
-            "run_project_build",
-            "run_project_lint",
-            "run_project_typecheck",
-            "validate_python",
-            "check_python_import",
-        }
-
-        verified = any(
-            (
-                observation.success
-                and observation.tool
-                in verification_tools
-            )
-            for observation
-            in state.observations
-        )
-
-        if verified:
+        if state.verified_revision == state.mutation_revision:
 
             return (
                 True,
@@ -2521,27 +2258,19 @@ class CodingAgent:
 
         return (
             False,
-            (
-                "Files were created or modified "
-                "but no successful verification "
-                "has occurred."
-            ),
+            ("The latest mutation has not " "been verified yet."),
         )
 
     # ========================================================
-    # DETERMINISTIC TRIMMING
+    # TRIMMING
     # ========================================================
 
     def trim_messages(
         self,
-        messages: list[
-            dict[str, str]
-        ],
+        messages: list[dict[str, str]],
         state: AgentState,
         task_context: str,
-    ) -> list[
-        dict[str, str]
-    ]:
+    ) -> list[dict[str, str]]:
 
         ratio = float(
             self.config.get(
@@ -2550,21 +2279,11 @@ class CodingAgent:
             )
         )
 
-        if (
-            self.token_count(
-                messages
-            )
-            < int(
-                self.n_ctx
-                * ratio
-            )
-        ):
+        if self.token_count(messages) < int(self.n_ctx * ratio):
 
             return messages
 
-        print(
-            "🧹 Trimming old observations..."
-        )
+        print("🧹 Trimming old observations...")
 
         keep_count = int(
             self.config.get(
@@ -2573,73 +2292,23 @@ class CodingAgent:
             )
         )
 
-        dynamic_messages = (
-            messages[2:]
-        )
-
-        recent = (
-            dynamic_messages[
-                -(keep_count * 2):
-            ]
-        )
+        recent = messages[2:][-(keep_count * 2) :]
 
         return [
             {
-                "role":
-                    "system",
-
-                "content":
-                    SYSTEM_PROMPT,
+                "role": "system",
+                "content": SYSTEM_PROMPT,
             },
-
             {
-                "role":
-                    "user",
-
+                "role": "user",
                 "content": (
                     task_context
                     + "\n\nCURRENT WORKING STATE:\n"
-                    + self.state_card(
-                        state
-                    )
+                    + self.state_card(state)
                 ),
             },
-
             *recent,
         ]
-
-    # ========================================================
-    # SESSION STORAGE
-    # ========================================================
-
-    def append_session_message(
-        self,
-        role: str,
-        content: str,
-    ) -> None:
-
-        self.session.recent_messages.append(
-            {
-                "role":
-                    role,
-
-                "content":
-                    content,
-            }
-        )
-
-        if (
-            len(
-                self.session.recent_messages
-            )
-            > MAX_SESSION_MESSAGES
-        ):
-
-            self.session.recent_messages = (
-                self.session.recent_messages[
-                    -MAX_SESSION_MESSAGES:
-                ]
-            )
 
     # ========================================================
     # RUN
@@ -2650,186 +2319,113 @@ class CodingAgent:
         task: str,
     ) -> str:
 
-        state = (
-            AgentState(
-                task=task
-            )
+        state = AgentState(task=task)
+
+        self.apply_explicit_target(task)
+
+        constraints = detect_task_constraints(task)
+
+        constraints = inherit_constraints(
+            constraints,
+            self.session.last_constraints,
         )
 
-        # ====================================================
-        # CONSTRAINTS + INHERITANCE
-        # ====================================================
+        self.session.last_constraints = constraints
 
-        constraints = (
-            detect_task_constraints(
-                task
-            )
-        )
+        if constraints.requested_languages:
 
-        constraints = (
-            inherit_constraints(
-                constraints,
-                self.session.last_constraints,
-            )
-        )
+            self.session.active_language = sorted(constraints.requested_languages)[0]
 
-        self.session.last_constraints = (
-            constraints
-        )
+        if constraints.requested_technologies:
 
-        if (
-            constraints.requested_languages
-        ):
+            self.session.active_technology = sorted(constraints.requested_technologies)[
+                0
+            ]
 
-            self.session.active_language = (
-                sorted(
-                    constraints.requested_languages
-                )[0]
-            )
+        if not (is_short_followup(task)):
 
-        if (
-            constraints.requested_technologies
-        ):
+            self.session.active_task_description = task
 
-            self.session.active_technology = (
-                sorted(
-                    constraints.requested_technologies
-                )[0]
-            )
+        elif not (self.session.active_task_description):
 
-        self.session.active_task_description = (
-            task
-        )
+            self.session.active_task_description = task
 
         self.append_session_message(
             "user",
             task,
         )
 
-        # ====================================================
-        # ACTIVE ROOT
-        # ====================================================
+        active_root = self.derive_active_root()
 
-        active_root = (
-            self.derive_active_root()
+        profile = detect_project_profile(active_root)
+
+        tools = Tools(
+            workspace=self.workspace,
+            payload_store=self.payload_store,
+            memory=self.memory,
+            state=state,
+            profile=profile,
+            command_root=active_root,
         )
 
-        profile = (
-            detect_project_profile(
-                active_root
-            )
-        )
+        constraints_card = constraints_to_prompt(constraints)
 
-        tools = (
-            Tools(
-                workspace=self.workspace,
-                memory=self.memory,
-                state=state,
-                profile=profile,
-                command_root=active_root,
-            )
-        )
+        profile_card = profile_to_prompt(profile)
 
-        profile_card = (
-            profile_to_prompt(
-                profile
-            )
-        )
-
-        constraint_card = (
-            constraints_to_prompt(
-                constraints
-            )
-        )
-
-        memory_card = (
-            self.memory_card()
-        )
-
-        environment = (
-            detect_environment(
-                self.workspace.root
-            )
-        )
+        environment = {
+            "os": (f"{platform.system()} " f"{platform.release()}"),
+            "workspace": str(self.workspace.root),
+        }
 
         task_context = (
             f"CURRENT USER REQUEST:\n"
             f"{task}\n\n"
-
             f"SESSION CONTEXT:\n"
             f"{self.session_card()}\n\n"
-
             f"HARD TASK CONSTRAINTS:\n"
-            f"{constraint_card}\n\n"
-
+            f"{constraints_card}\n\n"
             f"ACTIVE PROJECT CAPABILITIES:\n"
             f"{profile_card}\n\n"
-
-            f"WORKSPACE ENVIRONMENT:\n"
+            f"ENVIRONMENT:\n"
             f"{json.dumps(environment, indent=2)}\n\n"
-
-            f"VERIFIED PROJECT MEMORY:\n"
-            f"{memory_card}\n\n"
-
-            "Use ACTIVE TARGET first when the user's "
-            "message refers to an existing thing such as "
-            "'it', 'that', 'the game', or 'the file'."
+            f"VERIFIED MEMORY:\n"
+            f"{self.memory_card()}\n\n"
+            "If ACTIVE FILE is known, use it before "
+            "searching the wider repository."
         )
 
         messages = [
             {
-                "role":
-                    "system",
-
-                "content":
-                    SYSTEM_PROMPT,
+                "role": "system",
+                "content": SYSTEM_PROMPT,
             },
-
             {
-                "role":
-                    "user",
-
-                "content":
-                    task_context,
+                "role": "user",
+                "content": task_context,
             },
         ]
 
-        max_steps = int(
-            self.config[
-                "max_steps"
-            ]
-        )
+        max_steps = int(self.config["max_steps"])
 
-        max_no_progress = int(
-            self.config[
-                "max_no_progress_steps"
-            ]
-        )
+        max_no_progress = int(self.config["max_no_progress_steps"])
 
         for step in range(
             1,
             max_steps + 1,
         ):
 
-            state.step = (
-                step
+            state.step = step
+
+            messages = self.trim_messages(
+                messages,
+                state,
+                task_context,
             )
 
-            messages = (
-                self.trim_messages(
-                    messages,
-                    state,
-                    task_context,
-                )
-            )
-
-            used = (
-                self.token_count(
-                    messages
-                )
-            )
+            used = self.token_count(messages)
 
             print()
+
             print(
                 f"🧠 Step "
                 f"{step}/{max_steps}"
@@ -2837,39 +2433,71 @@ class CodingAgent:
                 f"{used}/{self.n_ctx}"
             )
 
-            try:
+            action = self.call_model(messages)
 
-                action = (
-                    self.call_model(
-                        messages
+            # =================================================
+            # CRITICAL SEMANTIC ACTION VALIDATION
+            # =================================================
+
+            semantic_ok, semantic_reason = validate_action_semantics(action)
+
+            if not semantic_ok:
+
+                print()
+
+                print(f"🚫 ACTION FORMAT BLOCK: " f"{semantic_reason}")
+
+                state.no_progress_steps += 1
+
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            action,
+                            ensure_ascii=False,
+                        ),
+                    }
+                )
+
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": (
+                            "CONTROLLER ACTION FORMAT ERROR:\n"
+                            f"{semantic_reason}\n\n"
+                            "Correct the action and try again."
+                        ),
+                    }
+                )
+
+                if state.no_progress_steps >= max_no_progress:
+
+                    return (
+                        "🛑 Agent stopped because "
+                        "it repeatedly returned invalid "
+                        "action formats."
                     )
-                )
 
-            except Exception as error:
+                continue
 
-                return (
-                    "Model invocation failed: "
-                    f"{type(error).__name__}: "
-                    f"{error}"
-                )
-
-            action_type = (
+            action_type = str(
                 action.get(
-                    "type"
+                    "type",
+                    "",
                 )
             )
 
             tool_name = str(
                 action.get(
                     "tool",
-                    ""
+                    "",
                 )
             )
 
             args = (
                 action.get(
                     "args",
-                    {}
+                    {},
                 )
                 or {}
             )
@@ -2877,7 +2505,7 @@ class CodingAgent:
             model_message = str(
                 action.get(
                     "message",
-                    ""
+                    "",
                 )
             )
 
@@ -2885,16 +2513,9 @@ class CodingAgent:
             # FINAL
             # =================================================
 
-            if (
-                action_type
-                == "final"
-            ):
+            if action_type == "final":
 
-                allowed, reason = (
-                    self.completion_allowed(
-                        state
-                    )
-                )
+                allowed, reason = self.completion_allowed(state)
 
                 if allowed:
 
@@ -2903,271 +2524,180 @@ class CodingAgent:
                         model_message,
                     )
 
-                    for path in (
-                        state.edited_files
-                    ):
+                    return model_message
 
-                        self.session.touched_files.add(
-                            path
-                        )
+                print()
 
-                    return (
-                        model_message
-                    )
-
-                print(
-                    f"🚫 Completion rejected: "
-                    f"{reason}"
-                )
+                print(f"🚫 Completion rejected: " f"{reason}")
 
                 state.no_progress_steps += 1
 
                 messages.append(
                     {
-                        "role":
-                            "assistant",
-
-                        "content":
-                            json.dumps(
-                                action,
-                                ensure_ascii=False,
-                            ),
+                        "role": "assistant",
+                        "content": json.dumps(
+                            action,
+                            ensure_ascii=False,
+                        ),
                     }
                 )
 
                 messages.append(
                     {
-                        "role":
-                            "user",
-
-                        "content": (
-                            "CONTROLLER:\n"
-                            f"{reason}\n"
-                            "Perform one appropriate "
-                            "verification."
-                        ),
+                        "role": "user",
+                        "content": ("CONTROLLER:\n" f"{reason}"),
                     }
                 )
 
                 continue
 
             # =================================================
-            # INVALID ACTION TYPE
+            # TOOL ARGUMENT VALIDATION
             # =================================================
 
-            if (
-                action_type
-                != "tool"
-            ):
-
-                state.no_progress_steps += 1
-
-                messages.append(
-                    {
-                        "role":
-                            "user",
-
-                        "content": (
-                            "CONTROLLER ERROR:\n"
-                            "Return type='tool' or "
-                            "type='final'."
-                        ),
-                    }
-                )
-
-                continue
-
-            if not isinstance(
+            valid, reason = validate_tool_arguments(
+                tool_name,
                 args,
-                dict,
-            ):
-
-                state.no_progress_steps += 1
-
-                messages.append(
-                    {
-                        "role":
-                            "user",
-
-                        "content": (
-                            "CONTROLLER ERROR:\n"
-                            "args must be a JSON object."
-                        ),
-                    }
-                )
-
-                continue
-
-            # =================================================
-            # TOOL SCHEMA CHECK
-            # =================================================
-
-            valid, schema_reason = (
-                validate_tool_arguments(
-                    tool_name,
-                    args,
-                )
             )
 
             if not valid:
 
                 print()
-                print(
-                    f"🚫 TOOL SCHEMA BLOCK: "
-                    f"{schema_reason}"
-                )
+
+                print(f"🚫 TOOL SCHEMA BLOCK: " f"{reason}")
 
                 state.no_progress_steps += 1
 
                 messages.append(
                     {
-                        "role":
-                            "assistant",
-
-                        "content":
-                            json.dumps(
-                                action,
-                                ensure_ascii=False,
-                            ),
+                        "role": "assistant",
+                        "content": json.dumps(
+                            action,
+                            ensure_ascii=False,
+                        ),
                     }
                 )
 
                 messages.append(
                     {
-                        "role":
-                            "user",
-
-                        "content": (
-                            "CONTROLLER TOOL SCHEMA ERROR:\n"
-                            f"{schema_reason}\n\n"
-                            "Use an existing tool with "
-                            "its exact documented arguments."
-                        ),
+                        "role": "user",
+                        "content": ("CONTROLLER TOOL SCHEMA ERROR:\n" f"{reason}"),
                     }
                 )
 
                 continue
 
             # =================================================
-            # LANGUAGE / FRAMEWORK CONSTRAINTS
+            # IMPLEMENTATION PHASE
             # =================================================
 
-            allowed, reason = (
-                validate_tool_against_constraints(
-                    tool_name,
-                    args,
-                    constraints,
+            implementation_reason = self.implementation_phase_block(
+                state,
+                tool_name,
+                args,
+            )
+
+            if implementation_reason:
+
+                print()
+
+                print(f"🚫 IMPLEMENTATION BLOCK: " f"{implementation_reason}")
+
+                state.no_progress_steps += 1
+
+                messages.append(
+                    {
+                        "role": "assistant",
+                        "content": json.dumps(
+                            action,
+                            ensure_ascii=False,
+                        ),
+                    }
                 )
+
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": ("CONTROLLER:\n" f"{implementation_reason}"),
+                    }
+                )
+
+                continue
+
+            # =================================================
+            # HARD REQUIREMENTS
+            # =================================================
+
+            allowed, reason = validate_tool_against_constraints(
+                tool_name,
+                args,
+                constraints,
+                self.payload_store,
             )
 
             if not allowed:
 
                 print()
-                print(
-                    f"🚫 CONSTRAINT BLOCK: "
-                    f"{reason}"
-                )
+
+                print(f"🚫 CONSTRAINT BLOCK: " f"{reason}")
 
                 state.no_progress_steps += 1
 
                 messages.append(
                     {
-                        "role":
-                            "assistant",
-
-                        "content":
-                            json.dumps(
-                                action,
-                                ensure_ascii=False,
-                            ),
+                        "role": "assistant",
+                        "content": json.dumps(
+                            action,
+                            ensure_ascii=False,
+                        ),
                     }
                 )
 
                 messages.append(
                     {
-                        "role":
-                            "user",
-
-                        "content": (
-                            "CONTROLLER HARD-CONSTRAINT BLOCK:\n"
-                            f"{reason}\n"
-                            "Keep the requested language/"
-                            "technology."
-                        ),
+                        "role": "user",
+                        "content": ("CONTROLLER HARD-CONSTRAINT BLOCK:\n" f"{reason}"),
                     }
                 )
 
                 continue
 
             # =================================================
-            # CAPABILITY CHECK
+            # CAPABILITY
             # =================================================
 
-            capability_reason = (
-                self.capability_block(
-                    state,
-                    tool_name,
-                )
+            capability_reason = self.capability_block(
+                state,
+                tool_name,
             )
 
             if capability_reason:
 
-                print()
-                print(
-                    f"🚫 CAPABILITY BLOCK: "
-                    f"{capability_reason}"
-                )
-
                 state.no_progress_steps += 1
 
                 messages.append(
                     {
-                        "role":
-                            "assistant",
-
-                        "content":
-                            json.dumps(
-                                action,
-                                ensure_ascii=False,
-                            ),
-                    }
-                )
-
-                messages.append(
-                    {
-                        "role":
-                            "user",
-
-                        "content": (
-                            "CONTROLLER:\n"
-                            f"{capability_reason}"
-                        ),
+                        "role": "user",
+                        "content": ("CONTROLLER:\n" f"{capability_reason}"),
                     }
                 )
 
                 continue
 
             # =================================================
-            # IDENTICAL LOOP CHECK
+            # EXACT LOOP DETECTION
             # =================================================
 
-            fingerprint = (
-                hashlib.sha256(
-                    json.dumps(
-                        {
-                            "tool":
-                                tool_name,
-
-                            "args":
-                                args,
-                        },
-                        sort_keys=True,
-                        ensure_ascii=False,
-                    ).encode(
-                        "utf-8"
-                    )
-                ).hexdigest()
-            )
+            fingerprint = hashlib.sha256(
+                json.dumps(
+                    {
+                        "tool": tool_name,
+                        "args": args,
+                    },
+                    sort_keys=True,
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            ).hexdigest()
 
             count = (
                 state.action_counts.get(
@@ -3177,125 +2707,103 @@ class CodingAgent:
                 + 1
             )
 
-            state.action_counts[
-                fingerprint
-            ] = count
+            state.action_counts[fingerprint] = count
 
-            if (
-                count
-                > MAX_IDENTICAL_ACTIONS
-            ):
+            if count > MAX_IDENTICAL_ACTIONS:
 
                 warning = (
-                    "This exact tool call has already "
-                    "been attempted multiple times. "
-                    "Choose another approach."
+                    "This exact action has already " "been attempted multiple times."
                 )
 
-                print(
-                    f"🔁 {warning}"
-                )
+                print()
+
+                print(f"🔁 {warning}")
 
                 state.no_progress_steps += 1
 
                 messages.append(
                     {
-                        "role":
-                            "assistant",
-
-                        "content":
-                            json.dumps(
-                                action,
-                                ensure_ascii=False,
-                            ),
-                    }
-                )
-
-                messages.append(
-                    {
-                        "role":
-                            "user",
-
-                        "content": (
-                            "CONTROLLER:\n"
-                            f"{warning}"
-                        ),
+                        "role": "user",
+                        "content": ("CONTROLLER:\n" f"{warning}"),
                     }
                 )
 
                 continue
 
             # =================================================
-            # TOOL EXECUTION
+            # EXTERNALIZE LARGE PAYLOAD FOR HISTORY
+            # =================================================
+
+            (
+                compact_action,
+                payload_notes,
+            ) = self.externalize_action_for_history(action)
+
+            if payload_notes:
+
+                print()
+
+                print("📦 PAYLOAD EXTERNALIZATION")
+
+                for note in payload_notes:
+
+                    print(f"   {note}")
+
+            # =================================================
+            # EXECUTE ORIGINAL ACTION
             # =================================================
 
             print()
-            print(
-                f"🛠️ {tool_name}"
-            )
+
+            print(f"🛠️ {tool_name}")
 
             if model_message:
 
-                print(
-                    model_message
-                )
+                print(model_message)
 
-            (
-                success,
-                output,
-            ) = (
-                self.execute_tool(
-                    tools,
-                    tool_name,
-                    args,
-                )
+            success, output = self.execute_tool(
+                tools,
+                tool_name,
+                args,
             )
 
-            observation_id = (
-                f"obs-{step:03d}"
+            observation_id = f"obs-{step:03d}"
+
+            observation = Observation(
+                id=observation_id,
+                tool=tool_name,
+                args=(
+                    compact_action.get(
+                        "args",
+                        {},
+                    )
+                ),
+                text=output,
+                success=success,
             )
 
-            observation = (
-                Observation(
-                    id=observation_id,
-                    tool=tool_name,
-                    args=args,
-                    text=output,
-                    success=success,
-                )
-            )
+            state.observations.append(observation)
 
-            state.observations.append(
-                observation
-            )
-
-            if (
-                len(
-                    state.observations
-                )
-                > 100
-            ):
-
-                state.observations = (
-                    state.observations[
-                        -100:
-                    ]
-                )
-
-            progress = (
-                self.update_state(
-                    state,
-                    tool_name,
-                    args,
-                    success,
-                    output,
-                )
-            )
-
-            self.update_session_target_from_tool(
+            self.record_tool_targets(
                 tool_name,
                 args,
                 success,
+            )
+
+            progress = self.update_state(
+                state,
+                tool_name,
+                args,
+                success,
+                output,
+            )
+
+            phase_hint = self.maybe_enter_implementation_phase(
+                state,
+                tool_name,
+                args,
+                success,
+                output,
             )
 
             if progress:
@@ -3306,123 +2814,107 @@ class CodingAgent:
 
                 state.no_progress_steps += 1
 
-            icon = (
-                "📦"
-                if success
-                else "💥"
-            )
+            icon = "📦" if success else "💥"
 
-            print(
-                f"{icon} "
-                f"{truncate_text(output, 1500)}"
-            )
+            print(f"{icon} " f"{truncate_text(output, 1800)}")
+
+            # =================================================
+            # COMPACT ACTION GOES INTO MODEL HISTORY
+            # =================================================
 
             messages.append(
                 {
-                    "role":
-                        "assistant",
-
-                    "content":
-                        json.dumps(
-                            action,
-                            ensure_ascii=False,
-                        ),
+                    "role": "assistant",
+                    "content": json.dumps(
+                        compact_action,
+                        ensure_ascii=False,
+                    ),
                 }
             )
 
             observation_message = (
                 f"TOOL OBSERVATION "
                 f"{observation_id}\n"
-
                 f"success={success}\n"
-
                 f"tool={tool_name}\n\n"
-
                 f"{output}\n\n"
-
-                f"CURRENT ACTIVE TARGET:\n"
-                f"{self.session.active_target or '(none)'}\n\n"
-
-                f"CURRENT WORKING STATE:\n"
-                f"{self.state_card(state)}"
             )
+
+            if payload_notes:
+
+                observation_message += (
+                    "PAYLOADS:\n"
+                    + "\n".join(f"- {note}" for note in payload_notes)
+                    + "\n\n"
+                    "The real text is stored in the payload "
+                    "store. Reuse the shown *_ref instead of "
+                    "regenerating identical content.\n\n"
+                )
+
+            observation_message += "CURRENT WORKING STATE:\n" + self.state_card(state)
+
+            if phase_hint:
+
+                observation_message += "\n\nCONTROLLER GUIDANCE:\n" + phase_hint
+
+                print()
+
+                print(f"💡 {phase_hint}")
 
             if not success:
 
-                hint = (
-                    self.controller_hint(
-                        tool_name,
-                        output,
-                    )
+                hint = self.controller_hint(
+                    tool_name,
+                    output,
                 )
 
                 if hint:
 
-                    observation_message += (
-                        "\n\nCONTROLLER HINT:\n"
-                        + hint
-                    )
+                    observation_message += "\n\nCONTROLLER HINT:\n" + hint
 
                     print()
-                    print(
-                        f"💡 {hint}"
-                    )
+
+                    print(f"💡 {hint}")
 
             messages.append(
                 {
-                    "role":
-                        "user",
-
-                    "content":
-                        observation_message,
+                    "role": "user",
+                    "content": observation_message,
                 }
             )
 
             # =================================================
-            # RE-DETECT ACTIVE PROJECT WHEN TARGET CHANGES
+            # REFRESH ACTIVE PROJECT PROFILE
             # =================================================
 
-            new_active_root = (
-                self.derive_active_root()
-            )
+            new_active_root = self.derive_active_root()
 
-            if (
-                new_active_root.resolve()
-                != active_root.resolve()
-            ):
+            if new_active_root.resolve() != active_root.resolve():
 
-                active_root = (
-                    new_active_root
-                )
+                active_root = new_active_root
 
-                profile = (
-                    detect_project_profile(
-                        active_root
-                    )
-                )
+                profile = detect_project_profile(active_root)
 
-                tools.command_root = (
-                    active_root
-                )
+                tools.command_root = active_root
 
-                tools.profile = (
-                    profile
-                )
+                tools.profile = profile
 
-                profile_card = (
-                    profile_to_prompt(
-                        profile
-                    )
-                )
+            elif success and tool_name in {
+                "create_file",
+                "create_files",
+                "replace_file",
+                "apply_patch",
+            }:
+
+                profile = detect_project_profile(active_root)
+
+                tools.profile = profile
 
             # =================================================
-            # NO-PROGRESS BREAKER
+            # CIRCUIT BREAKER
             # =================================================
 
-            if (
-                state.no_progress_steps
-                >= max_no_progress
-            ):
+            if state.no_progress_steps >= max_no_progress:
 
                 result = (
                     "🛑 Agent stopped because "
@@ -3439,10 +2931,7 @@ class CodingAgent:
 
                 return result
 
-        result = (
-            "🛑 Maximum agent step limit "
-            f"({max_steps}) reached."
-        )
+        result = "🛑 Maximum agent step limit " f"({max_steps}) reached."
 
         self.append_session_message(
             "assistant",
@@ -3453,1186 +2942,29 @@ class CodingAgent:
 
 
 # ============================================================
-# MODEL DISCOVERY
+# FACTORY / ENTRY POINT
 # ============================================================
 
-def find_gguf_files(
-    start: Path,
-    max_results: int = 100,
-) -> list[Path]:
 
-    if not start.exists():
-
-        return []
-
-    found = []
-
-    try:
-
-        for path in (
-            start.rglob(
-                "*.gguf"
-            )
-        ):
-
-            if (
-                ".git"
-                in path.parts
-            ):
-
-                continue
-
-            found.append(
-                path.resolve()
-            )
-
-            if (
-                len(
-                    found
-                )
-                >= max_results
-            ):
-
-                break
-
-    except Exception:
-        pass
-
-    return found
-
-
-# ============================================================
-# MODEL MENU
-# ============================================================
-
-def model_selection_menu(
+def create_agent(
     config: dict[str, Any],
-) -> None:
+) -> CodingAgent:
 
-    clear_screen()
+    return CodingAgent(config)
 
-    print_header(
-        "🤖 MODEL SELECTION"
+
+def main() -> None:
+
+    config = load_config()
+
+    main_menu(
+        config=config,
+        save_config=save_config,
+        agent_factory=create_agent,
+        default_config=DEFAULT_CONFIG,
     )
 
-    search_locations = [
-        SCRIPT_DIR
-        / "models",
-
-        SCRIPT_DIR,
-
-        Path.cwd()
-        / "models",
-    ]
-
-    models = []
-    seen = set()
-
-    for location in (
-        search_locations
-    ):
-
-        for model in (
-            find_gguf_files(
-                location
-            )
-        ):
-
-            key = (
-                str(
-                    model
-                ).lower()
-            )
-
-            if key in seen:
-                continue
-
-            seen.add(
-                key
-            )
-
-            models.append(
-                model
-            )
-
-    if models:
-
-        print()
-        print(
-            "Detected GGUF models:\n"
-        )
-
-        for (
-            index,
-            model,
-        ) in enumerate(
-            models,
-            start=1,
-        ):
-
-            marker = ""
-
-            try:
-
-                configured = (
-                    Path(
-                        config[
-                            "model_path"
-                        ]
-                    ).resolve()
-                )
-
-                if (
-                    configured
-                    == model
-                ):
-
-                    marker = (
-                        " ✅ current"
-                    )
-
-            except Exception:
-                pass
-
-            try:
-
-                size = (
-                    model.stat().st_size
-                    / 1024**3
-                )
-
-                size_text = (
-                    f"{size:.2f} GB"
-                )
-
-            except Exception:
-
-                size_text = "?"
-
-            print(
-                f"{index}. "
-                f"{model.name} "
-                f"[{size_text}]"
-                f"{marker}"
-            )
-
-        manual_index = (
-            len(
-                models
-            )
-            + 1
-        )
-
-        print()
-        print(
-            f"{manual_index}. "
-            "Enter model path manually"
-        )
-
-        print(
-            "0. Back"
-        )
-
-        selected = (
-            input(
-                "\nSelect model: "
-            ).strip()
-        )
-
-        if (
-            selected
-            == "0"
-        ):
-
-            return
-
-        try:
-
-            number = int(
-                selected
-            )
-
-            if (
-                1
-                <= number
-                <= len(
-                    models
-                )
-            ):
-
-                config[
-                    "model_path"
-                ] = str(
-                    models[
-                        number - 1
-                    ]
-                )
-
-                save_config(
-                    config
-                )
-
-                print(
-                    "\n✅ Model selected."
-                )
-
-                pause()
-
-                return
-
-            if (
-                number
-                != manual_index
-            ):
-
-                return
-
-        except ValueError:
-            pass
-
-    entered = (
-        input(
-            "\nFull GGUF path: "
-        )
-        .strip()
-        .strip(
-            '"'
-        )
-    )
-
-    if not entered:
-
-        return
-
-    path = (
-        Path(
-            entered
-        )
-        .expanduser()
-        .resolve()
-    )
-
-    if (
-        not path.exists()
-        or path.suffix.lower()
-        != ".gguf"
-    ):
-
-        print(
-            "\n❌ Invalid GGUF file."
-        )
-
-        pause()
-
-        return
-
-    config[
-        "model_path"
-    ] = str(
-        path
-    )
-
-    save_config(
-        config
-    )
-
-    print(
-        "\n✅ Model selected."
-    )
-
-    pause()
-
-
-# ============================================================
-# PROJECT MENU
-# ============================================================
-
-def project_selection_menu(
-    config: dict[str, Any],
-) -> None:
-
-    clear_screen()
-
-    print_header(
-        "📁 PROJECT SELECTION"
-    )
-
-    print()
-    print(
-        f"Current:\n"
-        f"{config['project_root']}"
-    )
-
-    entered = (
-        input(
-            "\nNew project folder "
-            "(Enter to cancel): "
-        )
-        .strip()
-        .strip(
-            '"'
-        )
-    )
-
-    if not entered:
-
-        return
-
-    path = (
-        Path(
-            entered
-        )
-        .expanduser()
-        .resolve()
-    )
-
-    if (
-        not path.exists()
-        or not path.is_dir()
-    ):
-
-        print(
-            "\n❌ Invalid directory."
-        )
-
-        pause()
-
-        return
-
-    config[
-        "project_root"
-    ] = str(
-        path
-    )
-
-    save_config(
-        config
-    )
-
-    print(
-        "\n✅ Project selected."
-    )
-
-    pause()
-
-
-# ============================================================
-# SETTINGS
-# ============================================================
-
-def settings_menu(
-    config: dict[str, Any],
-) -> None:
-
-    while True:
-
-        clear_screen()
-
-        print_header(
-            "⚙️ SETTINGS"
-        )
-
-        print(
-            f"\n1. Context size"
-            f"             : "
-            f"{config['context_size']}"
-        )
-
-        print(
-            f"2. GPU layers"
-            f"               : "
-            f"{config['gpu_layers']}"
-        )
-
-        print(
-            f"3. Max agent steps"
-            f"          : "
-            f"{config['max_steps']}"
-        )
-
-        print(
-            f"4. Max no-progress steps"
-            f"    : "
-            f"{config['max_no_progress_steps']}"
-        )
-
-        print(
-            f"5. Temperature"
-            f"              : "
-            f"{config['temperature']}"
-        )
-
-        print(
-            f"6. Debug level"
-            f"              : "
-            f"{config['debug_level']}"
-        )
-
-        print(
-            f"7. Recent observations"
-            f"      : "
-            f"{config['recent_observations']}"
-        )
-
-        print(
-            f"8. Prompt cache enabled"
-            f"     : "
-            f"{config['prompt_cache_enabled']}"
-        )
-
-        print(
-            f"9. Prompt cache MB"
-            f"          : "
-            f"{config['prompt_cache_mb']}"
-        )
-
-        print(
-            f"10. Trim context ratio"
-            f"      : "
-            f"{config['trim_context_ratio']}"
-        )
-
-        print(
-            "11. Reset defaults"
-        )
-
-        print(
-            "0. Back"
-        )
-
-        choice = (
-            input(
-                "\nSelect option: "
-            ).strip()
-        )
-
-        if choice == "0":
-
-            save_config(
-                config
-            )
-
-            return
-
-        if choice == "1":
-
-            try:
-
-                value = int(
-                    input(
-                        "Context size: "
-                    )
-                )
-
-                if (
-                    value
-                    >= 1024
-                ):
-
-                    config[
-                        "context_size"
-                    ] = value
-
-            except ValueError:
-                pass
-
-        elif choice == "2":
-
-            try:
-
-                config[
-                    "gpu_layers"
-                ] = int(
-                    input(
-                        "GPU layers "
-                        "(0 CPU, -1 all): "
-                    )
-                )
-
-            except ValueError:
-                pass
-
-        elif choice == "3":
-
-            try:
-
-                value = int(
-                    input(
-                        "Max steps: "
-                    )
-                )
-
-                if value > 0:
-
-                    config[
-                        "max_steps"
-                    ] = value
-
-            except ValueError:
-                pass
-
-        elif choice == "4":
-
-            try:
-
-                value = int(
-                    input(
-                        "Max no-progress steps: "
-                    )
-                )
-
-                if value > 0:
-
-                    config[
-                        "max_no_progress_steps"
-                    ] = value
-
-            except ValueError:
-                pass
-
-        elif choice == "5":
-
-            try:
-
-                value = float(
-                    input(
-                        "Temperature: "
-                    )
-                )
-
-                if (
-                    0
-                    <= value
-                    <= 2
-                ):
-
-                    config[
-                        "temperature"
-                    ] = value
-
-            except ValueError:
-                pass
-
-        elif choice == "6":
-
-            print()
-            print(
-                "0. Minimal"
-            )
-            print(
-                "1. Raw stream"
-            )
-            print(
-                "2. Raw + parsed + tools"
-            )
-            print(
-                "3. Full prompts"
-            )
-
-            selected = (
-                input(
-                    "Debug level: "
-                ).strip()
-            )
-
-            if selected in {
-                "0",
-                "1",
-                "2",
-                "3",
-            }:
-
-                config[
-                    "debug_level"
-                ] = int(
-                    selected
-                )
-
-        elif choice == "7":
-
-            try:
-
-                value = int(
-                    input(
-                        "Recent observations: "
-                    )
-                )
-
-                if value >= 2:
-
-                    config[
-                        "recent_observations"
-                    ] = value
-
-            except ValueError:
-                pass
-
-        elif choice == "8":
-
-            current = bool(
-                config[
-                    "prompt_cache_enabled"
-                ]
-            )
-
-            config[
-                "prompt_cache_enabled"
-            ] = not current
-
-        elif choice == "9":
-
-            try:
-
-                value = int(
-                    input(
-                        "Prompt cache MB: "
-                    )
-                )
-
-                if value >= 64:
-
-                    config[
-                        "prompt_cache_mb"
-                    ] = value
-
-            except ValueError:
-                pass
-
-        elif choice == "10":
-
-            try:
-
-                value = float(
-                    input(
-                        "Trim ratio "
-                        "(example 0.72): "
-                    )
-                )
-
-                if (
-                    0.50
-                    <= value
-                    <= 0.90
-                ):
-
-                    config[
-                        "trim_context_ratio"
-                    ] = value
-
-            except ValueError:
-                pass
-
-        elif choice == "11":
-
-            model_path = (
-                config.get(
-                    "model_path",
-                    "",
-                )
-            )
-
-            project_root = (
-                config.get(
-                    "project_root",
-                    str(
-                        SCRIPT_DIR
-                    ),
-                )
-            )
-
-            config.clear()
-
-            config.update(
-                DEFAULT_CONFIG.copy()
-            )
-
-            config[
-                "model_path"
-            ] = model_path
-
-            config[
-                "project_root"
-            ] = project_root
-
-        save_config(
-            config
-        )
-
-
-# ============================================================
-# SYSTEM INFORMATION
-# ============================================================
-
-def system_information_menu(
-    config: dict[str, Any],
-) -> None:
-
-    clear_screen()
-
-    print_header(
-        "🔎 SYSTEM INFORMATION"
-    )
-
-    project = (
-        Path(
-            config[
-                "project_root"
-            ]
-        )
-    )
-
-    if project.exists():
-
-        profile = (
-            detect_project_profile(
-                project
-            )
-        )
-
-        print()
-        print(
-            profile_to_prompt(
-                profile
-            )
-        )
-
-    print()
-    print(
-        f"Script directory:\n"
-        f"{SCRIPT_DIR}"
-    )
-
-    print()
-    print(
-        f"Application directory:\n"
-        f"{APP_DIR}"
-    )
-
-    print()
-    print(
-        f"Config:\n"
-        f"{CONFIG_FILE}"
-    )
-
-    print()
-    print(
-        f"Memory:\n"
-        f"{MEMORY_ROOT}"
-    )
-
-    print()
-    print(
-        f"Prompt cache enabled: "
-        f"{config['prompt_cache_enabled']}"
-    )
-
-    print(
-        f"Prompt cache MB: "
-        f"{config['prompt_cache_mb']}"
-    )
-
-    pause()
-
-
-# ============================================================
-# CHAT
-# ============================================================
-
-def chat_menu(
-    config: dict[str, Any],
-) -> None:
-
-    if not (
-        config.get(
-            "model_path"
-        )
-    ):
-
-        print(
-            "\n⚠️ Select a model first."
-        )
-
-        pause()
-
-        model_selection_menu(
-            config
-        )
-
-        if not (
-            config.get(
-                "model_path"
-            )
-        ):
-
-            return
-
-    model_path = (
-        Path(
-            config[
-                "model_path"
-            ]
-        )
-    )
-
-    project_path = (
-        Path(
-            config[
-                "project_root"
-            ]
-        )
-    )
-
-    if not model_path.exists():
-
-        print(
-            "\n❌ Model does not exist."
-        )
-
-        pause()
-
-        return
-
-    if not project_path.exists():
-
-        print(
-            "\n❌ Project does not exist."
-        )
-
-        pause()
-
-        return
-
-    clear_screen()
-
-    print_header(
-        "🤖 LOCAL CODING AGENT"
-    )
-
-    print(
-        f"\nModel   : "
-        f"{model_path.name}"
-    )
-
-    print(
-        f"Project : "
-        f"{project_path}"
-    )
-
-    print(
-        f"Context : "
-        f"{config['context_size']}"
-    )
-
-    print(
-        f"Debug   : "
-        f"{config['debug_level']}"
-    )
-
-    print(
-        f"Cache   : "
-        f"{config['prompt_cache_enabled']} "
-        f"({config['prompt_cache_mb']} MB)"
-    )
-
-    print()
-    print(
-        "Loading..."
-    )
-
-    try:
-
-        agent = (
-            CodingAgent(
-                config
-            )
-        )
-
-    except Exception as error:
-
-        print()
-        print(
-            "❌ Model failed to load:"
-        )
-
-        print(
-            error
-        )
-
-        pause()
-
-        return
-
-    print()
-    print(
-        "Commands:"
-    )
-
-    print(
-        "/back   Return to main menu"
-    )
-
-    print(
-        "/help   Show commands"
-    )
-
-    print(
-        "/session Show current session context"
-    )
-
-    print(
-        "/reset   Reset conversation/session target"
-    )
-
-    while True:
-
-        print()
-        print(
-            "-" * 70
-        )
-
-        task = (
-            input(
-                "\n👤 > "
-            ).strip()
-        )
-
-        if not task:
-            continue
-
-        normalized = (
-            task.lower()
-        )
-
-        if normalized in {
-            "/back",
-            "/exit",
-            "/quit",
-            "exit",
-        }:
-
-            return
-
-        if normalized == "/help":
-
-            print()
-            print(
-                "/back    Return to menu"
-            )
-
-            print(
-                "/session Show active conversation target"
-            )
-
-            print(
-                "/reset   Forget active conversation target"
-            )
-
-            continue
-
-        if normalized == "/session":
-
-            print()
-            print(
-                agent.session_card()
-            )
-
-            continue
-
-        if normalized == "/reset":
-
-            agent.session = (
-                SessionContext()
-            )
-
-            print(
-                "✅ Session context reset."
-            )
-
-            continue
-
-        print()
-        print(
-            "🚀 Sending to model..."
-        )
-
-        result = (
-            agent.run(
-                task
-            )
-        )
-
-        print()
-        print(
-            "=" * 70
-        )
-
-        print(
-            "🤖 RESPONSE"
-        )
-
-        print(
-            "=" * 70
-        )
-
-        print(
-            result
-        )
-
-
-# ============================================================
-# STATUS
-# ============================================================
-
-def show_status(
-    config: dict[str, Any],
-) -> None:
-
-    model_path = (
-        config.get(
-            "model_path",
-            "",
-        )
-    )
-
-    model_name = (
-        Path(
-            model_path
-        ).name
-        if model_path
-        else "Not selected"
-    )
-
-    print(
-        f"\n🤖 Model   : "
-        f"{model_name}"
-    )
-
-    print(
-        f"📁 Project : "
-        f"{config['project_root']}"
-    )
-
-    print(
-        f"🧠 Context : "
-        f"{config['context_size']}"
-    )
-
-    print(
-        f"⚡ Cache   : "
-        f"{config['prompt_cache_enabled']}"
-    )
-
-    print(
-        f"🔎 Debug   : "
-        f"{config['debug_level']}"
-    )
-
-
-# ============================================================
-# MAIN MENU
-# ============================================================
-
-def main_menu() -> None:
-
-    config = (
-        load_config()
-    )
-
-    while True:
-
-        clear_screen()
-
-        print(
-            "╔══════════════════════════════════════╗"
-        )
-
-        print(
-            "║          🤖 MY LOCAL LLM            ║"
-        )
-
-        print(
-            "╚══════════════════════════════════════╝"
-        )
-
-        show_status(
-            config
-        )
-
-        print()
-        print(
-            "1. 💬 Chat / Coding Agent"
-        )
-
-        print(
-            "2. ⚙️  Settings"
-        )
-
-        print(
-            "3. 🤖 Model Selection"
-        )
-
-        print(
-            "4. 📁 Project Selection"
-        )
-
-        print(
-            "5. 🔎 System Information"
-        )
-
-        print(
-            "0. 🚪 Exit"
-        )
-
-        choice = (
-            input(
-                "\nSelect option: "
-            ).strip()
-        )
-
-        if choice == "1":
-
-            chat_menu(
-                config
-            )
-
-        elif choice == "2":
-
-            settings_menu(
-                config
-            )
-
-        elif choice == "3":
-
-            model_selection_menu(
-                config
-            )
-
-        elif choice == "4":
-
-            project_selection_menu(
-                config
-            )
-
-        elif choice == "5":
-
-            system_information_menu(
-                config
-            )
-
-        elif choice == "0":
-
-            print()
-            print(
-                "👋 Goodbye."
-            )
-
-            break
-
-
-# ============================================================
-# START
-# ============================================================
 
 if __name__ == "__main__":
 
-    main_menu()
+    main()
