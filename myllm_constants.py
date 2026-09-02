@@ -16,6 +16,8 @@ MEMORY_ROOT = APP_DIR / "memory"
 
 PAYLOAD_ROOT = APP_DIR / "payloads"
 
+LOG_ROOT = SCRIPT_DIR / "myllm_logs"
+
 
 # ============================================================
 # DEFAULT CONFIGURATION
@@ -34,10 +36,11 @@ DEFAULT_CONFIG = {
     "prompt_cache_enabled": True,
     "prompt_cache_mb": 1024,
     "trim_context_ratio": 0.72,
-    # Large generated strings are moved out of
-    # conversation history into .myllm/payloads.
+    # 0 = do not pass max_tokens to llama.cpp.
+    "max_model_output_tokens": 0,
     "payload_externalize_chars": 700,
     "payload_max_files": 250,
+    "logging_enabled": True,
 }
 
 
@@ -46,8 +49,6 @@ DEFAULT_CONFIG = {
 # ============================================================
 
 MAX_IDENTICAL_ACTIONS = 2
-
-MAX_MODEL_OUTPUT_TOKENS = 900
 
 MAX_SESSION_MESSAGES = 12
 
