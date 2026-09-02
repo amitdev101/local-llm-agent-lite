@@ -1894,10 +1894,7 @@ class CodingAgent:
         tools: Tools,
         tool_name: str,
         args: dict[str, Any],
-    ) -> tuple[
-        bool,
-        str,
-    ]:
+    ) -> tuple[bool, str]:
         registry = build_tool_registry(tools)
 
         function = registry.get(tool_name)
@@ -1913,13 +1910,13 @@ class CodingAgent:
 
             return (
                 True,
-                truncate_text(str(result)),
+                str(result),
             )
 
         except Exception as error:
             return (
                 False,
-                (f"{type(error).__name__}: " f"{error}"),
+                f"{type(error).__name__}: {error}",
             )
 
     # ========================================================
@@ -2523,19 +2520,12 @@ class CodingAgent:
             if success:
                 logger.info(
                     "📦 %s",
-                    truncate_text(
-                        output,
-                        1800,
-                    ),
+                    output,
                 )
-
             else:
                 logger.error(
                     "💥 %s",
-                    truncate_text(
-                        output,
-                        1800,
-                    ),
+                    output,
                 )
 
             messages.append(
@@ -2548,12 +2538,16 @@ class CodingAgent:
                 }
             )
 
+            model_output = truncate_text(
+                output,
+                6000,
+            )
+
             observation_message = (
-                f"TOOL OBSERVATION "
-                f"{observation_id}\n"
+                f"TOOL OBSERVATION {observation_id}\n"
                 f"success={success}\n"
                 f"tool={tool_name}\n\n"
-                f"{output}\n\n"
+                f"{model_output}\n\n"
             )
 
             if payload_notes:

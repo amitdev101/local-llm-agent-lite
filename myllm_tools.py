@@ -1885,10 +1885,7 @@ class Tools:
     # PYTHON
     # ========================================================
 
-    def validate_python(
-        self,
-    ) -> str:
-
+    def validate_python(self) -> str:
         output, code = self._run_with_code(
             [
                 sys.executable,
@@ -1900,12 +1897,18 @@ class Tools:
             timeout=180,
         )
 
-        if self.state is not None:
+        formatted = (
+            f"EXIT_CODE: {code}\n\n"
+            f"{output or 'Python compilation succeeded.'}"
+        )
 
+        if self.state is not None:
             self.state.last_validation_passed = code == 0
 
-        return f"EXIT_CODE: {code}\n\n" f"{output or 'Python compilation succeeded.'}"
+        if code != 0:
+            raise ValueError(formatted)
 
+        return formatted
     def check_python_import(
         self,
         module: str,
@@ -2139,29 +2142,29 @@ class Tools:
         command: list[str],
         purpose: str,
     ) -> str:
-
         output, code = self._run_with_code(
             command,
             timeout=300,
         )
 
+        formatted = (
+            f"COMMAND: {' '.join(command)}\n" f"EXIT_CODE: {code}\n\n" f"{output}"
+        )
+
         if self.state is not None:
-
             if purpose == "tests":
-
                 self.state.last_test_passed = code == 0
-
             elif purpose in {
                 "build",
                 "lint",
                 "typecheck",
             }:
-
                 self.state.last_validation_passed = code == 0
 
-        return (
-            f"COMMAND: " f"{' '.join(command)}\n" f"EXIT_CODE: {code}\n\n" f"{output}"
-        )
+        if code != 0:
+            raise ValueError(formatted)
+
+        return formatted
 
     def _mark_edited(
         self,
@@ -2250,7 +2253,7 @@ class Tools:
             output += process.stderr
 
         return (
-            truncate_text(output),
+            output,
             process.returncode,
         )
 
