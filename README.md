@@ -1,6 +1,6 @@
 # 🤖 MyLLM
 
-**Version 0.1.7**
+**Version 0.1.8**
 
 A fast, private coding agent optimized for running Qwen Coder GGUF models locally
 on Windows.
@@ -89,18 +89,22 @@ speed.
 - ✅ Discovers available test, build, lint, and type-check commands
 - 🔄 Re-detects project checks after new project files are created
 - 📚 Creates several files in one tool call for faster project scaffolding
-- 📝 Supports both focused patches and safe full-file replacement
+- 🧾 Requires complete file paths and strict fields in multi-file creation
+- ♻️ Treats already-correct file and directory creation as a successful no-op
+- 📝 Supports full-file replacement and exact or whitespace-tolerant focused patches
 - 📦 Stores large generated content as reusable payload references to keep prompts compact
 - 🗂️ Tracks created, modified, inspected, and active files
 - 🚧 Tracks blockers and unavailable project capabilities
 - 🧪 Detects small unfinished stubs and directs the model to implement them
 - 🧰 Validates tool names and arguments before execution
+- 🔧 Checks whether commands such as `javac` are available without running them
 - 📤 Allows unlimited model output by default while retaining an optional limit
 - 📝 Writes optional timestamped logs for each MyLLM run
 - 🧩 Keeps menus, configuration, logging, tools, and agent logic internally separated
 - 🔄 Stops repeated actions with a no-progress circuit breaker
 - ✂️ Trims old observations while preserving working state
-- 🕒 Requires verification after the latest file mutation
+- 🕒 Requires a real build, test, type-check, lint, or Python validation after mutations
+- 🚧 Records unavailable verification so the agent can report the blocker instead of looping
 - ↩️ Can undo file creation, modification, and deletion during the current run
 - 🧾 Saves project facts only when backed by successful tool evidence
 - 🚫 Rejects fake binary files created through text tools
@@ -125,7 +129,6 @@ speed.
 
 ## ⚠️ Current limitations
 
-- ✅ Failed command exit codes still need to propagate as failed tool results
 - 🎯 A successful check can validate the latest revision without proving it covered every changed file
 - 📚 An unexpected I/O error during multi-file creation may leave a partial batch
 - 🔁 Equivalent relative and absolute paths may evade duplicate detection
@@ -136,6 +139,10 @@ speed.
 
 ## 🕵️ Journey — clues newest first
 
+- **0.1.8 · The Tools Became Predictable** — Creation became safely idempotent,
+  patches learned deterministic whitespace matching, batch paths became explicit,
+  executable discovery gained its own tool, and weak verification stopped trapping
+  the agent in repeated checks.
 - **0.1.7 · The Trail Became Less Predictable** — A small amount of controlled
   variation helped the coder escape rigid recovery loops without making its tool
   protocol reckless.
@@ -164,5 +171,5 @@ speed.
 ## 🏷️ Versioning
 
 - Current development series: `0.1.x`
-- Compatible updates increment the patch number: `0.1.7` → `0.1.8`
+- Compatible updates increment the patch number: `0.1.8` → `0.1.9`
 - Breaking configuration or storage changes may increment the minor version

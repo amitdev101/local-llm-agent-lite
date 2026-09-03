@@ -4,6 +4,7 @@ import ast
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -1267,6 +1268,12 @@ class Tools:
 
         if file_path.exists():
 
+            if file_path.is_file() and read_text_file(file_path) == resolved_content:
+
+                return "File already has requested content: " + self.workspace.relative(
+                    file_path
+                )
+
             raise ValueError(
                 "File already exists. "
                 "Use replace_file for a complete rewrite "
@@ -1327,6 +1334,8 @@ class Tools:
             ]
         ] = []
 
+        unchanged: list[str] = []
+
         for item in files:
 
             path = str(
@@ -1351,6 +1360,12 @@ class Tools:
             validate_text_write_path(target)
 
             if target.exists():
+
+                if target.is_file() and read_text_file(target) == resolved_content:
+
+                    unchanged.append(self.workspace.relative(target))
+
+                    continue
 
                 raise ValueError(f"File already exists: " f"{path}")
 
@@ -1398,7 +1413,11 @@ class Tools:
 
             created.append(relative)
 
-        return "Created files:\n" + "\n".join(f"- {item}" for item in created)
+        lines = [*(f"Created: {item}" for item in created)]
+
+        lines.extend(f"Already correct: {item}" for item in unchanged)
+
+        return "Files ready:\n" + "\n".join(f"- {item}" for item in lines)
 
     # ========================================================
     # REPLACE FILE
@@ -1437,7 +1456,9 @@ class Tools:
 
         if original == resolved_content:
 
-            raise ValueError("Replacement would make no change.")
+            return "File already has requested content: " + self.workspace.relative(
+                file_path
+            )
 
         if self.state is not None:
 
@@ -1483,7 +1504,7 @@ class Tools:
             "new_text",
         )
 
-        if not resolved_old_text:
+        if not resolved_old_text.strip():
 
             raise ValueError(
                 "old_text cannot be empty. " "Use replace_file for a full rewrite."
@@ -1505,26 +1526,55 @@ class Tools:
 
         count = original.count(resolved_old_text)
 
+        match_kind = "exact"
+
         if count == 0:
 
-            raise ValueError(
-                "old_text was not found exactly. "
-                "Use exact text from RAW_CONTENT. "
-                "If most of the file changes, "
-                "use replace_file."
-            )
+            parts = re.split(r"\s+", resolved_old_text.strip())
 
-        if count > 1:
+            pattern = re.compile(r"\s+".join(re.escape(part) for part in parts))
+
+            matches = list(pattern.finditer(original))
+
+            if len(matches) == 1:
+
+                match = matches[0]
+
+                updated = (
+                    original[: match.start()]
+                    + resolved_new_text
+                    + original[match.end() :]
+                )
+
+                match_kind = "whitespace-normalized"
+
+            elif len(matches) > 1:
+
+                raise ValueError(
+                    "old_text has multiple whitespace-normalized matches. "
+                    "Provide more surrounding text."
+                )
+
+            else:
+
+                raise ValueError(
+                    "old_text was not found exactly or with normalized whitespace. "
+                    "Re-read the file or use replace_file."
+                )
+
+        elif count > 1:
 
             raise ValueError(
                 f"old_text occurs " f"{count} times. " "Provide more surrounding text."
             )
 
-        updated = original.replace(
-            resolved_old_text,
-            resolved_new_text,
-            1,
-        )
+        else:
+
+            updated = original.replace(
+                resolved_old_text,
+                resolved_new_text,
+                1,
+            )
 
         if updated == original:
 
@@ -1547,7 +1597,11 @@ class Tools:
 
         self._mark_edited(self.workspace.relative(file_path))
 
-        return "Patched existing file: " f"{self.workspace.relative(file_path)}"
+        return (
+            "Patched existing file "
+            f"using {match_kind} matching: "
+            f"{self.workspace.relative(file_path)}"
+        )
 
     # ========================================================
     # DELETE / DIRECTORIES
@@ -1589,7 +1643,7 @@ class Tools:
 
             if directory.is_dir():
 
-                raise ValueError("Directory already exists.")
+                return "Directory already exists: " + self.workspace.relative(directory)
 
             raise ValueError("A non-directory item " "already exists here.")
 
@@ -1942,6 +1996,23 @@ class Tools:
             raise ValueError(output)
 
         return f"Successfully imported " f"{module}."
+
+    def check_command(
+        self,
+        name: str,
+    ) -> str:
+
+        if not re.fullmatch(r"[A-Za-z0-9_.+-]+", name):
+
+            raise ValueError("Command name must not contain a path or arguments.")
+
+        resolved = shutil.which(name)
+
+        if not resolved:
+
+            raise ValueError(f"Command is unavailable: {name}")
+
+        return f"Command is available: {name}\nPATH: {resolved}"
 
     # ========================================================
     # SYMBOLS
@@ -2297,6 +2368,7 @@ def build_tool_registry(
         "run_project_typecheck": tools.run_project_typecheck,
         "validate_python": tools.validate_python,
         "check_python_import": tools.check_python_import,
+        "check_command": tools.check_command,
         "find_symbol": tools.find_symbol,
         "find_references": tools.find_references,
         "git_status": tools.git_status,
@@ -2511,6 +2583,14 @@ TOOL_SCHEMAS = {
             "module",
         },
     },
+    "check_command": {
+        "required": {
+            "name",
+        },
+        "allowed": {
+            "name",
+        },
+    },
     "find_symbol": {
         "required": {
             "symbol",
@@ -2699,6 +2779,23 @@ def validate_tool_arguments(
                     (f"files[{index}] " "requires path."),
                 )
 
+            extra_item_keys = set(item) - {
+                "path",
+                "content",
+                "content_ref",
+            }
+
+            if extra_item_keys:
+
+                return (
+                    False,
+                    (
+                        f"files[{index}] does not accept: "
+                        f"{', '.join(sorted(extra_item_keys))}. "
+                        "path must be the complete file path, such as src/SnakeGame.java."
+                    ),
+                )
+
             valid, reason = _validate_inline_or_ref(
                 item,
                 "content",
@@ -2736,8 +2833,9 @@ create_file(path,content)
 create_file(path,content_ref)
 -> NEW text file only
 
-create_files(files=[{"path":..., "content":...}])
-create_files(files=[{"path":..., "content_ref":...}])
+create_files(files=[{"path":"src/File.java", "content":...}])
+create_files(files=[{"path":"src/File.java", "content_ref":...}])
+-> path is the complete file path, not a directory
 
 replace_file(path,content)
 replace_file(path,content_ref)
@@ -2771,6 +2869,7 @@ run_project_typecheck()
 
 validate_python()
 check_python_import(module)
+check_command(name)
 
 find_symbol(symbol,path=".")
 find_references(symbol,path=".",max_results=100)

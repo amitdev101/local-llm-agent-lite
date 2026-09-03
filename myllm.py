@@ -214,6 +214,8 @@ class AgentState:
 
     verified_revision: int = -1
 
+    verification_blocked_revision: int = -1
+
     implementation_required: bool = False
 
     implementation_target: str = ""
@@ -1730,7 +1732,6 @@ class CodingAgent:
                 "run_project_lint",
                 "run_project_typecheck",
                 "validate_python",
-                "check_python_import",
             }:
                 progress = True
 
@@ -1775,6 +1776,10 @@ class CodingAgent:
                 state.blockers.append(new_blocker)
 
                 progress = True
+
+            if new_blocker and state.mutation_revision > 0:
+
+                state.verification_blocked_revision = state.mutation_revision
 
         state.latest_result = truncate_text(
             output,
@@ -1868,6 +1873,49 @@ class CodingAgent:
 
         return ""
 
+    def weak_verification_block(
+        self,
+        state: AgentState,
+        tool_name: str,
+    ) -> str:
+        weak_tools = {
+            "verify_file_exists",
+            "verify_files_exist",
+            "verify_directory_exists",
+            "verify_file_content",
+            "verify_line_count",
+            "count_matches",
+        }
+
+        if (
+            tool_name in weak_tools
+            and state.mutation_revision > state.verified_revision
+            and state.verification_blocked_revision != state.mutation_revision
+        ):
+            return (
+                "Existence and content checks do not verify source code. "
+                "Use run_project_build, run_project_tests, run_project_typecheck, "
+                "run_project_lint, or validate_python. If no suitable command exists, "
+                "try the relevant project verifier once so the blocker can be recorded."
+            )
+
+        return ""
+
+    def repeated_action_hint(
+        self,
+        tool_name: str,
+    ) -> str:
+        if tool_name == "apply_patch":
+            return "Re-read the target or use replace_file; do not repeat the patch."
+
+        if tool_name.startswith("verify_") or tool_name == "count_matches":
+            return "Use a project build/test/typecheck/lint or validate_python instead."
+
+        if tool_name in {"create_file", "create_files", "create_directory"}:
+            return "Inspect the target and continue from its current state."
+
+        return "Choose different arguments or another tool using the last observation."
+
     # ========================================================
     # COMPLETION
     # ========================================================
@@ -1891,9 +1939,17 @@ class CodingAgent:
         if state.verified_revision == state.mutation_revision:
             return True, ""
 
+        if state.verification_blocked_revision == state.mutation_revision:
+            return True, ""
+
         return (
             False,
-            ("The latest source mutation has not " "been strongly verified yet."),
+            (
+                "The latest source mutation needs strong verification. "
+                "Use run_project_build, run_project_tests, run_project_typecheck, "
+                "run_project_lint, or validate_python. Weak existence/content checks "
+                "are not sufficient."
+            ),
         )
 
     # ========================================================
@@ -2296,6 +2352,28 @@ class CodingAgent:
 
                 continue
 
+            verification_reason = self.weak_verification_block(
+                state,
+                tool_name,
+            )
+
+            if verification_reason:
+                logger.warning(
+                    "🚫 VERIFICATION BLOCK: %s",
+                    verification_reason,
+                )
+
+                state.no_progress_steps += 1
+
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": ("CONTROLLER:\n" f"{verification_reason}"),
+                    }
+                )
+
+                continue
+
             fingerprint = hashlib.sha256(
                 json.dumps(
                     {
@@ -2319,7 +2397,8 @@ class CodingAgent:
 
             if count > MAX_IDENTICAL_ACTIONS:
                 warning = (
-                    "This exact action has already " "been attempted multiple times."
+                    "This exact action has already been attempted multiple times. "
+                    + self.repeated_action_hint(tool_name)
                 )
 
                 logger.warning("")
