@@ -2604,6 +2604,8 @@ def main() -> None:
 
     configured_logger.info("🚀 MYLLM started.")
 
+    configured_logger.info("\nSystem prompt:\n%s", SYSTEM_PROMPT)
+
     try:
         main_menu(
             config=config,
