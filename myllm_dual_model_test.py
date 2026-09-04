@@ -9,7 +9,6 @@ from typing import Any
 
 from llama_cpp import Llama
 
-
 # ============================================================
 # CONFIG
 # ============================================================
@@ -184,7 +183,7 @@ def ask_json(
     schema: dict[str, Any],
     temperature: float,
 ) -> dict[str, Any]:
-    response = model.create_chat_completion(
+    stream = model.create_chat_completion(
         messages=[
             {
                 "role": "system",
@@ -201,14 +200,39 @@ def ask_json(
         },
         temperature=temperature,
         top_p=0.9,
+        stream=True,
     )
 
-    content = response["choices"][0]["message"]["content"]
+    full_content = ""
 
-    print("\nRAW MODEL RESPONSE:")
-    print(content)
+    print()
+    print("RAW MODEL RESPONSE:")
+    print("-" * 70)
 
-    return json.loads(content)
+    for chunk in stream:
+        choices = chunk.get("choices", [])
+
+        if not choices:
+            continue
+
+        delta = choices[0].get("delta", {})
+        text = delta.get("content", "")
+
+        if not text:
+            continue
+
+        full_content += text
+
+        print(
+            text,
+            end="",
+            flush=True,
+        )
+
+    print()
+    print("-" * 70)
+
+    return json.loads(full_content)
 
 
 # ============================================================
@@ -222,9 +246,7 @@ def resolve_workspace_path(relative_path: str) -> Path:
     try:
         candidate.relative_to(WORKSPACE)
     except ValueError as error:
-        raise ValueError(
-            f"Path escapes workspace: {relative_path}"
-        ) from error
+        raise ValueError(f"Path escapes workspace: {relative_path}") from error
 
     return candidate
 
@@ -272,9 +294,7 @@ def write_file(path: str, content: str) -> str:
 
 def compile_java() -> str:
     java_files = sorted(
-        path
-        for path in WORKSPACE.rglob("*.java")
-        if ".build" not in path.parts
+        path for path in WORKSPACE.rglob("*.java") if ".build" not in path.parts
     )
 
     if not java_files:
@@ -299,10 +319,7 @@ def compile_java() -> str:
         javac,
         "-d",
         str(build_directory),
-        *[
-            str(path)
-            for path in java_files
-        ],
+        *[str(path) for path in java_files],
     ]
 
     process = subprocess.run(
@@ -374,7 +391,10 @@ def execute_worker_action(
             if not isinstance(content, str):
                 raise ValueError("write_file requires content.")
 
-            return True, write_file(path, content)
+            return True, write_file(
+                path,
+                content,
+            )
 
         if tool == "compile_java":
             if args:
@@ -385,7 +405,10 @@ def execute_worker_action(
         return False, f"Unknown tool: {tool}"
 
     except Exception as error:
-        return False, f"{type(error).__name__}: {error}"
+        return (
+            False,
+            f"{type(error).__name__}: {error}",
+        )
 
 
 # ============================================================
@@ -403,9 +426,7 @@ def recent_observations_text(
     if not observations:
         return "(none)"
 
-    return "\n\n".join(
-        observations[-6:]
-    )
+    return "\n\n".join(observations[-6:])
 
 
 # ============================================================
@@ -420,7 +441,10 @@ def run_agent(
 ) -> None:
     observations: list[str] = []
 
-    for step in range(1, MAX_STEPS + 1):
+    for step in range(
+        1,
+        MAX_STEPS + 1,
+    ):
         print()
         print("=" * 70)
         print(f"STEP {step}/{MAX_STEPS}")
@@ -439,7 +463,8 @@ RECENT CONTROLLER OBSERVATIONS:
 Determine whether the user's goal is complete.
 """
 
-        print("\n👶 KID")
+        print()
+        print("👶 KID")
 
         kid_result = ask_json(
             model=kid,
@@ -463,7 +488,8 @@ Determine whether the user's goal is complete.
             )
         )
 
-        print(f"\nKid status  : {status}")
+        print()
+        print(f"Kid status  : {status}")
         print(f"Kid request : {request}")
 
         if status == "done":
@@ -487,7 +513,8 @@ RECENT CONTROLLER OBSERVATIONS:
 Choose the single best next tool action.
 """
 
-        print("\n👷 WORKER")
+        print()
+        print("👷 WORKER")
 
         worker_action = ask_json(
             model=worker,
@@ -511,30 +538,22 @@ Choose the single best next tool action.
             )
         )
 
-        print(f"\nWorker tool    : {tool}")
+        print()
+        print(f"Worker tool    : {tool}")
         print(f"Worker message : {message}")
 
-        success, output = execute_worker_action(
-            worker_action
-        )
+        success, output = execute_worker_action(worker_action)
 
-        observation = (
-            f"TOOL: {tool}\n"
-            f"SUCCESS: {success}\n"
-            f"RESULT:\n{output}"
-        )
+        observation = f"TOOL: {tool}\n" f"SUCCESS: {success}\n" f"RESULT:\n{output}"
 
-        observations.append(
-            observation
-        )
+        observations.append(observation)
 
-        print("\n⚙️ CONTROLLER")
+        print()
+        print("⚙️ CONTROLLER")
         print(observation)
 
     print()
-    print(
-        f"🛑 Controller stopped after {MAX_STEPS} steps."
-    )
+    print(f"🛑 Controller stopped after " f"{MAX_STEPS} steps.")
 
 
 # ============================================================
@@ -549,23 +568,24 @@ def main() -> None:
     )
 
     print("Loading Kid model...")
+
     kid = load_model(
         KID_MODEL_PATH,
         KID_CONTEXT,
     )
 
     print("Loading Worker model...")
+
     worker = load_model(
         WORKER_MODEL_PATH,
         WORKER_CONTEXT,
     )
 
-    print("\nModels loaded.")
+    print()
+    print("✅ Models loaded.")
 
     while True:
-        task = input(
-            "\n👤 Task (/exit to quit): "
-        ).strip()
+        task = input("\n👤 Task (/exit to quit): ").strip()
 
         if task.lower() in {
             "/exit",
@@ -583,12 +603,11 @@ def main() -> None:
                 kid,
                 worker,
             )
+
         except KeyboardInterrupt:
-            print(
-                "\n🛑 Agent loop manually stopped."
-            )
+            print()
+            print("🛑 Agent loop manually stopped.")
 
 
 if __name__ == "__main__":
     main()
-
