@@ -1,9 +1,16 @@
 # 🤖 MyLLM
 
-**Version 0.1.8**
+**Version 0.1.9**
 
 A fast, private coding agent optimized for running Qwen Coder GGUF models locally
 on Windows.
+
+## 🎯 Built for
+
+- 💻 Developers who want a private coding assistant on their own PC
+- 🧪 Model testers comparing GGUF behavior, prompts, thinking, and sampling
+- 🪶 Users with modest hardware who need a lightweight local setup
+- 🔐 Teams and learners who do not want source code sent to a cloud model
 
 - 🔒 Local and private
 - ⚡ Optimized for small Qwen Coder models
@@ -39,6 +46,49 @@ python -m pip install -r requirements.txt
 The model remains loaded while the chat screen is open, making follow-up prompts
 faster. Prompt caching can make repeated prefixes and follow-up turns faster too.
 
+## 💬 Local chat only
+
+- 🧼 Chat directly without agent prompts or tools
+- 🌊 Stream responses in the terminal
+- 🤖 Select a detected model or provide a GGUF path
+
+```powershell
+python myllm_local_chat_only.py
+python myllm_local_chat_only.py "D:\path\to\model.gguf"
+```
+
+- ♻️ `/reset` starts a fresh conversation
+- 🚪 `/exit` closes the chat
+- 📝 JSONL logs are stored in `model_chat_logs/<date>/`
+
+## 🌐 Local LLM Playground
+
+Run the standalone browser interface for direct model testing—no CLI conversation is required:
+
+```powershell
+python local_llm_playground/main.py
+```
+
+- 🔎 Discovers GGUF files from `models/`
+- ⚡ Automatically loads the last valid model
+- 🌐 Opens the browser at `http://127.0.0.1:8000`
+- ♻️ Replaces only an older playground instance on port `8000`
+- 🛡️ Refuses to stop unrelated applications using that port
+
+The interface provides:
+
+- 🤖 Model switching beside the prompt
+- 🌊 Streaming with Stop, Copy, Regenerate, and Continue
+- 💬 Searchable JSONL conversation history
+- 🧠 Optional system prompt and thinking control
+- 🌡️ Temperature and advanced sampling controls
+- 📊 Context, first-token latency, speed, and output metrics
+- 📱 Responsive layout with an always-visible prompt
+
+- ♾️ No fixed output-token limit
+- 🛑 Stops at model EOS, context boundary, interruption, or error
+- 🧼 No agent tools, RAG, project context, or hidden prompts
+
 ## 💡 Example prompts
 
 ```text
@@ -69,7 +119,7 @@ Search for repeated error handling, explain the duplication, and suggest a simpl
 - 🎮 **GPU layers:** `0` with the standard CPU build
 - 🔁 **Maximum steps:** `12` for everyday tasks
 - 🛑 **No-progress steps:** `3`–`6`
-- 🎯 **Temperature:** `0.15` for stable tool calls with better failure recovery
+- 🎯 **Temperature:** `0.0` normally; repeated identical failures temporarily raise it up to `0.45`
 - 🔍 **Debug:** `0` for quiet output; `1` for the raw model stream
 - ⚡ **Prompt cache:** enabled; try `512 MB` on a memory-limited computer
 - 📤 **Output limit:** `0` lets the model stop naturally without a fixed token cap
@@ -102,6 +152,7 @@ speed.
 - 📝 Writes optional timestamped logs for each MyLLM run
 - 🧩 Keeps menus, configuration, logging, tools, and agent logic internally separated
 - 🔄 Stops repeated actions with a no-progress circuit breaker
+- 🌡️ Raises temperature only for repeated identical failures and resets it after progress
 - ✂️ Trims old observations while preserving working state
 - 🕒 Requires a real build, test, type-check, lint, or Python validation after mutations
 - 🚧 Records unavailable verification so the agent can report the blocker instead of looping
@@ -116,6 +167,10 @@ speed.
 - 🧠 Verified project memory: `.myllm/memory`
 - 📦 Temporary large-content payloads: `.myllm/payloads`
 - 📝 Timestamped run logs: `myllm_logs/<date>/`
+- 💬 Direct model conversation logs: `model_chat_logs/<date>/`
+- 🌐 Playground conversations: `local_llm_playground/data/chats/*.jsonl`
+- ⚙️ Playground settings: `local_llm_playground/data/config.json`
+- 📝 Playground logs: `local_llm_playground/logs/`
 - 🤖 Models: `models/*.gguf`
 
 ## 🛡️ Safety
@@ -139,6 +194,9 @@ speed.
 
 ## 🕵️ Journey — clues newest first
 
+- **0.1.9 · The Playground Opened** — Direct local-model testing gained a responsive
+  browser chat, automatic GGUF discovery and loading, JSONL conversation history,
+  editable generation settings, streaming metrics, cancellation, and safe port cleanup.
 - **0.1.8 · The Tools Became Predictable** — Creation became safely idempotent,
   patches learned deterministic whitespace matching, batch paths became explicit,
   executable discovery gained its own tool, and weak verification stopped trapping
@@ -171,5 +229,5 @@ speed.
 ## 🏷️ Versioning
 
 - Current development series: `0.1.x`
-- Compatible updates increment the patch number: `0.1.8` → `0.1.9`
+- Compatible updates increment the patch number: `0.1.9` → `0.1.10`
 - Breaking configuration or storage changes may increment the minor version

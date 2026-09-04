@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Local LLM Playground</title>
+  <link rel="stylesheet" href="/assets/styles.css?v=4">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand"><span class="brand-mark">L</span><div><strong>Local LLM</strong><small>Playground</small></div></div>
+      <button class="new-chat" id="newChat">＋ New chat</button>
+      <input class="chat-search" id="chatSearch" type="search" placeholder="Search chats…" aria-label="Search chats">
+      <div class="sidebar-label">Recent chats</div>
+      <nav id="chatList" class="chat-list"></nav>
+      <div class="sidebar-footer"><span class="status-dot" id="statusDot"></span><span id="statusText">Not loaded</span></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-button mobile-only" id="menuButton" aria-label="Toggle sidebar">☰</button>
+        <div class="model-summary">
+          <strong id="activeModel">No model loaded</strong>
+          <span id="modelMeta">Select a model to begin</span>
+        </div>
+        <button class="secondary-button" id="settingsButton">Settings</button>
+      </header>
+
+      <section class="messages" id="messages">
+        <div class="welcome" id="welcome">
+          <div class="welcome-mark">L</div>
+          <h1>Local LLM Playground</h1>
+          <p>Test your GGUF model directly, without agent tools or hidden prompts.</p>
+          <ol class="first-steps"><li>Select a model near the prompt</li><li>Load it once</li><li>Start chatting</li></ol>
+        </div>
+      </section>
+
+      <section class="composer-wrap">
+        <div class="composer-toolbar">
+          <label class="quick-model-label" for="quickModelSelect"><span>Model</span><select id="quickModelSelect"><option>Loading models…</option></select></label>
+          <button class="quick-load" id="quickLoadModel">Load</button>
+          <button class="system-summary" id="systemSummary">No system prompt</button>
+        </div>
+        <div class="composer">
+          <textarea id="prompt" rows="1" placeholder="Message your local model…" aria-label="Message"></textarea>
+          <button class="stop-button hidden" id="stopButton">■ Stop</button>
+          <button class="send-button" id="sendButton" aria-label="Send">↑</button>
+        </div>
+        <div class="composer-meta"><span id="composerStatus">Load a model to start</span><span id="temperatureLabel">Temperature 0.00</span></div>
+        <div class="context-row"><div class="context-track"><span id="contextBar"></span></div><span id="contextLabel">Context 0%</span></div>
+      </section>
+    </main>
+
+    <aside class="settings-panel" id="settingsPanel" aria-hidden="true">
+      <div class="settings-header"><div><h2>Chat settings</h2><p>Changes apply to the next response.</p></div><button class="icon-button" id="closeSettings">×</button></div>
+
+      <section class="setting-section">
+        <div class="section-title">Model loading <span class="reload-badge">Requires reload</span></div>
+        <label for="modelSelect">Detected model</label>
+        <select id="modelSelect"></select>
+        <label for="customModel">Custom GGUF path</label>
+        <input id="customModel" placeholder="D:\path\to\model.gguf">
+        <div class="grid-three">
+          <label>Context<input id="contextSize" type="number" min="256" value="4096"></label>
+          <label>GPU layers<input id="gpuLayers" type="number" min="-1" value="0"></label>
+          <label>Threads<input id="threads" type="number" min="1" value="4"></label>
+        </div>
+        <button class="primary-button full" id="loadModel">Load model</button>
+      </section>
+
+      <section class="setting-section">
+        <div class="section-title">Conversation</div>
+        <div class="row-between"><label for="systemPrompt">System prompt</label><select id="systemPreset"><option value="">No prompt</option><option value="You are a helpful assistant.">Helpful assistant</option><option value="You are a concise, expert programming assistant.">Coding assistant</option><option value="custom">Custom</option></select></div>
+        <textarea id="systemPrompt" rows="5" placeholder="Optional—empty means no system prompt"></textarea>
+      </section>
+
+      <section class="setting-section">
+        <div class="section-title">Response generation <span class="instant-badge">Next response</span></div>
+        <div class="row-between"><div><strong>Thinking mode</strong><small>Qwen-compatible models</small></div><label class="switch"><input id="thinking" type="checkbox"><span></span></label></div>
+        <label class="range-label" for="temperature"><span>Temperature</span><input id="temperatureNumber" type="number" min="0" max="2" step="0.05" value="0"></label>
+        <input id="temperature" type="range" min="0" max="2" step="0.05" value="0">
+      </section>
+
+      <details class="setting-section">
+        <summary>Advanced generation</summary>
+        <div class="grid-two advanced-grid">
+          <label>Top-p<input id="topP" type="number" min="0" max="1" step="0.05" value="0.95"></label>
+          <label>Top-k<input id="topK" type="number" min="0" value="40"></label>
+          <label>Min-p<input id="minP" type="number" min="0" max="1" step="0.01" value="0.05"></label>
+          <label>Repeat penalty<input id="repeatPenalty" type="number" min="0" max="2" step="0.05" value="1"></label>
+          <label>Seed<input id="seed" type="number" value="-1"></label>
+        </div>
+        <button class="text-button" id="resetSettings">Reset generation defaults</button>
+      </details>
+    </aside>
+    <div class="overlay" id="overlay"></div>
+    <div class="toast" id="toast" role="status"></div>
+  </div>
+  <script src="/assets/app.js?v=6"></script>
+</body>
+</html>
