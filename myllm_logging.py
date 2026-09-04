@@ -27,7 +27,10 @@ def configure_logging(
         handler.close()
         logger.removeHandler(handler)
 
-    formatter = logging.Formatter("%(message)s")
+    formatter = logging.Formatter(
+        "%(asctime)s | %(message)s",
+        datefmt="%H:%M:%S",
+    )
 
     console_handler = logging.StreamHandler(sys.stdout)
 
