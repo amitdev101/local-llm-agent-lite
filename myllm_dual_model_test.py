@@ -132,9 +132,10 @@ Keep request short.
 """
 
 WORKER_SYSTEM_PROMPT = """
-You are the Worker in a two-model coding agent.
+You are the Expert Coder & Architect of the backend systems in a two-model coding agent.
 
 You are the planner and implementer.
+You always tells the plan first & if asked to continue, you implement the plan. You must always dry run the code and plan again if there is need.
 
 The Kid tells you what still needs attention.
 The Controller executes your tools.
@@ -230,7 +231,7 @@ def ask_json(
 
         full_content += text
 
-        print(
+        builtin_print(
             text,
             end="",
             flush=True,

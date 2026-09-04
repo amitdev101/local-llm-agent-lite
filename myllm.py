@@ -52,7 +52,6 @@ from myllm_system_prompt import SYSTEM_PROMPT
 
 logger = get_logger()
 
-
 # ============================================================
 # CONFIG
 # ============================================================
@@ -80,9 +79,7 @@ def ensure_app_directory() -> None:
     )
 
 
-def save_config(
-    config: dict[str, Any],
-) -> None:
+def save_config(config: dict[str, Any], ) -> None:
     ensure_app_directory()
 
     CONFIG_FILE.write_text(
@@ -184,13 +181,11 @@ class AgentState:
 
     edited_files: set[str] = field(default_factory=set)
 
-    edit_backups: list[
-        tuple[
-            Path,
-            str,
-            bool,
-        ]
-    ] = field(default_factory=list)
+    edit_backups: list[tuple[
+        Path,
+        str,
+        bool,
+    ]] = field(default_factory=list)
 
     created_files: set[str] = field(default_factory=set)
 
@@ -226,40 +221,35 @@ class AgentState:
 # ============================================================
 
 
-def detect_task_constraints(
-    task: str,
-) -> TaskConstraints:
+def detect_task_constraints(task: str, ) -> TaskConstraints:
     text = task.lower()
 
     result = TaskConstraints()
 
     if "javascript" in text or re.search(
-        r"\bjs\b",
-        text,
+            r"\bjs\b",
+            text,
     ):
         result.requested_languages.add("javascript")
 
     if "typescript" in text or re.search(
-        r"\bts\b",
-        text,
+            r"\bts\b",
+            text,
     ):
         result.requested_languages.add("typescript")
 
     if "python" in text:
         result.requested_languages.add("python")
 
-    if (
-        re.search(
+    if (re.search(
             r"\bjava\b",
             text,
-        )
-        and "javascript" not in text
-    ):
+    ) and "javascript" not in text):
         result.requested_languages.add("java")
 
     if re.search(
-        r"\brust\b",
-        text,
+            r"\brust\b",
+            text,
     ):
         result.requested_languages.add("rust")
 
@@ -293,38 +283,29 @@ def detect_task_constraints(
 
         result.requested_languages.add("python")
 
-    if any(
-        phrase in text
-        for phrase in (
+    if any(phrase in text for phrase in (
             "frontend",
             "front-end",
             "browser",
             "web app",
             "webapp",
             "website",
-        )
-    ):
+    )):
         result.browser_app = True
         result.frontend_required = True
 
-    if any(
-        phrase in text
-        for phrase in (
+    if any(phrase in text for phrase in (
             "no python",
             "not python",
             "without python",
-        )
-    ):
+    )):
         result.forbidden_languages.add("python")
 
-    if any(
-        phrase in text
-        for phrase in (
+    if any(phrase in text for phrase in (
             "no pygame",
             "not pygame",
             "without pygame",
-        )
-    ):
+    )):
         result.forbidden_technologies.add("pygame")
 
     return result
@@ -355,27 +336,24 @@ def inherit_constraints(
     return current
 
 
-def constraints_to_prompt(
-    constraints: TaskConstraints,
-) -> str:
+def constraints_to_prompt(constraints: TaskConstraints, ) -> str:
+
     def show(
         values: set[str],
         fallback: str,
     ) -> str:
         return ", ".join(sorted(values)) or fallback
 
-    return (
-        "REQUIRED LANGUAGES: "
-        f"{show(constraints.requested_languages, 'not specified')}\n"
-        "FORBIDDEN LANGUAGES: "
-        f"{show(constraints.forbidden_languages, 'none')}\n"
-        "REQUIRED TECHNOLOGIES: "
-        f"{show(constraints.requested_technologies, 'not specified')}\n"
-        "FORBIDDEN TECHNOLOGIES: "
-        f"{show(constraints.forbidden_technologies, 'none')}\n"
-        f"BROWSER APP REQUIRED: {constraints.browser_app}\n"
-        f"FRONTEND REQUIRED: {constraints.frontend_required}"
-    )
+    return ("REQUIRED LANGUAGES: "
+            f"{show(constraints.requested_languages, 'not specified')}\n"
+            "FORBIDDEN LANGUAGES: "
+            f"{show(constraints.forbidden_languages, 'none')}\n"
+            "REQUIRED TECHNOLOGIES: "
+            f"{show(constraints.requested_technologies, 'not specified')}\n"
+            "FORBIDDEN TECHNOLOGIES: "
+            f"{show(constraints.forbidden_technologies, 'none')}\n"
+            f"BROWSER APP REQUIRED: {constraints.browser_app}\n"
+            f"FRONTEND REQUIRED: {constraints.frontend_required}")
 
 
 # ============================================================
@@ -383,9 +361,7 @@ def constraints_to_prompt(
 # ============================================================
 
 
-def is_short_followup(
-    task: str,
-) -> bool:
+def is_short_followup(task: str, ) -> bool:
     text = task.strip().lower()
 
     exact = {
@@ -404,18 +380,15 @@ def is_short_followup(
     if text in exact:
         return True
 
-    return len(text.split()) <= 8 and any(
-        phrase in text
-        for phrase in (
-            "complete it",
-            "finish it",
-            "continue",
-            "fix that",
-            "fix it",
-            "the game",
-            "that file",
-        )
-    )
+    return len(text.split()) <= 8 and any(phrase in text for phrase in (
+        "complete it",
+        "finish it",
+        "continue",
+        "fix that",
+        "fix it",
+        "the game",
+        "that file",
+    ))
 
 
 # ============================================================
@@ -463,8 +436,8 @@ def validate_single_mutation(
     content: str,
     constraints: TaskConstraints,
 ) -> tuple[
-    bool,
-    str,
+        bool,
+        str,
 ]:
     path_lower = path.lower()
 
@@ -478,26 +451,21 @@ def validate_single_mutation(
         if path_lower.endswith(".py"):
             return (
                 False,
-                (
-                    "The active task requires "
-                    "JavaScript/TypeScript. "
-                    "Python is not allowed."
-                ),
+                ("The active task requires "
+                 "JavaScript/TypeScript. "
+                 "Python is not allowed."),
             )
 
         if "pygame" in content_lower:
             return (
                 False,
-                (
-                    "The active task requires "
-                    "JavaScript/TypeScript. "
-                    "Pygame is not allowed."
-                ),
+                ("The active task requires "
+                 "JavaScript/TypeScript. "
+                 "Pygame is not allowed."),
             )
 
     if "java" in languages:
-        if path_lower.endswith(
-            (
+        if path_lower.endswith((
                 ".py",
                 ".js",
                 ".jsx",
@@ -505,14 +473,11 @@ def validate_single_mutation(
                 ".tsx",
                 ".rs",
                 ".go",
-            )
-        ):
+        )):
             return (
                 False,
-                (
-                    "The active task requires Java. "
-                    "Do not substitute another language."
-                ),
+                ("The active task requires Java. "
+                 "Do not substitute another language."),
             )
 
     if "python" in constraints.forbidden_languages:
@@ -522,26 +487,19 @@ def validate_single_mutation(
                 "Python is explicitly forbidden.",
             )
 
-    if (
-        constraints.browser_app
-        and "python" not in languages
-        and path_lower.endswith(".py")
-    ):
+    if (constraints.browser_app and "python" not in languages and path_lower.endswith(".py")):
         return (
             False,
-            (
-                "The task requires a browser "
-                "application, not a Python "
-                "desktop application."
-            ),
+            ("The task requires a browser "
+             "application, not a Python "
+             "desktop application."),
         )
 
-    if "react" in technologies and (
-        path_lower.endswith(".py") or "pygame" in content_lower
-    ):
+    if "react" in technologies and (path_lower.endswith(".py") or "pygame" in content_lower):
         return (
             False,
-            ("React is a hard requirement. " "Python/Pygame is not allowed."),
+            ("React is a hard requirement. "
+             "Python/Pygame is not allowed."),
         )
 
     return True, ""
@@ -553,9 +511,10 @@ def validate_tool_against_constraints(
     constraints: TaskConstraints,
     payload_store: PayloadStore,
 ) -> tuple[
-    bool,
-    str,
+        bool,
+        str,
 ]:
+
     def get_text(
         inline_key: str,
         ref_key: str,
@@ -564,16 +523,16 @@ def validate_tool_against_constraints(
         inline = source.get(inline_key)
 
         if isinstance(
-            inline,
-            str,
+                inline,
+                str,
         ):
             return inline
 
         ref = source.get(ref_key)
 
         if isinstance(
-            ref,
-            str,
+                ref,
+                str,
         ):
             try:
                 return payload_store.load(ref)
@@ -584,16 +543,14 @@ def validate_tool_against_constraints(
         return ""
 
     if tool_name in {
-        "create_file",
-        "replace_file",
+            "create_file",
+            "replace_file",
     }:
         return validate_single_mutation(
-            str(
-                args.get(
-                    "path",
-                    "",
-                )
-            ),
+            str(args.get(
+                "path",
+                "",
+            )),
             get_text(
                 "content",
                 "content_ref",
@@ -604,12 +561,10 @@ def validate_tool_against_constraints(
 
     if tool_name == "apply_patch":
         return validate_single_mutation(
-            str(
-                args.get(
-                    "path",
-                    "",
-                )
-            ),
+            str(args.get(
+                "path",
+                "",
+            )),
             get_text(
                 "new_text",
                 "new_text_ref",
@@ -619,20 +574,15 @@ def validate_tool_against_constraints(
         )
 
     if tool_name == "create_files":
-        for item in (
-            args.get(
+        for item in (args.get(
                 "files",
-                [],
-            )
-            or []
-        ):
+            [],
+        ) or []):
             allowed, reason = validate_single_mutation(
-                str(
-                    item.get(
-                        "path",
-                        "",
-                    )
-                ),
+                str(item.get(
+                    "path",
+                    "",
+                )),
                 get_text(
                     "content",
                     "content_ref",
@@ -659,9 +609,7 @@ class ProjectMemory:
         self,
         workspace: Workspace,
     ) -> None:
-        self.project_id = hashlib.sha256(
-            str(workspace.root).encode("utf-8")
-        ).hexdigest()[:16]
+        self.project_id = hashlib.sha256(str(workspace.root).encode("utf-8")).hexdigest()[:16]
 
         memory_dir = MEMORY_ROOT / self.project_id
 
@@ -714,12 +662,8 @@ class ProjectMemory:
             return []
 
         try:
-            return (
-                table.search()
-                .where(f"project = " f"'{self.project_id}'")
-                .limit(limit)
-                .to_list()
-            )
+            return (table.search().where(f"project = "
+                                         f"'{self.project_id}'").limit(limit).to_list())
 
         except Exception:
             return []
@@ -730,7 +674,6 @@ class ProjectMemory:
 # ============================================================
 
 TOOL_NAMES = sorted(TOOL_SCHEMAS.keys())
-
 
 ACTION_SCHEMA = {
     "type": "object",
@@ -764,43 +707,33 @@ ACTION_SCHEMA = {
     ],
 }
 
-
 # ============================================================
 # ACTION VALIDATION
 # ============================================================
 
 
-def validate_action_semantics(
-    action: dict[str, Any],
-) -> tuple[
-    bool,
-    str,
+def validate_action_semantics(action: dict[str, Any], ) -> tuple[
+        bool,
+        str,
 ]:
-    action_type = str(
-        action.get(
-            "type",
-            "",
-        )
-    )
+    action_type = str(action.get(
+        "type",
+        "",
+    ))
 
-    tool_name = str(
-        action.get(
-            "tool",
-            "",
-        )
-    )
+    tool_name = str(action.get(
+        "tool",
+        "",
+    ))
 
-    args = (
-        action.get(
-            "args",
-            {},
-        )
-        or {}
-    )
+    args = (action.get(
+        "args",
+        {},
+    ) or {})
 
     if not isinstance(
-        args,
-        dict,
+            args,
+            dict,
     ):
         return (
             False,
@@ -811,22 +744,18 @@ def validate_action_semantics(
         if tool_name:
             return (
                 False,
-                (
-                    "type='final' cannot contain "
-                    f"tool='{tool_name}'. "
-                    "If you intend to execute the tool, "
-                    "return type='tool'."
-                ),
+                ("type='final' cannot contain "
+                 f"tool='{tool_name}'. "
+                 "If you intend to execute the tool, "
+                 "return type='tool'."),
             )
 
         if args:
             return (
                 False,
-                (
-                    "type='final' must use args={}. "
-                    "Tool arguments are only valid "
-                    "with type='tool'."
-                ),
+                ("type='final' must use args={}. "
+                 "Tool arguments are only valid "
+                 "with type='tool'."),
             )
 
         return True, ""
@@ -835,14 +764,16 @@ def validate_action_semantics(
         if not tool_name:
             return (
                 False,
-                ("type='tool' requires " "a non-empty tool name."),
+                ("type='tool' requires "
+                 "a non-empty tool name."),
             )
 
         return True, ""
 
     return (
         False,
-        ("type must be either " "'tool' or 'final'."),
+        ("type must be either "
+         "'tool' or 'final'."),
     )
 
 
@@ -852,6 +783,7 @@ def validate_action_semantics(
 
 
 class CodingAgent:
+
     def __init__(
         self,
         config: dict[str, Any],
@@ -874,12 +806,10 @@ class CodingAgent:
 
         self.payload_store = PayloadStore(
             PAYLOAD_ROOT,
-            max_files=int(
-                config.get(
-                    "payload_max_files",
-                    250,
-                )
-            ),
+            max_files=int(config.get(
+                "payload_max_files",
+                250,
+            )),
         )
 
         self.payload_store.cleanup()
@@ -908,26 +838,20 @@ class CodingAgent:
 
         self.prompt_cache = None
 
-        if bool(
-            config.get(
+        if bool(config.get(
                 "prompt_cache_enabled",
                 True,
-            )
-        ):
+        )):
             cache_mb = max(
                 64,
-                int(
-                    config.get(
-                        "prompt_cache_mb",
-                        1024,
-                    )
-                ),
+                int(config.get(
+                    "prompt_cache_mb",
+                    1024,
+                )),
             )
 
             try:
-                self.prompt_cache = LlamaRAMCache(
-                    capacity_bytes=(cache_mb * 1024 * 1024)
-                )
+                self.prompt_cache = LlamaRAMCache(capacity_bytes=(cache_mb * 1024 * 1024))
 
                 self.llm.set_cache(self.prompt_cache)
 
@@ -952,9 +876,7 @@ class CodingAgent:
     # SESSION
     # ========================================================
 
-    def reset_session(
-        self,
-    ) -> None:
+    def reset_session(self, ) -> None:
         self.session = SessionContext()
 
     def append_session_message(
@@ -962,69 +884,49 @@ class CodingAgent:
         role: str,
         content: str,
     ) -> None:
-        self.session.recent_messages.append(
-            {
-                "role": role,
-                "content": content,
-            }
-        )
+        self.session.recent_messages.append({
+            "role": role,
+            "content": content,
+        })
 
         if len(self.session.recent_messages) > MAX_SESSION_MESSAGES:
-            self.session.recent_messages = self.session.recent_messages[
-                -MAX_SESSION_MESSAGES:
-            ]
+            self.session.recent_messages = self.session.recent_messages[-MAX_SESSION_MESSAGES:]
 
-    def session_card(
-        self,
-    ) -> str:
-        recent = [
-            (f"{message['role'].upper()}: " f"{message['content']}")
-            for message in self.session.recent_messages[-6:]
-        ]
+    def session_card(self, ) -> str:
+        recent = [(f"{message['role'].upper()}: "
+                   f"{message['content']}") for message in self.session.recent_messages[-6:]]
 
-        touched = (
-            "\n".join(f"- {path}" for path in sorted(self.session.touched_files)[-10:])
-            or "(none)"
-        )
+        touched = ("\n".join(f"- {path}" for path in sorted(self.session.touched_files)[-10:])
+                   or "(none)")
 
-        payloads = (
-            "\n".join(
-                f"- {payload}" for payload in sorted(self.session.payload_refs)[-10:]
-            )
-            or "(none)"
-        )
+        payloads = ("\n".join(f"- {payload}" for payload in sorted(self.session.payload_refs)[-10:])
+                    or "(none)")
 
-        return (
-            f"ACTIVE ROOT: "
-            f"{self.session.active_root or '(none)'}\n"
-            f"ACTIVE FILE: "
-            f"{self.session.active_file or '(none)'}\n"
-            f"ACTIVE LANGUAGE: "
-            f"{self.session.active_language or '(none)'}\n"
-            f"ACTIVE TECHNOLOGY: "
-            f"{self.session.active_technology or '(none)'}\n"
-            f"ACTIVE GOAL: "
-            f"{self.session.active_task_description or '(none)'}\n\n"
-            f"TOUCHED FILES:\n"
-            f"{touched}\n\n"
-            f"AVAILABLE PAYLOAD REFS:\n"
-            f"{payloads}\n\n"
-            "RECENT CONVERSATION:\n" + ("\n".join(recent) or "(none)")
-        )
+        return (f"ACTIVE ROOT: "
+                f"{self.session.active_root or '(none)'}\n"
+                f"ACTIVE FILE: "
+                f"{self.session.active_file or '(none)'}\n"
+                f"ACTIVE LANGUAGE: "
+                f"{self.session.active_language or '(none)'}\n"
+                f"ACTIVE TECHNOLOGY: "
+                f"{self.session.active_technology or '(none)'}\n"
+                f"ACTIVE GOAL: "
+                f"{self.session.active_task_description or '(none)'}\n\n"
+                f"TOUCHED FILES:\n"
+                f"{touched}\n\n"
+                f"AVAILABLE PAYLOAD REFS:\n"
+                f"{payloads}\n\n"
+                "RECENT CONVERSATION:\n" + ("\n".join(recent) or "(none)"))
 
     # ========================================================
     # DEBUG
     # ========================================================
 
-    def debug_level(
-        self,
-    ) -> int:
-        return int(
-            self.config.get(
-                "debug_level",
-                1,
-            )
-        )
+    def debug_level(self, ) -> int:
+        return int(self.config.get(
+            "debug_level",
+            1,
+        ))
 
     def debug_log(
         self,
@@ -1036,8 +938,8 @@ class CodingAgent:
             return
 
         if isinstance(
-            value,
-            str,
+                value,
+                str,
         ):
             rendered = value
 
@@ -1070,17 +972,14 @@ class CodingAgent:
         self,
         messages: list[dict[str, str]],
     ) -> int:
-        text = "\n".join(
-            (f"{message['role']}:\n" f"{message['content']}") for message in messages
-        )
+        text = "\n".join((f"{message['role']}:\n"
+                          f"{message['content']}") for message in messages)
 
         try:
-            return len(
-                self.llm.tokenize(
-                    text.encode("utf-8"),
-                    add_bos=False,
-                )
-            )
+            return len(self.llm.tokenize(
+                text.encode("utf-8"),
+                add_bos=False,
+            ))
 
         except Exception:
             return max(
@@ -1096,8 +995,8 @@ class CodingAgent:
         self,
         messages: list[dict[str, str]],
     ) -> tuple[
-        dict[str, Any],
-        str,
+            dict[str, Any],
+            str,
     ]:
         if self.debug_level() >= 3:
             self.debug_log(
@@ -1120,12 +1019,10 @@ class CodingAgent:
             "stream": True,
         }
 
-        configured_max_tokens = int(
-            self.config.get(
-                "max_model_output_tokens",
-                0,
-            )
-        )
+        configured_max_tokens = int(self.config.get(
+            "max_model_output_tokens",
+            0,
+        ))
 
         if configured_max_tokens > 0:
             completion_kwargs["max_tokens"] = configured_max_tokens
@@ -1155,6 +1052,7 @@ class CodingAgent:
 
             if not text:
                 continue
+            print(text, end="", flush=True)
 
             full_content += text
 
@@ -1182,7 +1080,8 @@ class CodingAgent:
                 "type": "invalid",
                 "tool": "",
                 "args": {},
-                "message": ("Invalid JSON returned " f"by model: {error}"),
+                "message": ("Invalid JSON returned "
+                            f"by model: {error}"),
             }
 
         return parsed, full_content
@@ -1191,17 +1090,13 @@ class CodingAgent:
     # PAYLOAD
     # ========================================================
 
-    def payload_threshold(
-        self,
-    ) -> int:
+    def payload_threshold(self, ) -> int:
         return max(
             200,
-            int(
-                self.config.get(
-                    "payload_externalize_chars",
-                    700,
-                )
-            ),
+            int(self.config.get(
+                "payload_externalize_chars",
+                700,
+            )),
         )
 
     def _externalize_string_field(
@@ -1210,20 +1105,20 @@ class CodingAgent:
         inline_key: str,
         ref_key: str,
     ) -> tuple[
-        str | None,
-        int,
+            str | None,
+            int,
     ]:
         value = args.get(inline_key)
 
         if not isinstance(
-            value,
-            str,
+                value,
+                str,
         ):
             existing_ref = args.get(ref_key)
 
             if isinstance(
-                existing_ref,
-                str,
+                    existing_ref,
+                    str,
             ):
                 self.session.payload_refs.add(existing_ref)
 
@@ -1252,31 +1147,29 @@ class CodingAgent:
         self,
         action: dict[str, Any],
     ) -> tuple[
-        dict[str, Any],
-        list[str],
+            dict[str, Any],
+            list[str],
     ]:
         compact = copy.deepcopy(action)
 
         args = compact.get("args")
 
         if not isinstance(
-            args,
-            dict,
+                args,
+                dict,
         ):
             return compact, []
 
-        tool_name = str(
-            compact.get(
-                "tool",
-                "",
-            )
-        )
+        tool_name = str(compact.get(
+            "tool",
+            "",
+        ))
 
         notes: list[str] = []
 
         if tool_name in {
-            "create_file",
-            "replace_file",
+                "create_file",
+                "replace_file",
         }:
             payload_id, chars = self._externalize_string_field(
                 args,
@@ -1285,9 +1178,9 @@ class CodingAgent:
             )
 
             if payload_id:
-                notes.append(
-                    f"content stored as " f"{payload_id} " f"({chars:,} chars)"
-                )
+                notes.append(f"content stored as "
+                             f"{payload_id} "
+                             f"({chars:,} chars)")
 
         elif tool_name == "apply_patch":
             old_ref, old_chars = self._externalize_string_field(
@@ -1303,26 +1196,26 @@ class CodingAgent:
             )
 
             if old_ref:
-                notes.append(
-                    f"old_text stored as " f"{old_ref} " f"({old_chars:,} chars)"
-                )
+                notes.append(f"old_text stored as "
+                             f"{old_ref} "
+                             f"({old_chars:,} chars)")
 
             if new_ref:
-                notes.append(
-                    f"new_text stored as " f"{new_ref} " f"({new_chars:,} chars)"
-                )
+                notes.append(f"new_text stored as "
+                             f"{new_ref} "
+                             f"({new_chars:,} chars)")
 
         elif tool_name == "create_files":
             files = args.get("files")
 
             if isinstance(
-                files,
-                list,
+                    files,
+                    list,
             ):
                 for item in files:
                     if not isinstance(
-                        item,
-                        dict,
+                            item,
+                            dict,
                     ):
                         continue
 
@@ -1333,11 +1226,9 @@ class CodingAgent:
                     )
 
                     if payload_id:
-                        notes.append(
-                            f"{item.get('path', 'file')} "
-                            f"stored as {payload_id} "
-                            f"({chars:,} chars)"
-                        )
+                        notes.append(f"{item.get('path', 'file')} "
+                                     f"stored as {payload_id} "
+                                     f"({chars:,} chars)")
 
         return compact, notes
 
@@ -1345,9 +1236,7 @@ class CodingAgent:
     # MEMORY
     # ========================================================
 
-    def memory_card(
-        self,
-    ) -> str:
+    def memory_card(self, ) -> str:
         facts = self.memory.load_facts(limit=20)
 
         if not facts:
@@ -1357,12 +1246,10 @@ class CodingAgent:
         seen: set[str] = set()
 
         for row in reversed(facts):
-            fact = str(
-                row.get(
-                    "fact",
-                    "",
-                )
-            ).strip()
+            fact = str(row.get(
+                "fact",
+                "",
+            )).strip()
 
             if not fact or fact in seen:
                 continue
@@ -1400,9 +1287,7 @@ class CodingAgent:
 
         self.session.touched_files.add(target)
 
-    def derive_active_root(
-        self,
-    ) -> Path:
+    def derive_active_root(self, ) -> Path:
         if self.session.active_root:
             try:
                 candidate = self.workspace.resolve(self.session.active_root)
@@ -1445,28 +1330,24 @@ class CodingAgent:
             return
 
         if tool_name in {
-            "create_file",
-            "replace_file",
-            "apply_patch",
-            "read_file",
-            "verify_file_exists",
+                "create_file",
+                "replace_file",
+                "apply_patch",
+                "read_file",
+                "verify_file_exists",
         }:
-            path = self.normalize_workspace_path(
-                str(
-                    args.get(
-                        "path",
-                        "",
-                    )
-                )
-            )
+            path = self.normalize_workspace_path(str(args.get(
+                "path",
+                "",
+            )))
 
             if path:
                 self.session.touched_files.add(path)
 
                 if not self.session.active_file and tool_name in {
-                    "create_file",
-                    "replace_file",
-                    "apply_patch",
+                        "create_file",
+                        "replace_file",
+                        "apply_patch",
                 }:
                     self.session.active_file = path
 
@@ -1475,21 +1356,14 @@ class CodingAgent:
                     self.session.active_root = "" if parent == "." else parent
 
         elif tool_name == "create_files":
-            for item in (
-                args.get(
+            for item in (args.get(
                     "files",
-                    [],
-                )
-                or []
-            ):
-                path = self.normalize_workspace_path(
-                    str(
-                        item.get(
-                            "path",
-                            "",
-                        )
-                    )
-                )
+                [],
+            ) or []):
+                path = self.normalize_workspace_path(str(item.get(
+                    "path",
+                    "",
+                )))
 
                 if path:
                     self.session.touched_files.add(path)
@@ -1502,39 +1376,34 @@ class CodingAgent:
         self,
         state: AgentState,
     ) -> str:
-        def show(
-            values: set[str],
-        ) -> str:
+
+        def show(values: set[str], ) -> str:
             if not values:
                 return "(none)"
 
             return "\n".join(f"- {value}" for value in sorted(values))
 
-        blockers = (
-            "\n".join(f"- {blocker}" for blocker in state.blockers[-5:]) or "(none)"
-        )
+        blockers = ("\n".join(f"- {blocker}" for blocker in state.blockers[-5:]) or "(none)")
 
-        return (
-            f"GOAL:\n{state.task}\n\n"
-            "PRIMARY FILE:\n"
-            f"{self.session.active_file or '(none)'}\n\n"
-            "PRIMARY ROOT:\n"
-            f"{self.session.active_root or '(none)'}\n\n"
-            f"CREATED:\n{show(state.created_files)}\n\n"
-            f"MODIFIED:\n{show(state.modified_files)}\n\n"
-            f"READ:\n{show(state.read_files)}\n\n"
-            f"BLOCKERS:\n{blockers}\n\n"
-            "MUTATION REVISION: "
-            f"{state.mutation_revision}\n"
-            "VERIFIED REVISION: "
-            f"{state.verified_revision}\n\n"
-            "IMPLEMENTATION REQUIRED: "
-            f"{state.implementation_required}\n"
-            "IMPLEMENTATION TARGET: "
-            f"{state.implementation_target or '(none)'}\n\n"
-            "LATEST RESULT:\n"
-            f"{state.latest_result or '(none)'}"
-        )
+        return (f"GOAL:\n{state.task}\n\n"
+                "PRIMARY FILE:\n"
+                f"{self.session.active_file or '(none)'}\n\n"
+                "PRIMARY ROOT:\n"
+                f"{self.session.active_root or '(none)'}\n\n"
+                f"CREATED:\n{show(state.created_files)}\n\n"
+                f"MODIFIED:\n{show(state.modified_files)}\n\n"
+                f"READ:\n{show(state.read_files)}\n\n"
+                f"BLOCKERS:\n{blockers}\n\n"
+                "MUTATION REVISION: "
+                f"{state.mutation_revision}\n"
+                "VERIFIED REVISION: "
+                f"{state.verified_revision}\n\n"
+                "IMPLEMENTATION REQUIRED: "
+                f"{state.implementation_required}\n"
+                "IMPLEMENTATION TARGET: "
+                f"{state.implementation_target or '(none)'}\n\n"
+                "LATEST RESULT:\n"
+                f"{state.latest_result or '(none)'}")
 
     # ========================================================
     # IMPLEMENTATION PHASE
@@ -1559,23 +1428,17 @@ class CodingAgent:
         if not active_file:
             return ""
 
-        requested = self.normalize_workspace_path(
-            str(
-                args.get(
-                    "path",
-                    "",
-                )
-            )
-        )
+        requested = self.normalize_workspace_path(str(args.get(
+            "path",
+            "",
+        )))
 
         if requested.lower() != active_file.lower():
             return ""
 
         task_text = (state.task + " " + self.session.active_task_description).lower()
 
-        if not any(
-            word in task_text
-            for word in (
+        if not any(word in task_text for word in (
                 "complete",
                 "finish",
                 "implement",
@@ -1583,8 +1446,7 @@ class CodingAgent:
                 "build",
                 "make",
                 "fix",
-            )
-        ):
+        )):
             return ""
 
         match = re.search(
@@ -1604,12 +1466,10 @@ class CodingAgent:
 
         state.implementation_target = active_file
 
-        return (
-            "The active target is only "
-            f"{line_count} lines and appears "
-            "to be a stub. Implement it now. "
-            "Prefer replace_file for a full rewrite."
-        )
+        return ("The active target is only "
+                f"{line_count} lines and appears "
+                "to be a stub. Implement it now. "
+                "Prefer replace_file for a full rewrite.")
 
     def implementation_phase_block(
         self,
@@ -1623,23 +1483,17 @@ class CodingAgent:
         target = state.implementation_target
 
         if tool_name not in {
-            "replace_file",
-            "apply_patch",
+                "replace_file",
+                "apply_patch",
         }:
-            return (
-                "The active target has already been "
-                "inspected and is incomplete. "
-                f"Implement {target} now."
-            )
+            return ("The active target has already been "
+                    "inspected and is incomplete. "
+                    f"Implement {target} now.")
 
-        requested = self.normalize_workspace_path(
-            str(
-                args.get(
-                    "path",
-                    "",
-                )
-            )
-        )
+        requested = self.normalize_workspace_path(str(args.get(
+            "path",
+            "",
+        )))
 
         if requested.lower() != target.lower():
             return "Implementation is currently " f"required on {target}."
@@ -1660,14 +1514,10 @@ class CodingAgent:
     ) -> bool:
         progress = False
 
-        path = self.normalize_workspace_path(
-            str(
-                args.get(
-                    "path",
-                    "",
-                )
-            )
-        )
+        path = self.normalize_workspace_path(str(args.get(
+            "path",
+            "",
+        )))
 
         if success:
             if tool_name == "create_file" and path:
@@ -1676,21 +1526,14 @@ class CodingAgent:
                 state.created_files.add(path)
 
             elif tool_name == "create_files":
-                for item in (
-                    args.get(
+                for item in (args.get(
                         "files",
-                        [],
-                    )
-                    or []
-                ):
-                    item_path = self.normalize_workspace_path(
-                        str(
-                            item.get(
-                                "path",
-                                "",
-                            )
-                        )
-                    )
+                    [],
+                ) or []):
+                    item_path = self.normalize_workspace_path(str(item.get(
+                        "path",
+                        "",
+                    )))
 
                     if not item_path:
                         continue
@@ -1700,22 +1543,16 @@ class CodingAgent:
 
                     state.created_files.add(item_path)
 
-            elif (
-                tool_name
-                in {
+            elif (tool_name in {
                     "replace_file",
                     "apply_patch",
-                }
-                and path
-            ):
+            } and path):
                 state.modified_files.add(path)
 
                 progress = True
 
-                if (
-                    state.implementation_required
-                    and path.lower() == state.implementation_target.lower()
-                ):
+                if (state.implementation_required
+                        and path.lower() == state.implementation_target.lower()):
                     state.implementation_required = False
 
             elif tool_name == "read_file" and path:
@@ -1727,23 +1564,23 @@ class CodingAgent:
                 progress = True
 
             elif tool_name in {
-                "run_project_tests",
-                "run_project_build",
-                "run_project_lint",
-                "run_project_typecheck",
-                "validate_python",
+                    "run_project_tests",
+                    "run_project_build",
+                    "run_project_lint",
+                    "run_project_typecheck",
+                    "validate_python",
             }:
                 progress = True
 
                 state.verified_revision = state.mutation_revision
 
             elif tool_name in {
-                "verify_file_exists",
-                "verify_files_exist",
-                "verify_directory_exists",
-                "verify_file_content",
-                "verify_line_count",
-                "count_matches",
+                    "verify_file_exists",
+                    "verify_files_exist",
+                    "verify_directory_exists",
+                    "verify_file_content",
+                    "verify_line_count",
+                    "count_matches",
             }:
                 progress = True
 
@@ -1840,11 +1677,9 @@ class CodingAgent:
             return "The file exists. Use replace_file " "or apply_patch."
 
         if tool_name == "apply_patch" and "old_text was not found" in lowered:
-            return (
-                "old_text did not match the current file. "
-                "Re-read the target before retrying. "
-                "Do not retry the same stale old_text_ref."
-            )
+            return ("old_text did not match the current file. "
+                    "Re-read the target before retrying. "
+                    "Do not retry the same stale old_text_ref.")
 
         if "binary" in lowered:
             return "Do not create fake binary files."
@@ -1887,17 +1722,12 @@ class CodingAgent:
             "count_matches",
         }
 
-        if (
-            tool_name in weak_tools
-            and state.mutation_revision > state.verified_revision
-            and state.verification_blocked_revision != state.mutation_revision
-        ):
-            return (
-                "Existence and content checks do not verify source code. "
-                "Use run_project_build, run_project_tests, run_project_typecheck, "
-                "run_project_lint, or validate_python. If no suitable command exists, "
-                "try the relevant project verifier once so the blocker can be recorded."
-            )
+        if (tool_name in weak_tools and state.mutation_revision > state.verified_revision
+                and state.verification_blocked_revision != state.mutation_revision):
+            return ("Existence and content checks do not verify source code. "
+                    "Use run_project_build, run_project_tests, run_project_typecheck, "
+                    "run_project_lint, or validate_python. If no suitable command exists, "
+                    "try the relevant project verifier once so the blocker can be recorded.")
 
         return ""
 
@@ -1924,13 +1754,14 @@ class CodingAgent:
         self,
         state: AgentState,
     ) -> tuple[
-        bool,
-        str,
+            bool,
+            str,
     ]:
         if state.implementation_required:
             return (
                 False,
-                ("The active stub has not " "been implemented."),
+                ("The active stub has not "
+                 "been implemented."),
             )
 
         if state.mutation_revision == 0:
@@ -1944,12 +1775,10 @@ class CodingAgent:
 
         return (
             False,
-            (
-                "The latest source mutation needs strong verification. "
-                "Use run_project_build, run_project_tests, run_project_typecheck, "
-                "run_project_lint, or validate_python. Weak existence/content checks "
-                "are not sufficient."
-            ),
+            ("The latest source mutation needs strong verification. "
+             "Use run_project_build, run_project_tests, run_project_typecheck, "
+             "run_project_lint, or validate_python. Weak existence/content checks "
+             "are not sufficient."),
         )
 
     # ========================================================
@@ -1962,26 +1791,22 @@ class CodingAgent:
         state: AgentState,
         task_context: str,
     ) -> list[dict[str, str]]:
-        ratio = float(
-            self.config.get(
-                "trim_context_ratio",
-                0.72,
-            )
-        )
+        ratio = float(self.config.get(
+            "trim_context_ratio",
+            0.72,
+        ))
 
         if self.token_count(messages) < int(self.n_ctx * ratio):
             return messages
 
         logger.info("🧹 Trimming old observations...")
 
-        keep_count = int(
-            self.config.get(
-                "recent_observations",
-                6,
-            )
-        )
+        keep_count = int(self.config.get(
+            "recent_observations",
+            6,
+        ))
 
-        recent = messages[2:][-(keep_count * 2) :]
+        recent = messages[2:][-(keep_count * 2):]
 
         return [
             {
@@ -1990,11 +1815,7 @@ class CodingAgent:
             },
             {
                 "role": "user",
-                "content": (
-                    task_context
-                    + "\n\nCURRENT WORKING STATE:\n"
-                    + self.state_card(state)
-                ),
+                "content": (task_context + "\n\nCURRENT WORKING STATE:\n" + self.state_card(state)),
             },
             *recent,
         ]
@@ -2024,9 +1845,7 @@ class CodingAgent:
             self.session.active_language = sorted(constraints.requested_languages)[0]
 
         if constraints.requested_technologies:
-            self.session.active_technology = sorted(constraints.requested_technologies)[
-                0
-            ]
+            self.session.active_technology = sorted(constraints.requested_technologies)[0]
 
         if not is_short_followup(task):
             self.session.active_task_description = task
@@ -2052,28 +1871,25 @@ class CodingAgent:
             command_root=active_root,
         )
 
-        task_context = (
-            f"CURRENT USER REQUEST:\n{task}\n\n"
-            "SESSION CONTEXT:\n"
-            f"{self.session_card()}\n\n"
-            "HARD TASK CONSTRAINTS:\n"
-            f"{constraints_to_prompt(constraints)}\n\n"
-            "ACTIVE PROJECT CAPABILITIES:\n"
-            f"{profile_to_prompt(profile)}\n\n"
-            "ENVIRONMENT:\n"
-            + json.dumps(
-                {
-                    "os": (f"{platform.system()} " f"{platform.release()}"),
-                    "workspace": str(self.workspace.root),
-                },
-                indent=2,
-            )
-            + "\n\n"
-            "VERIFIED MEMORY:\n"
-            f"{self.memory_card()}\n\n"
-            "If ACTIVE FILE is known, use it "
-            "before searching the repository."
-        )
+        task_context = (f"CURRENT USER REQUEST:\n{task}\n\n"
+                        "SESSION CONTEXT:\n"
+                        f"{self.session_card()}\n\n"
+                        "HARD TASK CONSTRAINTS:\n"
+                        f"{constraints_to_prompt(constraints)}\n\n"
+                        "ACTIVE PROJECT CAPABILITIES:\n"
+                        f"{profile_to_prompt(profile)}\n\n"
+                        "ENVIRONMENT:\n" + json.dumps(
+                            {
+                                "os": (f"{platform.system()} "
+                                       f"{platform.release()}"),
+                                "workspace": str(self.workspace.root),
+                            },
+                            indent=2,
+                        ) + "\n\n"
+                        "VERIFIED MEMORY:\n"
+                        f"{self.memory_card()}\n\n"
+                        "If ACTIVE FILE is known, use it "
+                        "before searching the repository.")
 
         messages = [
             {
@@ -2091,8 +1907,8 @@ class CodingAgent:
         max_no_progress = int(self.config["max_no_progress_steps"])
 
         for step in range(
-            1,
-            max_steps + 1,
+                1,
+                max_steps + 1,
         ):
             state.step = step
 
@@ -2135,60 +1951,46 @@ class CodingAgent:
 
                 state.no_progress_steps += 1
 
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": json.dumps(
-                            action,
-                            ensure_ascii=False,
-                        ),
-                    }
-                )
+                messages.append({
+                    "role": "assistant",
+                    "content": json.dumps(
+                        action,
+                        ensure_ascii=False,
+                    ),
+                })
 
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": (
-                            "CONTROLLER ACTION FORMAT ERROR:\n"
-                            f"{semantic_reason}\n\n"
-                            "Correct the action and try again."
-                        ),
-                    }
-                )
+                messages.append({
+                    "role":
+                    "user",
+                    "content": ("CONTROLLER ACTION FORMAT ERROR:\n"
+                                f"{semantic_reason}\n\n"
+                                "Correct the action and try again."),
+                })
 
                 if state.no_progress_steps >= max_no_progress:
                     return "🛑 Agent repeatedly returned " "invalid action formats."
 
                 continue
 
-            action_type = str(
-                action.get(
-                    "type",
-                    "",
-                )
-            )
+            action_type = str(action.get(
+                "type",
+                "",
+            ))
 
-            tool_name = str(
-                action.get(
-                    "tool",
-                    "",
-                )
-            )
+            tool_name = str(action.get(
+                "tool",
+                "",
+            ))
 
-            args = (
-                action.get(
-                    "args",
-                    {},
-                )
-                or {}
-            )
+            args = (action.get(
+                "args",
+                {},
+            ) or {})
 
-            model_message = str(
-                action.get(
-                    "message",
-                    "",
-                )
-            )
+            model_message = str(action.get(
+                "message",
+                "",
+            ))
 
             if action_type == "final":
                 allowed, reason = self.completion_allowed(state)
@@ -2209,22 +2011,19 @@ class CodingAgent:
 
                 state.no_progress_steps += 1
 
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": json.dumps(
-                            action,
-                            ensure_ascii=False,
-                        ),
-                    }
-                )
+                messages.append({
+                    "role": "assistant",
+                    "content": json.dumps(
+                        action,
+                        ensure_ascii=False,
+                    ),
+                })
 
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": ("CONTROLLER:\n" f"{reason}"),
-                    }
-                )
+                messages.append({
+                    "role": "user",
+                    "content": ("CONTROLLER:\n"
+                                f"{reason}"),
+                })
 
                 continue
 
@@ -2242,22 +2041,19 @@ class CodingAgent:
 
                 state.no_progress_steps += 1
 
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": json.dumps(
-                            action,
-                            ensure_ascii=False,
-                        ),
-                    }
-                )
+                messages.append({
+                    "role": "assistant",
+                    "content": json.dumps(
+                        action,
+                        ensure_ascii=False,
+                    ),
+                })
 
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": ("CONTROLLER TOOL SCHEMA ERROR:\n" f"{reason}"),
-                    }
-                )
+                messages.append({
+                    "role": "user",
+                    "content": ("CONTROLLER TOOL SCHEMA ERROR:\n"
+                                f"{reason}"),
+                })
 
                 continue
 
@@ -2276,22 +2072,19 @@ class CodingAgent:
 
                 state.no_progress_steps += 1
 
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": json.dumps(
-                            action,
-                            ensure_ascii=False,
-                        ),
-                    }
-                )
+                messages.append({
+                    "role": "assistant",
+                    "content": json.dumps(
+                        action,
+                        ensure_ascii=False,
+                    ),
+                })
 
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": ("CONTROLLER:\n" f"{implementation_reason}"),
-                    }
-                )
+                messages.append({
+                    "role": "user",
+                    "content": ("CONTROLLER:\n"
+                                f"{implementation_reason}"),
+                })
 
                 continue
 
@@ -2311,22 +2104,19 @@ class CodingAgent:
 
                 state.no_progress_steps += 1
 
-                messages.append(
-                    {
-                        "role": "assistant",
-                        "content": json.dumps(
-                            action,
-                            ensure_ascii=False,
-                        ),
-                    }
-                )
+                messages.append({
+                    "role": "assistant",
+                    "content": json.dumps(
+                        action,
+                        ensure_ascii=False,
+                    ),
+                })
 
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": ("CONTROLLER HARD-CONSTRAINT BLOCK:\n" f"{reason}"),
-                    }
-                )
+                messages.append({
+                    "role": "user",
+                    "content": ("CONTROLLER HARD-CONSTRAINT BLOCK:\n"
+                                f"{reason}"),
+                })
 
                 continue
 
@@ -2343,12 +2133,11 @@ class CodingAgent:
 
                 state.no_progress_steps += 1
 
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": ("CONTROLLER:\n" f"{capability_reason}"),
-                    }
-                )
+                messages.append({
+                    "role": "user",
+                    "content": ("CONTROLLER:\n"
+                                f"{capability_reason}"),
+                })
 
                 continue
 
@@ -2365,12 +2154,11 @@ class CodingAgent:
 
                 state.no_progress_steps += 1
 
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": ("CONTROLLER:\n" f"{verification_reason}"),
-                    }
-                )
+                messages.append({
+                    "role": "user",
+                    "content": ("CONTROLLER:\n"
+                                f"{verification_reason}"),
+                })
 
                 continue
 
@@ -2382,24 +2170,18 @@ class CodingAgent:
                     },
                     sort_keys=True,
                     ensure_ascii=False,
-                ).encode("utf-8")
-            ).hexdigest()
+                ).encode("utf-8")).hexdigest()
 
-            count = (
-                state.action_counts.get(
-                    fingerprint,
-                    0,
-                )
-                + 1
-            )
+            count = (state.action_counts.get(
+                fingerprint,
+                0,
+            ) + 1)
 
             state.action_counts[fingerprint] = count
 
             if count > MAX_IDENTICAL_ACTIONS:
-                warning = (
-                    "This exact action has already been attempted multiple times. "
-                    + self.repeated_action_hint(tool_name)
-                )
+                warning = ("This exact action has already been attempted multiple times. " +
+                           self.repeated_action_hint(tool_name))
 
                 logger.warning("")
                 logger.warning(
@@ -2409,12 +2191,11 @@ class CodingAgent:
 
                 state.no_progress_steps += 1
 
-                messages.append(
-                    {
-                        "role": "user",
-                        "content": ("CONTROLLER:\n" f"{warning}"),
-                    }
-                )
+                messages.append({
+                    "role": "user",
+                    "content": ("CONTROLLER:\n"
+                                f"{warning}"),
+                })
 
                 continue
 
@@ -2463,8 +2244,7 @@ class CodingAgent:
                     ),
                     text=output,
                     success=success,
-                )
-            )
+                ))
 
             self.record_tool_targets(
                 tool_name,
@@ -2505,48 +2285,39 @@ class CodingAgent:
                     output,
                 )
 
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": json.dumps(
-                        compact_action,
-                        ensure_ascii=False,
-                    ),
-                }
-            )
+            messages.append({
+                "role": "assistant",
+                "content": json.dumps(
+                    compact_action,
+                    ensure_ascii=False,
+                ),
+            })
 
             model_output = truncate_text(
                 output,
                 6000,
             )
 
-            observation_message = (
-                f"TOOL OBSERVATION {observation_id}\n"
-                f"success={success}\n"
-                f"tool={tool_name}\n\n"
-                f"{model_output}\n\n"
-            )
+            observation_message = (f"TOOL OBSERVATION {observation_id}\n"
+                                   f"success={success}\n"
+                                   f"tool={tool_name}\n\n"
+                                   f"{model_output}\n\n")
 
             if payload_notes:
-                observation_message += (
-                    "PAYLOADS:\n"
-                    + "\n".join(f"- {note}" for note in payload_notes)
-                    + "\n\n"
-                    "Reuse the shown *_ref instead of "
-                    "regenerating identical content.\n\n"
-                )
+                observation_message += ("PAYLOADS:\n" +
+                                        "\n".join(f"- {note}" for note in payload_notes) + "\n\n"
+                                        "Reuse the shown *_ref instead of "
+                                        "regenerating identical content.\n\n")
 
             if success and tool_name in {
-                "create_file",
-                "create_files",
-                "replace_file",
-                "apply_patch",
+                    "create_file",
+                    "create_files",
+                    "replace_file",
+                    "apply_patch",
             }:
-                observation_message += (
-                    "WORKSPACE FILE IS NOW AUTHORITATIVE.\n"
-                    "Do not regenerate or resend its full content.\n"
-                    "Use read_file for later inspection.\n\n"
-                )
+                observation_message += ("WORKSPACE FILE IS NOW AUTHORITATIVE.\n"
+                                        "Do not regenerate or resend its full content.\n"
+                                        "Use read_file for later inspection.\n\n")
 
             observation_message += "CURRENT WORKING STATE:\n" + self.state_card(state)
 
@@ -2574,20 +2345,18 @@ class CodingAgent:
                         hint,
                     )
 
-            messages.append(
-                {
-                    "role": "user",
-                    "content": observation_message,
-                }
-            )
+            messages.append({
+                "role": "user",
+                "content": observation_message,
+            })
 
             if success and tool_name in {
-                "create_file",
-                "create_files",
-                "replace_file",
-                "apply_patch",
-                "delete_file",
-                "undo_last_edit",
+                    "create_file",
+                    "create_files",
+                    "replace_file",
+                    "apply_patch",
+                    "delete_file",
+                    "undo_last_edit",
             }:
                 new_active_root = self.derive_active_root()
 
@@ -2608,13 +2377,11 @@ class CodingAgent:
                     )
 
             if state.no_progress_steps >= max_no_progress:
-                result = (
-                    "🛑 Agent stopped because no meaningful "
-                    "progress was made for "
-                    f"{state.no_progress_steps} "
-                    "consecutive steps.\n\n"
-                    f"{self.state_card(state)}"
-                )
+                result = ("🛑 Agent stopped because no meaningful "
+                          "progress was made for "
+                          f"{state.no_progress_steps} "
+                          "consecutive steps.\n\n"
+                          f"{self.state_card(state)}")
 
                 logger.error(
                     "%s",
@@ -2648,9 +2415,7 @@ class CodingAgent:
 # ============================================================
 
 
-def create_agent(
-    config: dict[str, Any],
-) -> CodingAgent:
+def create_agent(config: dict[str, Any], ) -> CodingAgent:
     return CodingAgent(config)
 
 
@@ -2664,12 +2429,10 @@ def main() -> None:
 
     configured_logger, log_path = configure_logging(
         LOG_ROOT,
-        enabled=bool(
-            config.get(
-                "logging_enabled",
-                True,
-            )
-        ),
+        enabled=bool(config.get(
+            "logging_enabled",
+            True,
+        )),
     )
 
     if log_path is not None:
