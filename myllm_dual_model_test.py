@@ -20,7 +20,7 @@ def print(*args, **kwargs):
     # Append to log file
     message = " ".join(str(arg) for arg in args)
 
-    with open(LOG_FILE, "a", encoding="utf-8") as f:
+    with open(LOG_FILE, "a+", encoding="utf-8") as f:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         f.write(f"[{timestamp}] {message}\n")
 
