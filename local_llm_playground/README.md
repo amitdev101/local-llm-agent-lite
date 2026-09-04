@@ -35,6 +35,7 @@ python local_llm_playground/main.py
 
 - 🤖 Model selector beside the prompt
 - 🌊 Streaming responses with **Stop**
+- 💭 Expandable **Worked for…** reasoning on every assistant response
 - 📋 Copy, Regenerate, and Continue actions
 - 💬 Searchable, date-grouped recent chats
 - 🧠 Editable system prompt and thinking mode

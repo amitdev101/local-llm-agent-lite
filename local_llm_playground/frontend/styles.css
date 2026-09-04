@@ -9,7 +9,9 @@
   --line: #414141;
   --accent: #10a37f;
   --danger: #ef6a6a;
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: "Cascadia Code", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-family: var(--font-sans);
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -55,7 +57,7 @@ button { color: inherit; }
 .welcome-mark { width: 48px; height: 48px; margin: auto; border-radius: 15px; font-size: 24px; }
 .welcome h1 { color: var(--text); font-size: 28px; margin: 18px 0 8px; }
 .first-steps { display: flex; justify-content: center; gap: 28px; margin: 26px auto 0; padding: 0; list-style-position: inside; font-size: 13px; }
-.message { max-width: 780px; margin: 0 auto 28px; line-height: 1.65; }
+.message { max-width: 780px; margin: 0 auto 28px; font-size: 15px; line-height: 1.6; }
 .message.user { display: flex; justify-content: flex-end; }
 .message.user .bubble { max-width: 80%; background: var(--panel-2); padding: 10px 16px; border-radius: 18px; white-space: pre-wrap; }
 .assistant-head { display: flex; gap: 9px; align-items: center; margin-bottom: 8px; font-size: 13px; font-weight: 700; }
@@ -63,11 +65,14 @@ button { color: inherit; }
 .content { overflow-wrap: anywhere; }
 .content p { margin: 0 0 12px; }
 .content pre { position: relative; background: #101010; border: 1px solid #333; border-radius: 10px; padding: 38px 14px 14px; overflow-x: auto; }
-.content code { font-family: "Cascadia Code", Consolas, monospace; font-size: 13px; }
+.content code { font-family: var(--font-mono); font-size: 13px; }
 .copy-code { position: absolute; right: 8px; top: 7px; border: 0; background: #292929; border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 11px; }
-.thinking-box { border-left: 2px solid #555; margin: 8px 0 16px; padding-left: 12px; color: var(--muted); }
-.thinking-box summary { cursor: pointer; font-size: 13px; }
-.thinking-box pre { white-space: pre-wrap; font: inherit; margin: 8px 0; }
+.thinking-box { margin: 3px 0 14px; color: var(--muted); }
+.thinking-box summary { width: fit-content; cursor: pointer; font-size: 14px; line-height: 1.5; list-style-position: inside; user-select: none; }
+.thinking-box summary:hover { color: var(--text); }
+.thinking-content { margin: 9px 0 4px; padding: 1px 0 1px 14px; border-left: 2px solid #454545; color: #b7b7b7; font-size: 14px; line-height: 1.55; }
+.thinking-content p { margin: 0 0 8px; }
+.thinking-content pre { white-space: pre-wrap; font: inherit; margin: 0; }
 .metrics { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; color: #858585; font-size: 11px; }
 .metrics span { border: 1px solid #3c3c3c; border-radius: 12px; padding: 2px 7px; }
 .message-actions { display: flex; gap: 4px; margin-top: 5px; }

@@ -59,6 +59,11 @@ function splitThinking(raw) {
   return { thinking: raw.slice(start + 7, end), answer: raw.slice(0, start) + raw.slice(end + 8) };
 }
 
+function workedFor(seconds) {
+  const value = Math.max(0, Number(seconds) || 0);
+  return value < 10 ? `${value.toFixed(1)}s` : `${Math.round(value)}s`;
+}
+
 function attachCopyButtons(container) {
   container.querySelectorAll(".copy-code").forEach((button) => {
     button.onclick = async () => {
@@ -88,12 +93,16 @@ function messageElement(role, content = "", metrics = null, status = "complete",
   return wrapper;
 }
 
-function updateAssistant(element, raw, metrics = null, status = "complete") {
+function updateAssistant(element, raw, metrics = null, status = "complete", liveSeconds = 0) {
   element.dataset.raw = raw;
   const parts = splitThinking(raw);
   const thinkingSlot = element.querySelector(".thinking-slot");
-  thinkingSlot.innerHTML = parts.thinking
-    ? `<details class="thinking-box"><summary>Thinking</summary><pre>${escapeHtml(parts.thinking)}</pre></details>` : "";
+  const duration = metrics?.total_seconds ?? liveSeconds;
+  const summary = status === "streaming" ? `Working for ${workedFor(duration)}` : `Worked for ${workedFor(duration)}`;
+  const reasoning = parts.thinking.trim() || (status === "streaming"
+    ? "Waiting for the model's reasoning…"
+    : "This model did not return a separate thinking trace.");
+  thinkingSlot.innerHTML = `<details class="thinking-box"${status === "streaming" && parts.thinking ? " open" : ""}><summary>${escapeHtml(summary)}</summary><div class="thinking-content">${markdown(reasoning)}</div></details>`;
   const content = element.querySelector(".content");
   if (status === "streaming") content.textContent = parts.answer;
   else {
@@ -315,7 +324,11 @@ async function send(message = ui.prompt.value.trim()) {
   generating = true; ui.quickModelSelect.disabled = true; ui.quickLoadModel.disabled = true; ui.sendButton.classList.add("hidden"); ui.stopButton.classList.remove("hidden");
   let elapsedSeconds = 0;
   setStatus("generating", "Preparing prompt…");
-  generationTimer = setInterval(() => setStatus("generating", `Generating · ${++elapsedSeconds}s`), 1000);
+  generationTimer = setInterval(() => {
+    elapsedSeconds += 1;
+    setStatus("generating", `Generating · ${elapsedSeconds}s`);
+    updateAssistant(assistant, raw, null, "streaming", elapsedSeconds);
+  }, 1000);
   let raw = "";
   try {
     const response = await fetch(`/api/chats/${activeChat}/generate`, {
@@ -332,7 +345,7 @@ async function send(message = ui.prompt.value.trim()) {
         const item = JSON.parse(line);
         if (item.type === "start") setStatus("generating", `Generating · ${elapsedSeconds}s`);
         else if (item.type === "context_trimmed") contextNotice(item.message);
-        else if (item.type === "token") { raw += item.text; updateAssistant(assistant, raw, null, "streaming"); scrollDown(); }
+        else if (item.type === "token") { raw += item.text; updateAssistant(assistant, raw, null, "streaming", elapsedSeconds); scrollDown(); }
         else if (item.type === "done" || item.type === "stopped") {
           updateAssistant(assistant, raw, item.metrics, item.type === "stopped" ? "interrupted" : "complete");
           updateContext(item.metrics.context_used, item.metrics.context_size, true);
