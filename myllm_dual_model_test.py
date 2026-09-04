@@ -6,32 +6,43 @@ import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
-
+from builtins import print as builtin_print
+from datetime import datetime
 from llama_cpp import Llama
+
+LOG_FILE = ".dualagent.log"
+
+
+def print(*args, **kwargs):
+    # Print normally to console
+    builtin_print(*args, **kwargs)
+
+    # Append to log file
+    message = " ".join(str(arg) for arg in args)
+
+    with open(LOG_FILE, "a", encoding="utf-8") as f:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        f.write(f"[{timestamp}] {message}\n")
+
 
 # ============================================================
 # CONFIG
 # ============================================================
 
-KID_MODEL_PATH = Path(
-    r"D:\Amit\Projects\local-llm-agent-lite\models\Qwen3-1.7B-Q8_0.gguf"
-)
+KID_MODEL_PATH = Path(r"D:\Amit\Projects\local-llm-agent-lite\models\Qwen3-1.7B-Q8_0.gguf")
 
-WORKER_MODEL_PATH = Path(
-    r"D:\Amit\Projects\local-llm-agent-lite\models\Qwen3-4B-Q4_K_M.gguf"
-)
+WORKER_MODEL_PATH = Path(r"D:\Amit\Projects\local-llm-agent-lite\models\Qwen3-4B-Q4_K_M.gguf")
 
 WORKSPACE = Path("./agent_test_workspace").resolve()
 
 KID_CONTEXT = 4096
 WORKER_CONTEXT = 8192
 
-KID_TEMPERATURE = 0.0
-WORKER_TEMPERATURE = 0.20
+KID_TEMPERATURE = 0.15
+WORKER_TEMPERATURE = 0.25
 
 GPU_LAYERS = 0
 MAX_STEPS = 20
-
 
 # ============================================================
 # JSON SCHEMAS
@@ -54,7 +65,6 @@ KID_SCHEMA = {
     ],
     "additionalProperties": False,
 }
-
 
 WORKER_SCHEMA = {
     "type": "object",
@@ -82,7 +92,6 @@ WORKER_SCHEMA = {
     ],
     "additionalProperties": False,
 }
-
 
 # ============================================================
 # PROMPTS
@@ -122,7 +131,6 @@ Do not invent files, build results, compiler results, or other facts.
 Keep request short.
 """
 
-
 WORKER_SYSTEM_PROMPT = """
 You are the Worker in a two-model coding agent.
 
@@ -152,7 +160,6 @@ Rules:
 - If compilation fails, use the compiler error to fix the source.
 - Keep message short.
 """
-
 
 # ============================================================
 # MODEL
@@ -253,8 +260,7 @@ def resolve_workspace_path(relative_path: str) -> Path:
 
 def list_files() -> str:
     files = [
-        str(path.relative_to(WORKSPACE))
-        for path in WORKSPACE.rglob("*")
+        str(path.relative_to(WORKSPACE)) for path in WORKSPACE.rglob("*")
         if path.is_file() and ".build" not in path.parts
     ]
 
@@ -293,9 +299,7 @@ def write_file(path: str, content: str) -> str:
 
 
 def compile_java() -> str:
-    java_files = sorted(
-        path for path in WORKSPACE.rglob("*.java") if ".build" not in path.parts
-    )
+    java_files = sorted(path for path in WORKSPACE.rglob("*.java") if ".build" not in path.parts)
 
     if not java_files:
         raise ValueError("No Java source files found.")
@@ -331,20 +335,14 @@ def compile_java() -> str:
         timeout=120,
     )
 
-    output = "\n".join(
-        part
-        for part in (
-            process.stdout.strip(),
-            process.stderr.strip(),
-        )
-        if part
-    )
+    output = "\n".join(part for part in (
+        process.stdout.strip(),
+        process.stderr.strip(),
+    ) if part)
 
-    result = (
-        f"COMMAND: {' '.join(command)}\n"
-        f"EXIT_CODE: {process.returncode}\n\n"
-        f"{output or 'Compilation succeeded.'}"
-    )
+    result = (f"COMMAND: {' '.join(command)}\n"
+              f"EXIT_CODE: {process.returncode}\n\n"
+              f"{output or 'Compilation succeeded.'}")
 
     if process.returncode != 0:
         raise ValueError(result)
@@ -357,9 +355,7 @@ def compile_java() -> str:
 # ============================================================
 
 
-def execute_worker_action(
-    action: dict[str, Any],
-) -> tuple[bool, str]:
+def execute_worker_action(action: dict[str, Any], ) -> tuple[bool, str]:
     tool = action.get("tool")
     args = action.get("args", {})
 
@@ -420,9 +416,7 @@ def workspace_state() -> str:
     return list_files()
 
 
-def recent_observations_text(
-    observations: list[str],
-) -> str:
+def recent_observations_text(observations: list[str], ) -> str:
     if not observations:
         return "(none)"
 
@@ -442,8 +436,8 @@ def run_agent(
     observations: list[str] = []
 
     for step in range(
-        1,
-        MAX_STEPS + 1,
+            1,
+            MAX_STEPS + 1,
     ):
         print()
         print("=" * 70)
@@ -474,19 +468,15 @@ Determine whether the user's goal is complete.
             temperature=KID_TEMPERATURE,
         )
 
-        status = str(
-            kid_result.get(
-                "status",
-                "",
-            )
-        )
+        status = str(kid_result.get(
+            "status",
+            "",
+        ))
 
-        request = str(
-            kid_result.get(
-                "request",
-                "",
-            )
-        )
+        request = str(kid_result.get(
+            "request",
+            "",
+        ))
 
         print()
         print(f"Kid status  : {status}")
@@ -524,19 +514,15 @@ Choose the single best next tool action.
             temperature=WORKER_TEMPERATURE,
         )
 
-        tool = str(
-            worker_action.get(
-                "tool",
-                "",
-            )
-        )
+        tool = str(worker_action.get(
+            "tool",
+            "",
+        ))
 
-        message = str(
-            worker_action.get(
-                "message",
-                "",
-            )
-        )
+        message = str(worker_action.get(
+            "message",
+            "",
+        ))
 
         print()
         print(f"Worker tool    : {tool}")
@@ -553,7 +539,8 @@ Choose the single best next tool action.
         print(observation)
 
     print()
-    print(f"🛑 Controller stopped after " f"{MAX_STEPS} steps.")
+    print(f"🛑 Controller stopped after "
+          f"{MAX_STEPS} steps.")
 
 
 # ============================================================
@@ -588,9 +575,9 @@ def main() -> None:
         task = input("\n👤 Task (/exit to quit): ").strip()
 
         if task.lower() in {
-            "/exit",
-            "exit",
-            "quit",
+                "/exit",
+                "exit",
+                "quit",
         }:
             break
 
