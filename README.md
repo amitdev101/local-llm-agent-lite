@@ -79,6 +79,7 @@ The interface provides:
 
 - 🤖 Model switching beside the prompt
 - 🌊 Streaming with Stop, Copy, Regenerate, and Continue
+- 💭 Timed, expandable model reasoning on every response
 - 💬 Searchable JSONL conversation history
 - 🧠 Optional system prompt and thinking control
 - 🌡️ Temperature and advanced sampling controls

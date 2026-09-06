@@ -1,6 +1,7 @@
---extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
-
+# --extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
 # Core LLM runtime (prebuilt Windows CPU wheel from the index above)
+# Uncomment the first line if you are having issues building the llama-cpp-python package from source on Windows.
+
 llama-cpp-python==0.3.35
 
 # API and configuration

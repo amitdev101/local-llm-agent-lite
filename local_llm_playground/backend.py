@@ -17,7 +17,6 @@ from fastapi.staticfiles import StaticFiles
 from llama_cpp import Llama
 from pydantic import BaseModel, Field
 
-
 ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT.parent
 FRONTEND = ROOT / "frontend"
@@ -33,16 +32,17 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s",
     datefmt="%H:%M:%S",
-    handlers=[logging.FileHandler(log_file, encoding="utf-8"), logging.StreamHandler()],
+    handlers=[logging.FileHandler(log_file, encoding="utf-8"),
+              logging.StreamHandler()],
 )
 logger = logging.getLogger("playground")
 
 DEFAULTS = {
     "model_path": "",
-    "context_size": 4096,
+    "context_size": 8192,
     "gpu_layers": 0,
     "threads": max(1, (os.cpu_count() or 4) - 2),
-    "temperature": 0.0,
+    "temperature": 0.15,
     "top_p": 0.95,
     "top_k": 40,
     "min_p": 0.05,
@@ -116,6 +116,7 @@ def chat_view(chat_id: str) -> dict:
 
 
 class ModelRuntime:
+
     def __init__(self) -> None:
         self.llm: Llama | None = None
         self.model_path = ""
@@ -208,10 +209,11 @@ def status() -> dict:
 
 @app.get("/api/models")
 def models() -> list[dict]:
-    return [
-        {"path": str(path.resolve()), "name": path.name, "size": path.stat().st_size}
-        for path in sorted((PROJECT_ROOT / "models").glob("*.gguf"))
-    ]
+    return [{
+        "path": str(path.resolve()),
+        "name": path.name,
+        "size": path.stat().st_size
+    } for path in sorted((PROJECT_ROOT / "models").glob("*.gguf"))]
 
 
 @app.get("/api/settings")
@@ -288,11 +290,11 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
         raise HTTPException(409, "A generation is already active")
 
     events = read_events(chat_id)
-    history = [
-        {"role": item["type"], "content": item.get("content", "")}
-        for item in events
-        if item.get("type") in {"user", "assistant"} and item.get("status", "complete") == "complete"
-    ]
+    history = [{
+        "role": item["type"],
+        "content": item.get("content", "")
+    } for item in events if item.get("type") in {"user", "assistant"}
+               and item.get("status", "complete") == "complete"]
     visible_message = request.message.strip()
     directive = "/think" if request.thinking else "/no_think"
     effective_message = f"{visible_message}\n\n{directive}"
@@ -310,13 +312,10 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
         if estimated <= int(context_size * 0.80):
             break
         remove_count = 1
-        if (
-            messages[system_count].get("role") == "user"
-            and len(messages) > system_count + 2
-            and messages[system_count + 1].get("role") == "assistant"
-        ):
+        if (messages[system_count].get("role") == "user" and len(messages) > system_count + 2
+                and messages[system_count + 1].get("role") == "assistant"):
             remove_count = 2
-        del messages[system_count : system_count + remove_count]
+        del messages[system_count:system_count + remove_count]
         trimmed_messages += remove_count
 
     settings = request.model_dump(exclude={"message", "system_prompt"})
@@ -334,13 +333,14 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
         message_id = str(uuid.uuid4())
         yield event({"type": "start", "message_id": message_id})
         if trimmed_messages:
-            yield event(
-                {
-                    "type": "context_trimmed",
-                    "messages": trimmed_messages,
-                    "message": f"Excluded {trimmed_messages} older message(s) from this request.",
-                }
-            )
+            yield event({
+                "type":
+                "context_trimmed",
+                "messages":
+                trimmed_messages,
+                "message":
+                f"Excluded {trimmed_messages} older message(s) from this request.",
+            })
         try:
             kwargs = {
                 "messages": messages,
@@ -366,7 +366,8 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
             elapsed = time.perf_counter() - started
             stopped = runtime.cancel.is_set()
             prompt_tokens = len(runtime.llm.tokenize(json.dumps(messages).encode("utf-8")))
-            completion_tokens = len(runtime.llm.tokenize(response.encode("utf-8"))) if response else 0
+            completion_tokens = len(runtime.llm.tokenize(
+                response.encode("utf-8"))) if response else 0
             metrics = {
                 "first_token_seconds": round((first_token or time.perf_counter()) - started, 3),
                 "total_seconds": round(elapsed, 3),
@@ -392,7 +393,12 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
             logger.info("Generation %s in %.2fs", "stopped" if stopped else "completed", elapsed)
         except Exception as error:
             logger.exception("Generation failed")
-            append_event(chat_id, {"type": "assistant", "content": response, "status": "error", "error": str(error)})
+            append_event(chat_id, {
+                "type": "assistant",
+                "content": response,
+                "status": "error",
+                "error": str(error)
+            })
             yield event({"type": "error", "message": str(error)})
         finally:
             runtime.cancel.clear()
