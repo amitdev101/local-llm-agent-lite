@@ -8,7 +8,6 @@ from pathlib import Path
 import psutil
 import uvicorn
 
-
 PORT = 8000
 ROOT = Path(__file__).resolve().parent
 
@@ -17,13 +16,9 @@ def clear_stale_server() -> None:
     stale = []
 
     for connection in psutil.net_connections(kind="inet"):
-        if (
-            connection.status != psutil.CONN_LISTEN
-            or not connection.laddr
-            or connection.laddr.port != PORT
-            or not connection.pid
-            or connection.pid == os.getpid()
-        ):
+        if (connection.status != psutil.CONN_LISTEN or not connection.laddr
+                or connection.laddr.port != PORT or not connection.pid
+                or connection.pid == os.getpid()):
             continue
 
         try:
@@ -35,10 +30,8 @@ def clear_stale_server() -> None:
             command = ""
 
         if "local_llm_playground" not in command:
-            raise RuntimeError(
-                f"Port {PORT} is used by an unrelated process "
-                f"(PID {connection.pid}). Close it manually or change the port."
-            )
+            raise RuntimeError(f"Port {PORT} is used by an unrelated process "
+                               f"(PID {connection.pid}). Close it manually or change the port.")
 
         if process not in stale:
             stale.append(process)
@@ -56,7 +49,10 @@ def clear_stale_server() -> None:
 
 
 def main() -> None:
-    clear_stale_server()
+    try:
+        clear_stale_server()
+    except Exception as e:
+        print(f"Error clearing stale server: {e}")
     url = f"http://127.0.0.1:{PORT}"
     threading.Timer(1.0, lambda: webbrowser.open(url)).start()
     uvicorn.run(

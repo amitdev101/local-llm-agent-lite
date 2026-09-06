@@ -2820,47 +2820,49 @@ def validate_tool_arguments(
 # ============================================================
 
 TOOL_DOCS = """
-inspect_project(path=".")
-list_files(path=".",depth=2)
-list_directories(path=".",depth=2)
-find_file(name,path=".")
-search_text(query,path=".",max_results=50)
+Text inside <angle_brackets> describes a value. Replace the entire tag.
 
-read_file(path,start_line=1,end_line=200)
+inspect_project(path="<directory_path>")
+list_files(path="<directory_path>",depth=<depth>)
+list_directories(path="<directory_path>",depth=<depth>)
+find_file(name="<file_name>",path="<directory_path>")
+search_text(query="<search_text>",path="<directory_path>",max_results=<count>)
+
+read_file(path="<file_path>",start_line=<first_line>,end_line=<last_line>)
 -> returns RAW_CONTENT
 
-create_file(path,content)
-create_file(path,content_ref)
+create_file(path="<new_file_path>",content="<complete_text>")
+create_file(path="<new_file_path>",content_ref="<payload_ref>")
 -> NEW text file only
 
-create_files(files=[{"path":"src/File.java", "content":...}])
-create_files(files=[{"path":"src/File.java", "content_ref":...}])
+create_files(files=[{"path":"<new_file_path>","content":"<complete_text>"}])
+create_files(files=[{"path":"<new_file_path>","content_ref":"<payload_ref>"}])
 -> path is the complete file path, not a directory
 
-replace_file(path,content)
-replace_file(path,content_ref)
+replace_file(path="<existing_file_path>",content="<complete_text>")
+replace_file(path="<existing_file_path>",content_ref="<payload_ref>")
 -> completely rewrite EXISTING text file
 
-apply_patch(path,old_text,new_text)
-apply_patch(path,old_text_ref,new_text_ref)
+apply_patch(path="<existing_file_path>",old_text="<exact_old_text>",new_text="<replacement_text>")
+apply_patch(path="<existing_file_path>",old_text_ref="<payload_ref>",new_text_ref="<payload_ref>")
 -> localized exact edit
 
 Payload reference example:
-p-1e6fbcc7d3141a42
+<payload_ref>
 
 Reuse existing *_ref instead of regenerating identical large content.
 
-delete_file(path)
-create_directory(path)
-delete_empty_directory(path)
+delete_file(path="<file_path>")
+create_directory(path="<directory_path>")
+delete_empty_directory(path="<directory_path>")
 undo_last_edit()
 
-verify_file_exists(path)
-verify_files_exist(paths)
-verify_directory_exists(path)
-verify_file_content(path,expected_text)
-verify_line_count(path,expected,ignore_empty=true)
-count_matches(path,text)
+verify_file_exists(path="<file_path>")
+verify_files_exist(paths=["<file_path>"])
+verify_directory_exists(path="<directory_path>")
+verify_file_content(path="<file_path>",expected_text="<text>")
+verify_line_count(path="<file_path>",expected=<line_count>,ignore_empty=<true_or_false>)
+count_matches(path="<file_path>",text="<text>")
 
 run_project_tests()
 run_project_build()
@@ -2868,17 +2870,17 @@ run_project_lint()
 run_project_typecheck()
 
 validate_python()
-check_python_import(module)
-check_command(name)
+check_python_import(module="<module_name>")
+check_command(name="<executable_name>")
 
-find_symbol(symbol,path=".")
-find_references(symbol,path=".",max_results=100)
+find_symbol(symbol="<symbol_name>",path="<directory_path>")
+find_references(symbol="<symbol_name>",path="<directory_path>",max_results=<count>)
 
 git_status()
 git_diff()
-git_log_recent(count=10)
+git_log_recent(count=<count>)
 
-remember_fact(fact,evidence_id)
+remember_fact(fact="<verified_fact>",evidence_id="<observation_id>")
 
 Text tools cannot create real binary files such as .png/.jpg/.jar/.class.
 """
