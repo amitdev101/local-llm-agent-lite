@@ -23,6 +23,12 @@ changing the production agent in `myllm.py`.
   undo, and checks.
 - `tests/test_dual_model_roles.py` — deterministic checks and real-model
   integration tests.
+- `tests/evaluate_temperatures.py` — opt-in real-model temperature comparison;
+  it is intentionally excluded from normal test discovery.
+- `tests/evaluate_game_generation_temperatures.py` — opt-in Java 8 Snake and
+  Tic-Tac-Toe generation benchmark.
+- `tests/temperature_benchmark_common.py` — shared sampling, completion, and
+  JSONL helpers for both temperature benchmarks.
 - `myllm_dual_model_test_01.py` — an older experimental snapshot; it is not the
   active runner.
 
@@ -290,6 +296,49 @@ evidence, and resulting decision.
 - **Confirmed:** both previously failing cases passed, followed by the complete
   15-test suite.
 
+### 15. Temperature became an evaluated setting
+
+- **Initially:** Kid used `0.15` and Worker used `0.25` without a comparative
+  benchmark.
+- **Problem:** one successful seeded run cannot show whether a temperature is
+  consistently better for tool selection, completion judgment, or efficiency.
+- **Changed:** an opt-in benchmark runs held-out scenarios over role-specific
+  temperature ranges and multiple fixed seeds while keeping `top_p`, `top_k`,
+  and `min_p` unchanged.
+- **Evidence recorded:** parse success, expected decision or tool, critical
+  failures, duration, token usage, actual parsed output, and raw response are
+  written to append-only JSONL after every run.
+- **Decision rule:** critical failures rank worst; otherwise prefer the highest
+  pass rate, followed by lower latency and fewer completion tokens.
+- **Boundary:** the benchmark reports the best observed value. It does not
+  automatically change runtime temperatures.
+- **Pilot:** the current Kid setting (`0.15`, seed `42`) passed three of four
+  held-out scenarios but incorrectly accepted a stale verification as `done`.
+  This is a baseline only; the full temperature and seed sweep is still needed.
+
+### 16. Complete game generation became a separate benchmark
+
+- **Goal:** compare how Worker temperature affects substantial source
+  generation rather than only short tool choices.
+- **Changed:** a separate benchmark asks the original Worker model to generate
+  complete Java 8 console versions of Snake and Tic-Tac-Toe across four
+  temperatures and three seeds.
+- **Validation:** every candidate must parse as `write_file`, use the expected
+  filename, compile with Java 8 settings, and satisfy game-specific static
+  feature checks.
+- **Detailed evidence:** an event JSONL log and readable text log retain the
+  environment, complete prompts, model metadata, sampling settings, raw model
+  response, parsed action, generated source, hashes, compiler command and
+  output, feature checks, timings, token usage, errors, and tracebacks.
+- **Safety:** source is compiled with annotation processing disabled inside an
+  isolated results folder. Generated games are never executed.
+- **Boundary:** feature checks provide comparable signals; they do not prove
+  that a game is enjoyable or semantically perfect.
+- **Pilot:** Tic-Tac-Toe at Worker temperature `0.25`, seed `42`, produced a
+  correctly parsed `write_file` action and six of seven initially detected
+  features, but failed Java compilation by calling `Scanner.nextLine()` as a
+  static method. Generation took about 181 seconds and 978 completion tokens.
+
 ## ✅ What is confirmed
 
 - A tiny plain-text router is preferable to JSON for `CHAT` versus `TOOL`.
@@ -326,6 +375,50 @@ python -m unittest discover -s dual_model_test\tests -v
 ```
 
 The suite loads both original GGUF models and may take several minutes.
+
+## 🌡️ Compare temperatures
+
+Run the complete comparison explicitly:
+
+```powershell
+python dual_model_test\tests\evaluate_temperatures.py
+```
+
+Run one role or a smaller custom comparison:
+
+```powershell
+python dual_model_test\tests\evaluate_temperatures.py --role kid
+python dual_model_test\tests\evaluate_temperatures.py --role worker --worker-temperatures 0.25,0.4,0.6 --seeds 11,42,73
+```
+
+Completed results are preserved in `temperature_results/` as JSONL, including
+when the run is interrupted with `Ctrl+C`. The benchmark has no explicit model
+output-token limit and does not run during normal test discovery.
+
+### Generate complete games
+
+Run Snake and Tic-Tac-Toe across all configured temperatures and seeds:
+
+```powershell
+python dual_model_test\tests\evaluate_game_generation_temperatures.py
+```
+
+Run a smaller comparison first:
+
+```powershell
+python dual_model_test\tests\evaluate_game_generation_temperatures.py --game snake --temperatures 0.25,0.6 --seeds 42
+```
+
+Each run creates one folder under `temperature_results/` containing:
+
+- `events.jsonl` — append-only machine-readable event details;
+- `run.log.txt` — the same events in readable form;
+- `summary.json` — comparison totals and best observed temperature;
+- `generated/` — every generated Java candidate and compiler output folder.
+
+Scoring gives 10 points for parsing, 10 for the correct action, 40 for Java 8
+compilation, and 40 for game-specific feature coverage. Review the source and
+logs before treating the highest score as the final temperature choice.
 
 ## ▶️ Run the experiment
 

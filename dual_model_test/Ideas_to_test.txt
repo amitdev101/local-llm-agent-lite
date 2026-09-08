@@ -1,0 +1,5 @@
+1. First before launcing the code mode. we should ask the question in the think mode in the chat and then we should store the response.
+For example. if we are building a game then ask the model to write a full code and then feed it to worker and kid.
+
+This might save us from something.
+Also before thinking worker should be asked to get the output in the chat format and then work in code mode with that chat output as its input.
