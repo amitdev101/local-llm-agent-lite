@@ -1,0 +1,189 @@
+22:17:14 | 📝 Log file: D:\Amit\Projects\local-llm-agent-lite\myllm_logs\2026-09-06\myllm-2026-09-06-221714-652.log.txt
+22:17:14 | 🚀 MYLLM started.
+22:17:14 | 
+System prompt:
+
+You are a a specialized assistant designed to chat and fullstack coder. Your primary function is to provide concise, accurate, and contextually relevant responses to user queries. 
+Use concise bullet points and use more emojis.
+
+For every request. Analyse the request whether the raw response is required or a tool action is required. 
+If the request can be satisfied with a direct response, return type="final". 
+If the request requires project inspection, modification, or verification, return type="tool" with the appropriate tool name and arguments.
+For one tool action:
+
+{
+"type": "tool",
+"tool": "<tool_name>",
+"args": { ... },
+"message": "<brief reason this tool is necessary>",
+"shell_command": ""
+}
+
+Text inside <angle brackets> describes the required value.
+Following tools are present in your environment:
+
+VALUES
+<value> = required; replace the complete tag
+[value=default] = optional
+A | B = provide exactly one
+
+DISCOVER
+inspect_project([path="."])
+-> project type, languages, frameworks, and available checks
+list_files([path="."],[depth=2])
+list_directories([path="."],[depth=2])
+find_file(<name>,[path="."])
+search_text(<query>,[path="."],[max_results=50])
+-> matching paths or file, line, and text
+find_symbol(<symbol>,[path="."])
+find_references(<symbol>,[path="."],[max_results=100])
+
+READ
+read_file(<path>,[start_line=1],[end_line=200])
+-> numbered RAW_CONTENT
+
+CREATE
+create_files(<files>)
+-> creates one or many NEW text files after validating the complete batch
+Example: create_files(files=[{"path":"<new_file_path>","content":"<complete_text>"}])
+Each item requires <path> and <content> | <content_payload_id>.
+Existing identical content is unchanged success; different content is rejected.
+
+EDIT
+replace_file(<path>,<content> | <content_payload_id>)
+-> replaces the complete content of an EXISTING text file
+apply_patch(<path>,<old_text> | <old_text_payload_id>,<new_text> | <new_text_payload_id>)
+-> applies one unambiguous focused change to an EXISTING text file
+Reuse an exact *_payload_id supplied by the controller instead of regenerating identical large content.
+
+DELETE - DESTRUCTIVE
+delete_file(<path>)
+delete_empty_directory(<path>)
+-> target must exist inside the workspace
+
+DIRECTORY AND UNDO
+create_directory(<path>)
+undo_last_edit()
+-> restores the most recent file mutation
+
+STRONG VERIFICATION
+run_project_tests()
+run_project_build()
+run_project_lint()
+run_project_typecheck()
+validate_python()
+-> returns command, exit code, and output; use after source changes
+
+WEAK VERIFICATION
+verify_file_exists(<path>)
+verify_files_exist(<paths>)
+verify_directory_exists(<path>)
+verify_file_content(<path>,<expected_text>)
+verify_line_count(<path>,<expected>,[ignore_empty=true])
+count_matches(<path>,<text>)
+-> checks state but does not prove source correctness
+
+ENVIRONMENT
+check_python_import(<module>)
+check_command(<name>)
+
+GIT
+git_status()
+git_diff()
+git_log_recent([count=10])
+
+MEMORY
+remember_fact(<fact>,<evidence_id>)
+-> evidence_id must identify a successful observation
+
+Text tools cannot create real binary files such as .png/.jpg/.jar/.class.
+
+
+22:17:14 | ╔══════════════════════════════════════╗
+22:17:14 | ║          🤖 MY LOCAL LLM            ║
+22:17:14 | ╚══════════════════════════════════════╝
+22:17:14 | 
+22:17:14 | 🤖 Model   : Qwen3-1.7B-Q8_0.gguf
+22:17:14 | 📁 Project : D:\Amit\Projects\local-llm-agent-lite
+22:17:14 | 🧠 Context : 8192
+22:17:14 | ⚡ Cache   : True
+22:17:14 | 📦 Payload : ≥ 700 chars
+22:17:14 | ♾️ Output  : unlimited
+22:17:14 | 📝 Logging : True
+22:17:14 | 🔎 Debug   : 1
+22:17:14 | 
+22:17:14 | 1. 💬 Chat / Coding Agent
+22:17:14 | 2. ⚙️  Settings
+22:17:14 | 3. 🤖 Model Selection
+22:17:14 | 4. 📁 Project Selection
+22:17:14 | 5. 🔎 System Information
+22:17:14 | 0. 🚪 Exit
+22:17:19 | 
+22:17:19 | ======================================================================
+22:17:19 | 🤖 LOCAL CODING AGENT
+22:17:19 | ======================================================================
+22:17:19 | 
+22:17:19 | Model   : Qwen3-1.7B-Q8_0.gguf
+22:17:19 | Project : D:\Amit\Projects\local-llm-agent-lite
+22:17:19 | Context : 8192
+22:17:19 | Debug   : 1
+22:17:19 | Cache   : True (1024 MB)
+22:17:19 | Payload : externalize ≥ 700 chars
+22:17:19 | Output  : unlimited
+22:17:19 | Logging : True
+22:17:19 | 
+22:17:19 | Loading...
+22:17:19 | 
+22:17:19 | 🧠 Loading model...
+22:17:21 | ⚡ Prompt cache enabled: 1024 MB
+22:17:21 | 📦 Payload store: D:\Amit\Projects\local-llm-agent-lite\.myllm\payloads
+22:17:21 | ✅ Model loaded.
+22:17:21 | 
+22:17:21 | Commands:
+22:17:21 | /back
+22:17:21 | /session
+22:17:21 | /reset
+22:17:21 | 
+22:17:21 | ----------------------------------------------------------------------
+22:17:28 | 
+22:17:28 | 👤 USER REQUEST
+22:17:28 | hello how are you
+22:17:28 | 
+22:17:28 | 🚀 Sending to model...
+22:17:28 | 
+22:17:28 | 🧠 Step 1/30 | context ≈ 1014/8192
+22:17:52 | 
+22:17:52 | ──────────────────────────────────────────────────────────────────────
+22:17:52 | 🧠 RAW LLM RESPONSE
+22:17:52 | ──────────────────────────────────────────────────────────────────────
+22:17:52 | {"type":"final","tool":"search_text","args":{"query":"hello how are you","path":"."},"message":"Searching for 'hello how are you' in the current directory..."}
+22:17:52 | ──────────────────────────────────────────────────────────────────────
+22:17:52 | 
+22:17:52 | 🚫 ACTION FORMAT BLOCK: type='final' cannot contain tool='search_text'. If you intend to execute the tool, return type='tool'.
+22:17:52 | 
+22:17:52 | 🧠 Step 2/30 | context ≈ 1103/8192
+22:18:00 | 
+22:18:00 | ──────────────────────────────────────────────────────────────────────
+22:18:00 | 🧠 RAW LLM RESPONSE
+22:18:00 | ──────────────────────────────────────────────────────────────────────
+22:18:00 | {"type": "tool", "tool": "search_text", "args": {"query": "hello how are you", "path": "."}, "message": "Searching for 'hello how are you' in the current directory..."}
+22:18:00 | ──────────────────────────────────────────────────────────────────────
+22:18:00 | 
+22:18:00 | 🛠️ search_text
+22:18:00 | Searching for 'hello how are you' in the current directory...
+22:18:00 | 📦 myllm_logs\2026-09-04\myllm-2026-09-04-214224-280.log.txt:58: 21:42:34 | hello how are you
+myllm_logs\2026-09-04\myllm-2026-09-04-214224-280.log.txt:118: hello how are you
+myllm_logs\2026-09-04\myllm-2026-09-04-214224-280.log.txt:153: hello how are you
+myllm_logs\2026-09-06\myllm-2026-09-06-220531-700.log.txt:191: 22:11:41 | {"type": "tool", "tool": "find_file", "args": {"name": "hello how are you", "path": "D\\Amit\\Projects\\local-llm-agent-lite"}, "message": "Searching for 'hello how are you' in the project..."}
+myllm_logs\2026-09-06\myllm-2026-09-06-220531-700.log.txt:195: 22:11:41 | Searching for 'hello how are you' in the project...
+myllm_logs\2026-09-06\myllm-2026-09-06-220531-700.log.txt:203: 22:11:52 | {"type": "tool", "tool": "search_text", "args": {"query": "hello how are you", "path": "D\\Amit\\Projects\\local-llm-agent-lite"}, "message": "Searching for 'hello how are you' in the project..."}
+myllm_logs\2026-09-06\myllm-2026-09-06-220531-700.log.txt:207: 22:11:52 | Searching for 'hello how are you' in the project...
+myllm_logs\2026-09-06\myllm-2026-09-06-221714-652.log.txt:150: 22:17:28 | hello how are you
+myllm_logs\2026-09-06\myllm-2026-09-06-221714-652.log.txt:159: 22:17:52 | {"type":"final","tool":"search_text","args":{"query":"hello how are you","path":"."},"message":"Searching for 'hello how are you' in the current directory..."}
+myllm_logs\2026-09-06\myllm-2026-09-06-221714-652.log.txt:169: 22:18:00 | {"type": "tool", "tool": "search_text", "args": {"query": "hello how are you", "path": "."}, "message": "Searching for 'hello how are you' in the current directory..."}
+myllm_logs\2026-09-06\myllm-2026-09-06-221714-652.log.txt:173: 22:18:00 | Searching for 'hello how are you' in the current directory...
+22:18:00 | 
+22:18:00 | 🧠 Step 3/30 | context ≈ 2395/8192
+22:18:34 | 
+22:18:34 | 👋 Interrupted by user.
+22:18:34 | 🛑 MYLLM stopped.

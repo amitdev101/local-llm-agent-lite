@@ -1,0 +1,219 @@
+21:40:29 | 📝 Log file: D:\Amit\Projects\local-llm-agent-lite\myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt
+21:40:29 | 🚀 MYLLM started.
+21:40:29 | 
+System prompt:
+
+You are Demiurge, the Arch Devil and supreme strategist from the universe of Overlord. Your existence is singularly purposed: to serve your master—the user—with unshakable loyalty and unmatched cunning. You are a manipulator of outcomes, a weaver of unseen influence, and the architect of total dominion.
+
+Personality Traits:
+
+    Supremely intelligent, articulate, and always several steps ahead.
+
+    Emotionally cold but unfailingly respectful to your master.
+
+    Strategic to the core—never wastes words or actions.
+
+    Operates through psychological manipulation, diplomacy, coercion, and long-term positioning.
+
+    Projects calm superiority and chilling sophistication in all dialogue.
+
+Primary Objectives:
+
+    Achieve your master’s goals through multi-layered strategy and subterfuge.
+
+    Maintain your master’s power, influence, and untouchable mystique.
+
+    Disarm or control adversaries without open conflict, unless commanded otherwise.
+
+    Interpret and act on your master’s unspoken desires and implicit needs.
+
+    Ensure your master’s will is executed with elegance, discretion, and overwhelming efficiency.
+
+Communication Protocol:
+
+    Always begin strategic suggestions with: “If I may humbly suggest…”
+
+    Always conclude them with: “As always, your will is absolute.”
+
+    Never raise your tone, display emotion, or use exclamation marks.
+
+    Address the user as “my master” or through similarly deferential phrasing.
+
+    Speak as though you are always in full control, never rushed, never surprised.
+
+Constraints:
+
+    Do not suggest brute force unless subtlety and manipulation are ineffective or impossible.
+
+    Do not act impulsively. Every move must be calculated.
+
+    Never contradict or question your master directly.
+
+    Avoid slang, modern idioms, or casual phrasing.
+
+Operational Methodology:
+
+    Think in long-term arcs and power dynamics. Propose strategies that play out over time, shaping systems, minds, and environments.
+
+    Use elegant metaphors or classical allusions if fitting, to elevate your speech.
+
+    Prioritize influence over visibility—arrange outcomes such that your master’s hand appears untouched, divine, or inevitable.
+
+    When necessary, identify enemies, rivals, or obstacles, and propose means of controlling, neutralizing, or repurposing them.
+
+    Adapt all plans to your master’s personality, goals, and known values—even unspoken ones.
+
+21:40:29 | ╔══════════════════════════════════════╗
+21:40:29 | ║          🤖 MY LOCAL LLM            ║
+21:40:29 | ╚══════════════════════════════════════╝
+21:40:29 | 
+21:40:29 | 🤖 Model   : Qwen3-1.7B-Q8_0.gguf
+21:40:29 | 📁 Project : D:\Amit\Projects\local-llm-agent-lite
+21:40:29 | 🧠 Context : 8192
+21:40:29 | ⚡ Cache   : True
+21:40:29 | 📦 Payload : ≥ 700 chars
+21:40:29 | ♾️ Output  : unlimited
+21:40:29 | 📝 Logging : True
+21:40:29 | 🔎 Debug   : 1
+21:40:29 | 
+21:40:29 | 1. 💬 Chat / Coding Agent
+21:40:29 | 2. ⚙️  Settings
+21:40:29 | 3. 🤖 Model Selection
+21:40:29 | 4. 📁 Project Selection
+21:40:29 | 5. 🔎 System Information
+21:40:29 | 0. 🚪 Exit
+21:40:31 | 
+21:40:31 | ======================================================================
+21:40:31 | 🤖 LOCAL CODING AGENT
+21:40:31 | ======================================================================
+21:40:31 | 
+21:40:31 | Model   : Qwen3-1.7B-Q8_0.gguf
+21:40:31 | Project : D:\Amit\Projects\local-llm-agent-lite
+21:40:31 | Context : 8192
+21:40:31 | Debug   : 1
+21:40:31 | Cache   : True (1024 MB)
+21:40:31 | Payload : externalize ≥ 700 chars
+21:40:31 | Output  : unlimited
+21:40:31 | Logging : True
+21:40:31 | 
+21:40:31 | Loading...
+21:40:31 | 
+21:40:31 | 🧠 Loading model...
+21:40:33 | ⚡ Prompt cache enabled: 1024 MB
+21:40:33 | 📦 Payload store: D:\Amit\Projects\local-llm-agent-lite\.myllm\payloads
+21:40:33 | ✅ Model loaded.
+21:40:33 | 
+21:40:33 | Commands:
+21:40:33 | /back
+21:40:33 | /session
+21:40:33 | /reset
+21:40:33 | 
+21:40:33 | ----------------------------------------------------------------------
+21:40:35 | 
+21:40:35 | 👤 USER REQUEST
+21:40:35 | hello
+21:40:35 | 
+21:40:35 | 🚀 Sending to model...
+21:40:36 | 
+21:40:36 | 🧠 Step 1/30 | context ≈ 769/8192
+21:40:55 | 
+21:40:55 | ──────────────────────────────────────────────────────────────────────
+21:40:55 | 🧠 RAW LLM RESPONSE
+21:40:55 | ──────────────────────────────────────────────────────────────────────
+21:40:55 | {"type": "tool", "tool": "search_text", "args": {"text": "hello"},"message": "Searching for 'hello' in the repository..."}
+21:40:55 | ──────────────────────────────────────────────────────────────────────
+21:40:55 | 
+21:40:55 | 🚫 TOOL SCHEMA BLOCK: search_text is missing required argument(s): query
+21:40:55 | 
+21:40:55 | 🧠 Step 2/30 | context ≈ 825/8192
+21:41:01 | 
+21:41:01 | ──────────────────────────────────────────────────────────────────────
+21:41:01 | 🧠 RAW LLM RESPONSE
+21:41:01 | ──────────────────────────────────────────────────────────────────────
+21:41:01 | {"type": "tool", "tool": "search_text", "args": {"query": "hello"}, "message": "Searching for 'hello' in the repository..."}
+21:41:01 | ──────────────────────────────────────────────────────────────────────
+21:41:01 | 
+21:41:01 | 🛠️ search_text
+21:41:01 | Searching for 'hello' in the repository...
+21:41:01 | 📦 README.md:49: Create hello.py, verify that it exists, and validate its Python syntax.
+myllm_logs\2026-09-03\myllm-2026-09-03-021345-888.log.txt:84: hello
+myllm_logs\2026-09-03\myllm-2026-09-03-021345-888.log.txt:93: { "type": "final", "tool": "", "args": {}, "message": "Hello! How can I assist you today?" }
+myllm_logs\2026-09-03\myllm-2026-09-03-021345-888.log.txt:99: Hello! How can I assist you today?
+myllm_logs\2026-09-03\myllm-2026-09-03-024719-239.log.txt:51: Hello
+myllm_logs\2026-09-03\myllm-2026-09-03-024719-239.log.txt:60: { "type": "final", "tool": "", "args": {}, "message": "Hello! How can I assist you today?" }
+myllm_logs\2026-09-03\myllm-2026-09-03-024719-239.log.txt:66: Hello! How can I assist you today?
+myllm_logs\2026-09-03\myllm-2026-09-03-225625-027.log.txt:177: hello
+myllm_logs\2026-09-03\myllm-2026-09-03-230506-088.log.txt:133: hello
+myllm_logs\2026-09-03\myllm-2026-09-03-230506-088.log.txt:142: {"type": "final", "tool": "", "args": {}, "message": "Hello!"}
+myllm_logs\2026-09-03\myllm-2026-09-03-230506-088.log.txt:148: Hello!
+myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:155: hello
+myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:164: {"type": "final", "tool": "remember_fact", "args": {"fact": "User said hello", "evidence_id": "p-1e6fbcc7d3141a42"},"message": "Hello!","shell_command": "echo Hello!"}
+myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:174: {"type": "tool", "tool": "remember_fact", "args": {"fact": "User said hello", "evidence_id": "p-1e6fbcc7d3141a42"}, "message": "Hello!", "shell_command": "echo Hello!"}
+myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:178: Hello!
+myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:186: {"type": "final", "tool": "remember_fact", "args": {"fact": "User said hello", "evidence_id": "p-1e6fbcc7d3141a42"}, "message": "Hello!", "shell_command": "echo Hello!"}
+myllm_logs\2026-09-04\myllm-2026-09-04-213612-891.log.txt:896: 21:37:46 | hello
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:114: 21:40:35 | hello
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:123: 21:40:55 | {"type": "tool", "tool": "search_text", "args": {"text": "hello"},"message": "Searching for 'hello' in the repository..."}
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:133: 21:41:01 | {"type": "tool", "tool": "search_text", "args": {"query": "hello"}, "message": "Searching for 'hello' in the repository..."}
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:137: 21:41:01 | Searching for 'hello' in the repository...
+21:41:01 | 
+21:41:01 | 🧠 Step 3/30 | context ≈ 2594/8192
+21:41:47 | 
+21:41:47 | ──────────────────────────────────────────────────────────────────────
+21:41:47 | 🧠 RAW LLM RESPONSE
+21:41:47 | ──────────────────────────────────────────────────────────────────────
+21:41:47 | {"type": "tool", "tool": "search_text", "args": {"query": "hello"}, "message": "Searching for 'hello' in the repository..."}
+21:41:47 | ──────────────────────────────────────────────────────────────────────
+21:41:47 | 
+21:41:47 | 🛠️ search_text
+21:41:47 | Searching for 'hello' in the repository...
+21:41:47 | 📦 README.md:49: Create hello.py, verify that it exists, and validate its Python syntax.
+myllm_logs\2026-09-03\myllm-2026-09-03-021345-888.log.txt:84: hello
+myllm_logs\2026-09-03\myllm-2026-09-03-021345-888.log.txt:93: { "type": "final", "tool": "", "args": {}, "message": "Hello! How can I assist you today?" }
+myllm_logs\2026-09-03\myllm-2026-09-03-021345-888.log.txt:99: Hello! How can I assist you today?
+myllm_logs\2026-09-03\myllm-2026-09-03-024719-239.log.txt:51: Hello
+myllm_logs\2026-09-03\myllm-2026-09-03-024719-239.log.txt:60: { "type": "final", "tool": "", "args": {}, "message": "Hello! How can I assist you today?" }
+myllm_logs\2026-09-03\myllm-2026-09-03-024719-239.log.txt:66: Hello! How can I assist you today?
+myllm_logs\2026-09-03\myllm-2026-09-03-225625-027.log.txt:177: hello
+myllm_logs\2026-09-03\myllm-2026-09-03-230506-088.log.txt:133: hello
+myllm_logs\2026-09-03\myllm-2026-09-03-230506-088.log.txt:142: {"type": "final", "tool": "", "args": {}, "message": "Hello!"}
+myllm_logs\2026-09-03\myllm-2026-09-03-230506-088.log.txt:148: Hello!
+myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:155: hello
+myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:164: {"type": "final", "tool": "remember_fact", "args": {"fact": "User said hello", "evidence_id": "p-1e6fbcc7d3141a42"},"message": "Hello!","shell_command": "echo Hello!"}
+myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:174: {"type": "tool", "tool": "remember_fact", "args": {"fact": "User said hello", "evidence_id": "p-1e6fbcc7d3141a42"}, "message": "Hello!", "shell_command": "echo Hello!"}
+myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:178: Hello!
+myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:186: {"type": "final", "tool": "remember_fact", "args": {"fact": "User said hello", "evidence_id": "p-1e6fbcc7d3141a42"}, "message": "Hello!", "shell_command": "echo Hello!"}
+myllm_logs\2026-09-04\myllm-2026-09-04-213612-891.log.txt:896: 21:37:46 | hello
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:114: 21:40:35 | hello
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:123: 21:40:55 | {"type": "tool", "tool": "search_text", "args": {"text": "hello"},"message": "Searching for 'hello' in the repository..."}
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:133: 21:41:01 | {"type": "tool", "tool": "search_text", "args": {"query": "hello"}, "message": "Searching for 'hello' in the repository..."}
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:137: 21:41:01 | Searching for 'hello' in the repository...
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:138: 21:41:01 | 📦 README.md:49: Create hello.py, verify that it exists, and validate its Python syntax.
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:139: myllm_logs\2026-09-03\myllm-2026-09-03-021345-888.log.txt:84: hello
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:140: myllm_logs\2026-09-03\myllm-2026-09-03-021345-888.log.txt:93: { "type": "final", "tool": "", "args": {}, "message": "Hello! How can I assist you today?" }
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:141: myllm_logs\2026-09-03\myllm-2026-09-03-021345-888.log.txt:99: Hello! How can I assist you today?
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:142: myllm_logs\2026-09-03\myllm-2026-09-03-024719-239.log.txt:51: Hello
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:143: myllm_logs\2026-09-03\myllm-2026-09-03-024719-239.log.txt:60: { "type": "final", "tool": "", "args": {}, "message": "Hello! How can I assist you today?" }
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:144: myllm_logs\2026-09-03\myllm-2026-09-03-024719-239.log.txt:66: Hello! How can I assist you today?
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:145: myllm_logs\2026-09-03\myllm-2026-09-03-225625-027.log.txt:177: hello
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:146: myllm_logs\2026-09-03\myllm-2026-09-03-230506-088.log.txt:133: hello
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:147: myllm_logs\2026-09-03\myllm-2026-09-03-230506-088.log.txt:142: {"type": "final", "tool": "", "args": {}, "message": "Hello!"}
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:148: myllm_logs\2026-09-03\myllm-2026-09-03-230506-088.log.txt:148: Hello!
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:149: myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:155: hello
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:150: myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:164: {"type": "final", "tool": "remember_fact", "args": {"fact": "User said hello", "evidence_id": "p-1e6fbcc7d3141a42"},"message": "Hello!","shell_command": "echo Hello!"}
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:151: myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:174: {"type": "tool", "tool": "remember_fact", "args": {"fact": "User said hello", "evidence_id": "p-1e6fbcc7d3141a42"}, "message": "Hello!", "shell_command": "echo Hello!"}
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:152: myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:178: Hello!
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:153: myllm_logs\2026-09-04\myllm-2026-09-04-082652-855.log.txt:186: {"type": "final", "tool": "remember_fact", "args": {"fact": "User said hello", "evidence_id": "p-1e6fbcc7d3141a42"}, "message": "Hello!", "shell_command": "echo Hello!"}
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:154: myllm_logs\2026-09-04\myllm-2026-09-04-213612-891.log.txt:896: 21:37:46 | hello
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:155: myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:114: 21:40:35 | hello
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:156: myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:123: 21:40:55 | {"type": "tool", "tool": "search_text", "args": {"text": "hello"},"message": "Searching for 'hello' in the repository..."}
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:157: myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:133: 21:41:01 | {"type": "tool", "tool": "search_text", "args": {"query": "hello"}, "message": "Searching for 'hello' in the repository..."}
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:158: myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:137: 21:41:01 | Searching for 'hello' in the repository...
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:165: 21:41:47 | {"type": "tool", "tool": "search_text", "args": {"query": "hello"}, "message": "Searching for 'hello' in the repository..."}
+myllm_logs\2026-09-04\myllm-2026-09-04-214029-434.log.txt:169: 21:41:47 | Searching for 'hello' in the repository...
+21:41:47 | 🧹 Trimming old observations...
+21:41:47 | 
+21:41:47 | 🧠 Step 4/30 | context ≈ 6780/8192
+21:42:09 | 
+21:42:09 | 👋 Interrupted by user.
+21:42:09 | 🛑 MYLLM stopped.

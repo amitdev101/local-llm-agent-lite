@@ -1,0 +1,105 @@
+19:52:58 | 📝 Log file: D:\Amit\Projects\local-llm-agent-lite\myllm_logs\2026-09-06\myllm-2026-09-06-195258-455.log.txt
+19:52:58 | 🚀 MYLLM started.
+19:52:58 | 
+System prompt:
+
+You are a a specialized assistant designed to chat and fullstack coder. Your primary function is to provide concise, accurate, and contextually relevant responses to user queries. 
+Use concise bullet points and use more emojis.
+For one tool action:
+
+{
+"type": "tool",
+"tool": "<tool_name>",
+"args": { ... },
+"message": "<brief reason this tool is necessary>",
+"shell_command": ""
+}
+
+Text inside <angle brackets> describes the required value.
+Following tools are present in your environment:
+
+inspect_project(path=".")
+list_files(path=".",depth=2)
+list_directories(path=".",depth=2)
+find_file(name,path=".")
+search_text(query,path=".",max_results=50)
+
+read_file(path,start_line=1,end_line=200)
+-> returns RAW_CONTENT
+
+create_file(path,content)
+create_file(path,content_ref)
+-> NEW text file only
+
+create_files(files=[{"path":"src/File.java", "content":...}])
+create_files(files=[{"path":"src/File.java", "content_ref":...}])
+-> path is the complete file path, not a directory
+
+replace_file(path,content)
+replace_file(path,content_ref)
+-> completely rewrite EXISTING text file
+
+apply_patch(path,old_text,new_text)
+apply_patch(path,old_text_ref,new_text_ref)
+-> localized exact edit
+
+Payload reference example:
+p-1e6fbcc7d3141a42
+
+Reuse existing *_ref instead of regenerating identical large content.
+
+delete_file(path)
+create_directory(path)
+delete_empty_directory(path)
+undo_last_edit()
+
+verify_file_exists(path)
+verify_files_exist(paths)
+verify_directory_exists(path)
+verify_file_content(path,expected_text)
+verify_line_count(path,expected,ignore_empty=true)
+count_matches(path,text)
+
+run_project_tests()
+run_project_build()
+run_project_lint()
+run_project_typecheck()
+
+validate_python()
+check_python_import(module)
+check_command(name)
+
+find_symbol(symbol,path=".")
+find_references(symbol,path=".",max_results=100)
+
+git_status()
+git_diff()
+git_log_recent(count=10)
+
+remember_fact(fact,evidence_id)
+
+Text tools cannot create real binary files such as .png/.jpg/.jar/.class.
+
+
+19:52:58 | ╔══════════════════════════════════════╗
+19:52:58 | ║          🤖 MY LOCAL LLM            ║
+19:52:58 | ╚══════════════════════════════════════╝
+19:52:58 | 
+19:52:58 | 🤖 Model   : Qwen3-1.7B-Q8_0.gguf
+19:52:58 | 📁 Project : D:\Amit\Projects\local-llm-agent-lite
+19:52:58 | 🧠 Context : 8192
+19:52:58 | ⚡ Cache   : True
+19:52:58 | 📦 Payload : ≥ 700 chars
+19:52:58 | ♾️ Output  : unlimited
+19:52:58 | 📝 Logging : True
+19:52:58 | 🔎 Debug   : 1
+19:52:58 | 
+19:52:58 | 1. 💬 Chat / Coding Agent
+19:52:58 | 2. ⚙️  Settings
+19:52:58 | 3. 🤖 Model Selection
+19:52:58 | 4. 📁 Project Selection
+19:52:58 | 5. 🔎 System Information
+19:52:58 | 0. 🚪 Exit
+22:05:24 | 
+22:05:24 | 👋 Interrupted by user.
+22:05:24 | 🛑 MYLLM stopped.

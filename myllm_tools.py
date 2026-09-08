@@ -1249,69 +1249,6 @@ class Tools:
     # CREATE FILE
     # ========================================================
 
-    def create_file(
-        self,
-        path: str,
-        content: str | None = None,
-        content_ref: str | None = None,
-    ) -> str:
-
-        resolved_content = self._resolve_text(
-            content,
-            content_ref,
-            "content",
-        )
-
-        file_path = self.workspace.resolve(path)
-
-        validate_text_write_path(file_path)
-
-        if file_path.exists():
-
-            if file_path.is_file() and read_text_file(file_path) == resolved_content:
-
-                return "File already has requested content: " + self.workspace.relative(
-                    file_path
-                )
-
-            raise ValueError(
-                "File already exists. "
-                "Use replace_file for a complete rewrite "
-                "or apply_patch for a localized edit."
-            )
-
-        if len(resolved_content) > MAX_EDIT_CHARS:
-
-            raise ValueError("Content is too large.")
-
-        file_path.parent.mkdir(
-            parents=True,
-            exist_ok=True,
-        )
-
-        file_path.write_text(
-            resolved_content,
-            encoding="utf-8",
-        )
-
-        if self.state is not None:
-
-            self.state.edit_backups.append(
-                (
-                    file_path,
-                    "",
-                    False,
-                )
-            )
-
-        self._mark_edited(self.workspace.relative(file_path))
-
-        return "Created new file: " f"{self.workspace.relative(file_path)}"
-
-    # ========================================================
-    # CREATE FILES
-    # ========================================================
-
     def create_files(
         self,
         files: list[dict[str, Any]],
@@ -1442,7 +1379,7 @@ class Tools:
 
         if not file_path.exists():
 
-            raise ValueError("File does not exist. " "Use create_file for a new file.")
+            raise ValueError("File does not exist. Use create_files for new files.")
 
         if not file_path.is_file():
 
@@ -2348,7 +2285,6 @@ def build_tool_registry(
         "find_file": tools.find_file,
         "search_text": tools.search_text,
         "read_file": tools.read_file,
-        "create_file": tools.create_file,
         "create_files": tools.create_files,
         "replace_file": tools.replace_file,
         "apply_patch": tools.apply_patch,
@@ -2430,16 +2366,6 @@ TOOL_SCHEMAS = {
             "path",
             "start_line",
             "end_line",
-        },
-    },
-    "create_file": {
-        "required": {
-            "path",
-        },
-        "allowed": {
-            "path",
-            "content",
-            "content_ref",
         },
     },
     "create_files": {
@@ -2712,7 +2638,6 @@ def validate_tool_arguments(
         )
 
     if tool_name in {
-        "create_file",
         "replace_file",
     }:
 
@@ -2820,67 +2745,79 @@ def validate_tool_arguments(
 # ============================================================
 
 TOOL_DOCS = """
-Text inside <angle_brackets> describes a value. Replace the entire tag.
+VALUES
+<value> = required; replace the complete tag
+[value=default] = optional
+A | B = provide exactly one
 
-inspect_project(path="<directory_path>")
-list_files(path="<directory_path>",depth=<depth>)
-list_directories(path="<directory_path>",depth=<depth>)
-find_file(name="<file_name>",path="<directory_path>")
-search_text(query="<search_text>",path="<directory_path>",max_results=<count>)
+DISCOVER
+inspect_project([path="."])
+-> project type, languages, frameworks, and available checks
+list_files([path="."],[depth=2])
+list_directories([path="."],[depth=2])
+find_file(<name>,[path="."])
+search_text(<query>,[path="."],[max_results=50])
+-> matching paths or file, line, and text
+find_symbol(<symbol>,[path="."])
+find_references(<symbol>,[path="."],[max_results=100])
 
-read_file(path="<file_path>",start_line=<first_line>,end_line=<last_line>)
--> returns RAW_CONTENT
+READ
+read_file(<path>,[start_line=1],[end_line=200])
+-> numbered RAW_CONTENT
 
-create_file(path="<new_file_path>",content="<complete_text>")
-create_file(path="<new_file_path>",content_ref="<payload_ref>")
--> NEW text file only
+CREATE
+create_files(<files>)
+-> creates one or many NEW text files after validating the complete batch
+Example: create_files(files=[{"path":"<new_file_path>","content":"<complete_text>"}])
+Each item requires <path> and <content> | <content_ref>.
+Existing identical content is unchanged success; different content is rejected.
 
-create_files(files=[{"path":"<new_file_path>","content":"<complete_text>"}])
-create_files(files=[{"path":"<new_file_path>","content_ref":"<payload_ref>"}])
--> path is the complete file path, not a directory
-
-replace_file(path="<existing_file_path>",content="<complete_text>")
-replace_file(path="<existing_file_path>",content_ref="<payload_ref>")
--> completely rewrite EXISTING text file
-
-apply_patch(path="<existing_file_path>",old_text="<exact_old_text>",new_text="<replacement_text>")
-apply_patch(path="<existing_file_path>",old_text_ref="<payload_ref>",new_text_ref="<payload_ref>")
--> localized exact edit
-
-Payload reference example:
-<payload_ref>
-
+EDIT
+replace_file(<path>,<content> | <content_ref>)
+-> replaces the complete content of an EXISTING text file
+apply_patch(<path>,<old_text> | <old_text_ref>,<new_text> | <new_text_ref>)
+-> applies one unambiguous focused change to an EXISTING text file
 Reuse existing *_ref instead of regenerating identical large content.
 
-delete_file(path="<file_path>")
-create_directory(path="<directory_path>")
-delete_empty_directory(path="<directory_path>")
+DELETE - DESTRUCTIVE
+delete_file(<path>)
+delete_empty_directory(<path>)
+-> target must exist inside the workspace
+
+DIRECTORY AND UNDO
+create_directory(<path>)
 undo_last_edit()
+-> restores the most recent file mutation
 
-verify_file_exists(path="<file_path>")
-verify_files_exist(paths=["<file_path>"])
-verify_directory_exists(path="<directory_path>")
-verify_file_content(path="<file_path>",expected_text="<text>")
-verify_line_count(path="<file_path>",expected=<line_count>,ignore_empty=<true_or_false>)
-count_matches(path="<file_path>",text="<text>")
-
+STRONG VERIFICATION
 run_project_tests()
 run_project_build()
 run_project_lint()
 run_project_typecheck()
-
 validate_python()
-check_python_import(module="<module_name>")
-check_command(name="<executable_name>")
+-> returns command, exit code, and output; use after source changes
 
-find_symbol(symbol="<symbol_name>",path="<directory_path>")
-find_references(symbol="<symbol_name>",path="<directory_path>",max_results=<count>)
+WEAK VERIFICATION
+verify_file_exists(<path>)
+verify_files_exist(<paths>)
+verify_directory_exists(<path>)
+verify_file_content(<path>,<expected_text>)
+verify_line_count(<path>,<expected>,[ignore_empty=true])
+count_matches(<path>,<text>)
+-> checks state but does not prove source correctness
 
+ENVIRONMENT
+check_python_import(<module>)
+check_command(<name>)
+
+GIT
 git_status()
 git_diff()
-git_log_recent(count=<count>)
+git_log_recent([count=10])
 
-remember_fact(fact="<verified_fact>",evidence_id="<observation_id>")
+MEMORY
+remember_fact(<fact>,<evidence_id>)
+-> evidence_id must identify a successful observation
 
 Text tools cannot create real binary files such as .png/.jpg/.jar/.class.
 """
