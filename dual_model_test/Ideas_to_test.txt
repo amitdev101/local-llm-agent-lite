@@ -3,3 +3,7 @@ For example. if we are building a game then ask the model to write a full code a
 
 This might save us from something.
 Also before thinking worker should be asked to get the output in the chat format and then work in code mode with that chat output as its input.
+
+In my testings chat format without system prompt is giving much better answer.
+
+2. 
