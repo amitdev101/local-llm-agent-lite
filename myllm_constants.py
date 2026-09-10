@@ -16,6 +16,8 @@ MEMORY_ROOT = APP_DIR / "memory"
 
 PAYLOAD_ROOT = APP_DIR / "payloads"
 
+HISTORY_ROOT = APP_DIR / "history"
+
 LOG_ROOT = SCRIPT_DIR / "myllm_logs"
 
 
@@ -26,11 +28,18 @@ LOG_ROOT = SCRIPT_DIR / "myllm_logs"
 DEFAULT_CONFIG = {
     "model_path": "",
     "project_root": str(SCRIPT_DIR),
-    "context_size": 8192,
+    "context_size": 16384,
     "gpu_layers": 0,
     "max_steps": 30,
     "max_no_progress_steps": 5,
     "temperature": 0.15,
+    "top_p": 0.95,
+    "top_k": 40,
+    "min_p": 0.05,
+    "presence_penalty": 0.0,
+    "repeat_penalty": 1.0,
+    "router_temperature": 0.1,
+    "chat_temperature": 0.7,
     "debug_level": 1,
     "recent_observations": 6,
     "prompt_cache_enabled": True,
@@ -41,6 +50,7 @@ DEFAULT_CONFIG = {
     "payload_externalize_chars": 700,
     "payload_max_files": 250,
     "logging_enabled": True,
+    "model_profile": "Generic GGUF",
 }
 
 

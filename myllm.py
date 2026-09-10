@@ -9,6 +9,7 @@ import re
 import time
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +24,7 @@ from myllm_constants import (
     APP_DIR,
     CONFIG_FILE,
     DEFAULT_CONFIG,
+    HISTORY_ROOT,
     KNOWN_FILE_EXTENSIONS,
     LOG_ROOT,
     MAX_IDENTICAL_ACTIONS,
@@ -39,8 +41,6 @@ from myllm_menu import main_menu
 from myllm_tools import (
     PayloadStore,
     Tools,
-    TOOL_DOCS,
-    TOOL_SCHEMAS,
     Workspace,
     build_tool_registry,
     detect_project_profile,
@@ -48,7 +48,7 @@ from myllm_tools import (
     truncate_text,
     validate_tool_arguments,
 )
-from myllm_system_prompt import SYSTEM_PROMPT
+from myllm_system_prompt import CHAT_PROMPT, ROUTER_PROMPT, SYSTEM_PROMPT
 
 logger = get_logger()
 
@@ -69,6 +69,11 @@ def ensure_app_directory() -> None:
     )
 
     PAYLOAD_ROOT.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    HISTORY_ROOT.mkdir(
         parents=True,
         exist_ok=True,
     )
@@ -164,7 +169,7 @@ class SessionContext:
 
     touched_files: set[str] = field(default_factory=set)
 
-    payload_refs: set[str] = field(default_factory=set)
+    payload_ids: set[str] = field(default_factory=set)
 
     last_constraints: TaskConstraints = field(default_factory=TaskConstraints)
 
@@ -517,7 +522,7 @@ def validate_tool_against_constraints(
 
     def get_text(
         inline_key: str,
-        ref_key: str,
+        payload_key: str,
         source: dict[str, Any],
     ) -> str:
         inline = source.get(inline_key)
@@ -528,24 +533,21 @@ def validate_tool_against_constraints(
         ):
             return inline
 
-        ref = source.get(ref_key)
+        payload_id = source.get(payload_key)
 
         if isinstance(
-                ref,
+                payload_id,
                 str,
         ):
             try:
-                return payload_store.load(ref)
+                return payload_store.load(payload_id)
 
             except Exception:
                 return ""
 
         return ""
 
-    if tool_name in {
-            "create_file",
-            "replace_file",
-    }:
+    if tool_name == "replace_file":
         return validate_single_mutation(
             str(args.get(
                 "path",
@@ -553,7 +555,7 @@ def validate_tool_against_constraints(
             )),
             get_text(
                 "content",
-                "content_ref",
+                "content_payload_id",
                 args,
             ),
             constraints,
@@ -567,7 +569,7 @@ def validate_tool_against_constraints(
             )),
             get_text(
                 "new_text",
-                "new_text_ref",
+                "new_text_payload_id",
                 args,
             ),
             constraints,
@@ -585,7 +587,7 @@ def validate_tool_against_constraints(
                 )),
                 get_text(
                     "content",
-                    "content_ref",
+                    "content_payload_id",
                     item,
                 ),
                 constraints,
@@ -670,44 +672,6 @@ class ProjectMemory:
 
 
 # ============================================================
-# ACTION SCHEMA
-# ============================================================
-
-TOOL_NAMES = sorted(TOOL_SCHEMAS.keys())
-
-ACTION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "type": {
-            "type": "string",
-            "enum": [
-                "tool",
-                "final",
-            ],
-        },
-        "tool": {
-            "type": "string",
-            "enum": [
-                "",
-                *TOOL_NAMES,
-            ],
-        },
-        "args": {
-            "type": "object",
-        },
-        "message": {
-            "type": "string",
-        },
-    },
-    "required": [
-        "type",
-        "tool",
-        "args",
-        "message",
-    ],
-}
-
-# ============================================================
 # ACTION VALIDATION
 # ============================================================
 
@@ -769,6 +733,9 @@ def validate_action_semantics(action: dict[str, Any], ) -> tuple[
             )
 
         return True, ""
+
+    if action_type == "invalid":
+        return False, str(action.get("message", "Invalid model output."))
 
     return (
         False,
@@ -890,7 +857,56 @@ class CodingAgent:
         })
 
         if len(self.session.recent_messages) > MAX_SESSION_MESSAGES:
+            self.write_history_snapshot(
+                "chat",
+                self.session.recent_messages,
+                "Recent chat exceeded the in-memory message limit.",
+            )
             self.session.recent_messages = self.session.recent_messages[-MAX_SESSION_MESSAGES:]
+
+    def write_history_snapshot(
+        self,
+        kind: str,
+        messages: list[dict[str, str]],
+        reason: str,
+    ) -> Path | None:
+        try:
+            now = datetime.now()
+            day_directory = HISTORY_ROOT / now.strftime("%Y-%m-%d")
+            day_directory.mkdir(parents=True, exist_ok=True)
+            path = day_directory / (
+                f"{kind}-{now:%Y-%m-%d-%H%M%S-%f}.txt"
+            )
+            sections = [
+                "MYLLM PRE-COMPACTION HISTORY",
+                f"Created: {now.astimezone().isoformat(timespec='seconds')}",
+                f"Kind: {kind}",
+                f"Reason: {reason}",
+                f"Model: {self.config.get('model_path', '')}",
+                f"Model profile: {self.config.get('model_profile', '')}",
+                f"Workspace: {self.workspace.root}",
+                f"Context size: {self.n_ctx}",
+                f"Approximate tokens: {self.token_count(messages)}",
+                "",
+                "MESSAGES",
+                "=" * 70,
+            ]
+
+            for index, message in enumerate(messages, start=1):
+                sections.extend([
+                    "",
+                    f"[{index}] {str(message.get('role', 'unknown')).upper()}",
+                    "-" * 70,
+                    str(message.get("content", "")),
+                ])
+
+            path.write_text("\n".join(sections) + "\n", encoding="utf-8")
+            logger.info("🗃️ Pre-compaction history: %s", path)
+            return path
+
+        except Exception:
+            logger.exception("⚠️ Pre-compaction history could not be saved.")
+            return None
 
     def session_card(self, ) -> str:
         recent = [(f"{message['role'].upper()}: "
@@ -899,7 +915,7 @@ class CodingAgent:
         touched = ("\n".join(f"- {path}" for path in sorted(self.session.touched_files)[-10:])
                    or "(none)")
 
-        payloads = ("\n".join(f"- {payload}" for payload in sorted(self.session.payload_refs)[-10:])
+        payloads = ("\n".join(f"- {payload}" for payload in sorted(self.session.payload_ids)[-10:])
                     or "(none)")
 
         return (f"ACTIVE ROOT: "
@@ -1010,12 +1026,12 @@ class CodingAgent:
             Any,
         ] = {
             "messages": messages,
-            "response_format": {
-                "type": "json_object",
-                "schema": ACTION_SCHEMA,
-            },
             "temperature": float(self.config["temperature"]),
-            "top_p": 0.9,
+            "top_p": float(self.config.get("top_p", 0.95)),
+            "top_k": int(self.config.get("top_k", 40)),
+            "min_p": float(self.config.get("min_p", 0.05)),
+            "presence_penalty": float(self.config.get("presence_penalty", 0.0)),
+            "repeat_penalty": float(self.config.get("repeat_penalty", 1.0)),
             "stream": True,
         }
 
@@ -1067,24 +1083,106 @@ class CodingAgent:
             )
             logger.info("─" * 70)
 
-        try:
-            parsed = json.loads(full_content)
+        visible = re.sub(r"<think>.*?</think>", "", full_content, flags=re.DOTALL).strip()
 
-        except json.JSONDecodeError as error:
-            logger.error(
-                "❌ Invalid model JSON: %s",
-                error,
-            )
-
+        if visible.startswith("{"):
+            try:
+                tool_call = json.loads(visible)
+                if not isinstance(tool_call, dict) or set(tool_call) != {"tool", "args"}:
+                    raise ValueError("Tool JSON must contain exactly tool and args.")
+                parsed = {
+                    "type": "tool",
+                    "tool": tool_call.get("tool", ""),
+                    "args": tool_call.get("args", {}),
+                    "message": "",
+                }
+            except (json.JSONDecodeError, ValueError) as error:
+                logger.error("❌ Invalid tool JSON: %s", error)
+                parsed = {
+                    "type": "invalid",
+                    "tool": "",
+                    "args": {},
+                    "message": f"Invalid tool JSON returned by model: {error}",
+                }
+        else:
             parsed = {
-                "type": "invalid",
+                "type": "final",
                 "tool": "",
                 "args": {},
-                "message": ("Invalid JSON returned "
-                            f"by model: {error}"),
+                "message": visible,
             }
 
         return parsed, full_content
+
+    def route_task(self, task: str) -> str:
+        response = self.llm.create_chat_completion(
+            messages=[{
+                "role": "user",
+                "content": ROUTER_PROMPT.format(message=task),
+            }],
+            temperature=float(self.config["router_temperature"]),
+            max_tokens=8,
+            stream=False,
+        )
+        raw = str(response.get("choices", [{}])[0].get("message", {}).get("content", ""))
+        labels = re.findall(r"(?m)^\s*(CHAT|TOOL)\s*$", raw.upper())
+        route = labels[-1] if labels else "TOOL"
+        logger.info("🧭 Router: %s | raw=%r", route, raw)
+        return route
+
+    def run_chat(self) -> str:
+        messages = self.compact_chat_messages()
+        completion_kwargs = {
+            "messages": messages,
+            "temperature": float(self.config["chat_temperature"]),
+            "top_p": float(self.config.get("top_p", 0.95)),
+            "top_k": int(self.config.get("top_k", 40)),
+            "min_p": float(self.config.get("min_p", 0.05)),
+            "presence_penalty": float(self.config.get("presence_penalty", 0.0)),
+            "repeat_penalty": float(self.config.get("repeat_penalty", 1.0)),
+            "stream": True,
+        }
+        configured_max_tokens = int(
+            self.config.get("max_model_output_tokens", 0)
+        )
+
+        if configured_max_tokens > 0:
+            completion_kwargs["max_tokens"] = configured_max_tokens
+
+        stream = self.llm.create_chat_completion(**completion_kwargs)
+        response = ""
+        for chunk in stream:
+            text = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+            if text:
+                print(text, end="", flush=True)
+                response += text
+        logger.info("")
+        return response
+
+    def compact_chat_messages(self) -> list[dict[str, str]]:
+        recent = list(self.session.recent_messages[-MAX_SESSION_MESSAGES:])
+        messages = [{"role": "system", "content": CHAT_PROMPT}, *recent]
+        ratio = float(self.config.get("trim_context_ratio", 0.72))
+        threshold = int(self.n_ctx * ratio)
+
+        if self.token_count(messages) < threshold:
+            return messages
+
+        self.write_history_snapshot(
+            "chat-context",
+            messages,
+            f"Chat context reached the {ratio:.0%} compaction threshold.",
+        )
+
+        while len(recent) > 2 and self.token_count([
+                {"role": "system", "content": CHAT_PROMPT},
+                *recent,
+        ]) >= threshold:
+            recent = recent[2:]
+
+        self.session.recent_messages = recent
+        logger.info("🧹 Compacted old chat messages.")
+        return [{"role": "system", "content": CHAT_PROMPT}, *recent]
 
     # ========================================================
     # PAYLOAD
@@ -1103,7 +1201,7 @@ class CodingAgent:
         self,
         args: dict[str, Any],
         inline_key: str,
-        ref_key: str,
+        payload_key: str,
     ) -> tuple[
             str | None,
             int,
@@ -1114,13 +1212,13 @@ class CodingAgent:
                 value,
                 str,
         ):
-            existing_ref = args.get(ref_key)
+            existing_payload_id = args.get(payload_key)
 
             if isinstance(
-                    existing_ref,
+                    existing_payload_id,
                     str,
             ):
-                self.session.payload_refs.add(existing_ref)
+                self.session.payload_ids.add(existing_payload_id)
 
             return None, 0
 
@@ -1129,14 +1227,14 @@ class CodingAgent:
 
         payload_id = self.payload_store.save(value)
 
-        self.session.payload_refs.add(payload_id)
+        self.session.payload_ids.add(payload_id)
 
         args.pop(
             inline_key,
             None,
         )
 
-        args[ref_key] = payload_id
+        args[payload_key] = payload_id
 
         return (
             payload_id,
@@ -1167,14 +1265,11 @@ class CodingAgent:
 
         notes: list[str] = []
 
-        if tool_name in {
-                "create_file",
-                "replace_file",
-        }:
+        if tool_name == "replace_file":
             payload_id, chars = self._externalize_string_field(
                 args,
                 "content",
-                "content_ref",
+                "content_payload_id",
             )
 
             if payload_id:
@@ -1183,26 +1278,26 @@ class CodingAgent:
                              f"({chars:,} chars)")
 
         elif tool_name == "apply_patch":
-            old_ref, old_chars = self._externalize_string_field(
+            old_payload_id, old_chars = self._externalize_string_field(
                 args,
                 "old_text",
-                "old_text_ref",
+                "old_text_payload_id",
             )
 
-            new_ref, new_chars = self._externalize_string_field(
+            new_payload_id, new_chars = self._externalize_string_field(
                 args,
                 "new_text",
-                "new_text_ref",
+                "new_text_payload_id",
             )
 
-            if old_ref:
+            if old_payload_id:
                 notes.append(f"old_text stored as "
-                             f"{old_ref} "
+                             f"{old_payload_id} "
                              f"({old_chars:,} chars)")
 
-            if new_ref:
+            if new_payload_id:
                 notes.append(f"new_text stored as "
-                             f"{new_ref} "
+                             f"{new_payload_id} "
                              f"({new_chars:,} chars)")
 
         elif tool_name == "create_files":
@@ -1222,7 +1317,7 @@ class CodingAgent:
                     payload_id, chars = self._externalize_string_field(
                         item,
                         "content",
-                        "content_ref",
+                        "content_payload_id",
                     )
 
                     if payload_id:
@@ -1330,7 +1425,6 @@ class CodingAgent:
             return
 
         if tool_name in {
-                "create_file",
                 "replace_file",
                 "apply_patch",
                 "read_file",
@@ -1345,7 +1439,6 @@ class CodingAgent:
                 self.session.touched_files.add(path)
 
                 if not self.session.active_file and tool_name in {
-                        "create_file",
                         "replace_file",
                         "apply_patch",
                 }:
@@ -1520,10 +1613,8 @@ class CodingAgent:
         )))
 
         if success:
-            if tool_name == "create_file" and path:
-                progress = path not in state.created_files
-
-                state.created_files.add(path)
+            if tool_name == "list_tools":
+                progress = True
 
             elif tool_name == "create_files":
                 for item in (args.get(
@@ -1673,13 +1764,10 @@ class CodingAgent:
         if tool_name == "create_directory" and "directory already exists" in lowered:
             return "The directory already exists. " "Do not recreate it."
 
-        if tool_name == "create_file" and "already exists" in lowered:
-            return "The file exists. Use replace_file " "or apply_patch."
-
         if tool_name == "apply_patch" and "old_text was not found" in lowered:
             return ("old_text did not match the current file. "
                     "Re-read the target before retrying. "
-                    "Do not retry the same stale old_text_ref.")
+                    "Do not retry the same stale old_text_payload_id.")
 
         if "binary" in lowered:
             return "Do not create fake binary files."
@@ -1741,7 +1829,7 @@ class CodingAgent:
         if tool_name.startswith("verify_") or tool_name == "count_matches":
             return "Use a project build/test/typecheck/lint or validate_python instead."
 
-        if tool_name in {"create_file", "create_files", "create_directory"}:
+        if tool_name in {"create_files", "create_directory"}:
             return "Inspect the target and continue from its current state."
 
         return "Choose different arguments or another tool using the last observation."
@@ -1799,6 +1887,12 @@ class CodingAgent:
         if self.token_count(messages) < int(self.n_ctx * ratio):
             return messages
 
+        self.write_history_snapshot(
+            "agent",
+            messages,
+            f"Agent context reached the {ratio:.0%} compaction threshold.",
+        )
+
         logger.info("🧹 Trimming old observations...")
 
         keep_count = int(self.config.get(
@@ -1807,8 +1901,7 @@ class CodingAgent:
         ))
 
         recent = messages[2:][-(keep_count * 2):]
-
-        return [
+        compacted = [
             {
                 "role": "system",
                 "content": SYSTEM_PROMPT,
@@ -1820,6 +1913,12 @@ class CodingAgent:
             *recent,
         ]
 
+        while len(recent) > 2 and self.token_count(compacted) >= int(self.n_ctx * ratio):
+            recent = recent[2:]
+            compacted = [*compacted[:2], *recent]
+
+        return compacted
+
     # ========================================================
     # RUN
     # ========================================================
@@ -1828,6 +1927,19 @@ class CodingAgent:
         self,
         task: str,
     ) -> str:
+        self.append_session_message("user", task)
+
+        try:
+            route = self.route_task(task)
+        except Exception:
+            logger.exception("Router failed; using TOOL route.")
+            route = "TOOL"
+
+        if route == "CHAT":
+            response = self.run_chat()
+            self.append_session_message("assistant", response)
+            return response
+
         state = AgentState(task=task)
 
         self.apply_explicit_target(task)
@@ -1852,11 +1964,6 @@ class CodingAgent:
 
         elif not self.session.active_task_description:
             self.session.active_task_description = task
-
-        self.append_session_message(
-            "user",
-            task,
-        )
 
         active_root = self.derive_active_root()
 
@@ -2306,11 +2413,10 @@ class CodingAgent:
             if payload_notes:
                 observation_message += ("PAYLOADS:\n" +
                                         "\n".join(f"- {note}" for note in payload_notes) + "\n\n"
-                                        "Reuse the shown *_ref instead of "
+                                        "Reuse the shown *_payload_id instead of "
                                         "regenerating identical content.\n\n")
 
             if success and tool_name in {
-                    "create_file",
                     "create_files",
                     "replace_file",
                     "apply_patch",
@@ -2351,7 +2457,6 @@ class CodingAgent:
             })
 
             if success and tool_name in {
-                    "create_file",
                     "create_files",
                     "replace_file",
                     "apply_patch",

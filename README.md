@@ -116,7 +116,9 @@ Search for repeated error handling, explain the duplication, and suggest a simpl
 
 ## 🏎️ Recommended low-end settings
 
-- 🧠 **Context:** `4096` for speed; `8192` for longer tasks
+- 🧠 **Context:** model selection now applies practical defaults: `4096` for
+  FunctionGemma, `8192` for Qwen3 1.7B, `16384` for Qwen3 4B, and `32768` for
+  Qwen3.5 9B.
 - 🎮 **GPU layers:** `0` with the standard CPU build
 - 🔁 **Maximum steps:** `12` for everyday tasks
 - 🛑 **No-progress steps:** `3`–`6`
@@ -127,7 +129,8 @@ Search for repeated error handling, explain the duplication, and suggest a simpl
 - 📦 **Model:** a 3B–4B `Q4_K_M` GGUF is a practical starting point
 
 Model size and context length have the greatest effect on RAM usage and response
-speed.
+speed. Model profiles are defaults applied on selection; users can change the
+values afterward in Settings.
 
 ## ✨ Features
 
@@ -139,22 +142,26 @@ speed.
 - 🗺️ Finds the relevant nested project root before running project commands
 - ✅ Discovers available test, build, lint, and type-check commands
 - 🔄 Re-detects project checks after new project files are created
-- 📚 Creates several files in one tool call for faster project scaffolding
+- 📚 Creates one or many files through a single consistent tool
 - 🧾 Requires complete file paths and strict fields in multi-file creation
 - ♻️ Treats already-correct file and directory creation as a successful no-op
 - 📝 Supports full-file replacement and exact or whitespace-tolerant focused patches
-- 📦 Stores large generated content as reusable payload references to keep prompts compact
+- 📦 Stores large generated content under explicit reusable payload IDs to keep prompts compact
 - 🗂️ Tracks created, modified, inspected, and active files
 - 🚧 Tracks blockers and unavailable project capabilities
 - 🧪 Detects small unfinished stubs and directs the model to implement them
 - 🧰 Validates tool names and arguments before execution
 - 🔧 Checks whether commands such as `javac` are available without running them
 - 📤 Allows unlimited model output by default while retaining an optional limit
+- ⚙️ Applies centralized, model-specific context and sampling defaults when a
+  model is selected
 - 📝 Writes optional timestamped logs for each MyLLM run
 - 🧩 Keeps menus, configuration, logging, tools, and agent logic internally separated
 - 🔄 Stops repeated actions with a no-progress circuit breaker
 - 🌡️ Raises temperature only for repeated identical failures and resets it after progress
 - ✂️ Trims old observations while preserving working state
+- 🗃️ Saves the complete chat or agent history to a timestamped text file before
+  compacting it
 - 🕒 Requires a real build, test, type-check, lint, or Python validation after mutations
 - 🚧 Records unavailable verification so the agent can report the blocker instead of looping
 - ↩️ Can undo file creation, modification, and deletion during the current run
@@ -167,6 +174,7 @@ speed.
 - ⚙️ Settings: `.myllm/config.json`
 - 🧠 Verified project memory: `.myllm/memory`
 - 📦 Temporary large-content payloads: `.myllm/payloads`
+- 🗃️ Pre-compaction history snapshots: `.myllm/history/<date>/`
 - 📝 Timestamped run logs: `myllm_logs/<date>/`
 - 💬 Direct model conversation logs: `model_chat_logs/<date>/`
 - 🌐 Playground conversations: `local_llm_playground/data/chats/*.jsonl`

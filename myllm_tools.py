@@ -888,23 +888,23 @@ class Tools:
     def _resolve_text(
         self,
         inline: str | None,
-        payload_ref: str | None,
+        payload_id: str | None,
         field_name: str,
     ) -> str:
 
-        if inline is None and payload_ref is None:
+        if inline is None and payload_id is None:
 
-            raise ValueError(f"Provide {field_name} " f"or {field_name}_ref.")
+            raise ValueError(f"Provide {field_name} or {field_name}_payload_id.")
 
-        if inline is not None and payload_ref is not None:
+        if inline is not None and payload_id is not None:
 
             raise ValueError(
-                f"Provide only one of " f"{field_name} " f"or {field_name}_ref."
+                f"Provide only one of {field_name} or {field_name}_payload_id."
             )
 
-        if payload_ref is not None:
+        if payload_id is not None:
 
-            return self.payload_store.load(payload_ref)
+            return self.payload_store.load(payload_id)
 
         assert inline is not None
 
@@ -913,6 +913,11 @@ class Tools:
     # ========================================================
     # PROJECT
     # ========================================================
+
+    def list_tools(self, ) -> str:
+        """Return model-facing tool documentation on demand."""
+
+        return TOOL_DOCS.strip()
 
     def inspect_project(
         self,
@@ -1288,7 +1293,7 @@ class Tools:
 
             resolved_content = self._resolve_text(
                 item.get("content"),
-                item.get("content_ref"),
+                item.get("content_payload_id"),
                 "content",
             )
 
@@ -1364,12 +1369,12 @@ class Tools:
         self,
         path: str,
         content: str | None = None,
-        content_ref: str | None = None,
+        content_payload_id: str | None = None,
     ) -> str:
 
         resolved_content = self._resolve_text(
             content,
-            content_ref,
+            content_payload_id,
             "content",
         )
 
@@ -1425,19 +1430,19 @@ class Tools:
         path: str,
         old_text: str | None = None,
         new_text: str | None = None,
-        old_text_ref: str | None = None,
-        new_text_ref: str | None = None,
+        old_text_payload_id: str | None = None,
+        new_text_payload_id: str | None = None,
     ) -> str:
 
         resolved_old_text = self._resolve_text(
             old_text,
-            old_text_ref,
+            old_text_payload_id,
             "old_text",
         )
 
         resolved_new_text = self._resolve_text(
             new_text,
-            new_text_ref,
+            new_text_payload_id,
             "new_text",
         )
 
@@ -2279,6 +2284,7 @@ def build_tool_registry(
 ]:
 
     return {
+        "list_tools": tools.list_tools,
         "inspect_project": tools.inspect_project,
         "list_files": tools.list_files,
         "list_directories": tools.list_directories,
@@ -2319,6 +2325,10 @@ def build_tool_registry(
 # ============================================================
 
 TOOL_SCHEMAS = {
+    "list_tools": {
+        "required": set(),
+        "allowed": set(),
+    },
     "inspect_project": {
         "required": set(),
         "allowed": {
@@ -2383,7 +2393,7 @@ TOOL_SCHEMAS = {
         "allowed": {
             "path",
             "content",
-            "content_ref",
+            "content_payload_id",
         },
     },
     "apply_patch": {
@@ -2394,8 +2404,8 @@ TOOL_SCHEMAS = {
             "path",
             "old_text",
             "new_text",
-            "old_text_ref",
-            "new_text_ref",
+            "old_text_payload_id",
+            "new_text_payload_id",
         },
     },
     "delete_file": {
@@ -2563,10 +2573,10 @@ TOOL_SCHEMAS = {
 }
 
 
-def _validate_inline_or_ref(
+def _validate_inline_or_payload_id(
     args: dict[str, Any],
     inline_name: str,
-    ref_name: str,
+    payload_name: str,
 ) -> tuple[
     bool,
     str,
@@ -2574,20 +2584,20 @@ def _validate_inline_or_ref(
 
     has_inline = inline_name in args and args[inline_name] is not None
 
-    has_ref = ref_name in args and args[ref_name] is not None
+    has_payload = payload_name in args and args[payload_name] is not None
 
-    if not has_inline and not has_ref:
+    if not has_inline and not has_payload:
 
         return (
             False,
-            (f"Provide either " f"{inline_name} " f"or {ref_name}."),
+            (f"Provide either " f"{inline_name} " f"or {payload_name}."),
         )
 
-    if has_inline and has_ref:
+    if has_inline and has_payload:
 
         return (
             False,
-            (f"Provide only one of " f"{inline_name} " f"or {ref_name}."),
+            (f"Provide only one of " f"{inline_name} " f"or {payload_name}."),
         )
 
     return (
@@ -2641,18 +2651,18 @@ def validate_tool_arguments(
         "replace_file",
     }:
 
-        return _validate_inline_or_ref(
+        return _validate_inline_or_payload_id(
             args,
             "content",
-            "content_ref",
+            "content_payload_id",
         )
 
     if tool_name == "apply_patch":
 
-        valid, reason = _validate_inline_or_ref(
+        valid, reason = _validate_inline_or_payload_id(
             args,
             "old_text",
-            "old_text_ref",
+            "old_text_payload_id",
         )
 
         if not valid:
@@ -2662,10 +2672,10 @@ def validate_tool_arguments(
                 reason,
             )
 
-        return _validate_inline_or_ref(
+        return _validate_inline_or_payload_id(
             args,
             "new_text",
-            "new_text_ref",
+            "new_text_payload_id",
         )
 
     if tool_name == "create_files":
@@ -2707,7 +2717,7 @@ def validate_tool_arguments(
             extra_item_keys = set(item) - {
                 "path",
                 "content",
-                "content_ref",
+                "content_payload_id",
             }
 
             if extra_item_keys:
@@ -2721,10 +2731,10 @@ def validate_tool_arguments(
                     ),
                 )
 
-            valid, reason = _validate_inline_or_ref(
+            valid, reason = _validate_inline_or_payload_id(
                 item,
                 "content",
-                "content_ref",
+                "content_payload_id",
             )
 
             if not valid:
@@ -2769,15 +2779,15 @@ CREATE
 create_files(<files>)
 -> creates one or many NEW text files after validating the complete batch
 Example: create_files(files=[{"path":"<new_file_path>","content":"<complete_text>"}])
-Each item requires <path> and <content> | <content_ref>.
+Each item requires <path> and <content> | <content_payload_id>.
 Existing identical content is unchanged success; different content is rejected.
 
 EDIT
-replace_file(<path>,<content> | <content_ref>)
+replace_file(<path>,<content> | <content_payload_id>)
 -> replaces the complete content of an EXISTING text file
-apply_patch(<path>,<old_text> | <old_text_ref>,<new_text> | <new_text_ref>)
+apply_patch(<path>,<old_text> | <old_text_payload_id>,<new_text> | <new_text_payload_id>)
 -> applies one unambiguous focused change to an EXISTING text file
-Reuse existing *_ref instead of regenerating identical large content.
+Reuse an exact *_payload_id supplied by the controller instead of regenerating identical large content.
 
 DELETE - DESTRUCTIVE
 delete_file(<path>)

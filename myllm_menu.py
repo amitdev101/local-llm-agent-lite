@@ -11,6 +11,7 @@ from myllm_constants import (
     PAYLOAD_ROOT,
     SCRIPT_DIR,
 )
+from myllm_model_profiles import apply_model_profile
 from myllm_logging import get_logger
 from myllm_tools import (
     detect_project_profile,
@@ -168,12 +169,19 @@ def model_selection_menu(
             number = int(selected)
 
             if 1 <= number <= len(models):
-                config["model_path"] = str(models[number - 1])
+                selected_model = models[number - 1]
+                config["model_path"] = str(selected_model)
+                profile = apply_model_profile(config, selected_model)
 
                 save_config(config)
 
                 logger.info("")
                 logger.info("✅ Model selected.")
+                logger.info(
+                    "⚙️ Defaults: %s | context %s | output unlimited",
+                    profile["name"],
+                    config["context_size"],
+                )
 
                 pause()
                 return
@@ -199,11 +207,17 @@ def model_selection_menu(
         return
 
     config["model_path"] = str(path)
+    profile = apply_model_profile(config, path)
 
     save_config(config)
 
     logger.info("")
     logger.info("✅ Model selected.")
+    logger.info(
+        "⚙️ Defaults: %s | context %s | output unlimited",
+        profile["name"],
+        config["context_size"],
+    )
 
     pause()
 
