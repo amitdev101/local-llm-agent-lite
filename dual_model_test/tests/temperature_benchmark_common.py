@@ -35,12 +35,26 @@ def create_completion(
     temperature: float,
     seed: int,
 ):
-    started = time.perf_counter()
-    response = model.create_chat_completion(
-        messages=[
+    return create_messages_completion(
+        model,
+        [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
         ],
+        temperature,
+        seed,
+    )
+
+
+def create_messages_completion(
+    model,
+    messages: list[dict[str, str]],
+    temperature: float,
+    seed: int,
+):
+    started = time.perf_counter()
+    response = model.create_chat_completion(
+        messages=messages,
         temperature=temperature,
         seed=seed,
         stream=False,

@@ -27,6 +27,8 @@ changing the production agent in `myllm.py`.
   it is intentionally excluded from normal test discovery.
 - `tests/evaluate_game_generation_temperatures.py` — opt-in Java 8 Snake and
   Tic-Tac-Toe generation benchmark.
+- `tests/evaluate_chat_draft_before_agent.py` — A/B benchmark for the
+  no-system-prompt chat-draft handoff idea.
 - `tests/temperature_benchmark_common.py` — shared sampling, completion, and
   JSONL helpers for both temperature benchmarks.
 - `myllm_dual_model_test_01.py` — an older experimental snapshot; it is not the
@@ -339,6 +341,26 @@ evidence, and resulting decision.
   features, but failed Java compilation by calling `Scanner.nextLine()` as a
   static method. Generation took about 181 seconds and 978 completion tokens.
 
+### 17. Chat-first drafting became an A/B experiment
+
+- **Idea:** before code mode, ask the Worker model for a complete solution in
+  natural chat without a system prompt, then give that response to Worker and
+  Kid as context.
+- **Baseline:** Worker receives the same game task directly through the coding
+  prompt; Kid reviews the generated source and controller evidence.
+- **Chat-first path:** the Worker model first produces an unconstrained natural
+  draft at temperature `0.7`; Worker converts or corrects it at `0.25`; Kid
+  reviews the same draft, resulting source, compilation, and feature evidence
+  at `0.15`.
+- **Comparison:** both paths use the same game, seed, compiler, feature checks,
+  and controller completion rule. Results compare compilation, source score,
+  feature coverage, Kid accuracy, total time, and total tokens.
+- **Detailed evidence:** every prompt, draft, thinking trace, response, parsed
+  action/decision, generated file, compiler result, error, and timing is written
+  to the same detailed JSONL and readable-log format as the game benchmark.
+- **Boundary:** model output is reference material, never trusted evidence or
+  automatically executed code.
+
 ## ✅ What is confirmed
 
 - A tiny plain-text router is preferable to JSON for `CHAT` versus `TOOL`.
@@ -419,6 +441,25 @@ Each run creates one folder under `temperature_results/` containing:
 Scoring gives 10 points for parsing, 10 for the correct action, 40 for Java 8
 compilation, and 40 for game-specific feature coverage. Review the source and
 logs before treating the highest score as the final temperature choice.
+
+### Compare direct coding with chat-first drafting
+
+Run the A/B experiment for both games with seed `42`:
+
+```powershell
+python dual_model_test\tests\evaluate_chat_draft_before_agent.py
+```
+
+Run only one game or add more seeds:
+
+```powershell
+python dual_model_test\tests\evaluate_chat_draft_before_agent.py --game tic-tac-toe
+python dual_model_test\tests\evaluate_chat_draft_before_agent.py --seeds 11,42,73
+```
+
+The experiment is opt-in and excluded from normal test discovery. It uses the
+original local models, has no explicit output-token limit, and never runs the
+generated games.
 
 ## ▶️ Run the experiment
 
