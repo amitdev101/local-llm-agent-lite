@@ -10,7 +10,7 @@ from builtins import print as builtin_print
 from datetime import datetime
 from llama_cpp import Llama
 
-LOG_FILE = ".dualagent.log"
+LOG_FILE = Path(__file__).resolve().parent / ".dualagent.log"
 
 
 def print(*args, **kwargs):

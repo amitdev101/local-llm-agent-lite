@@ -36,7 +36,7 @@ changing the production agent in `myllm.py`.
 
 Runtime data remains at the repository root:
 
-- `.dualagent.log` — complete model and controller output.
+- `dual_model_test/.dualagent.log` — complete model and controller output.
 - `.myllm/router_feedback.jsonl` — confirmed router corrections.
 - `agent_test_workspace/` — isolated project workspace used by the experiment.
 
@@ -132,7 +132,7 @@ evidence, and resulting decision.
   or restart.
 - **Tried:** persist output before printing it to the console.
 - **Confirmed:** Java compiler diagnostics and full Python tracebacks appeared
-  in `.dualagent.log`.
+  in `dual_model_test/.dualagent.log`.
 - **Changed:** raw model output, controller observations, compiler output, and
   failures are logged with timestamps.
 

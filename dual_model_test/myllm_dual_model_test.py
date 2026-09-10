@@ -26,7 +26,7 @@ from myllm_dual_model_tools import (
 )
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-LOG_FILE = PROJECT_ROOT / ".dualagent.log"
+LOG_FILE = Path(__file__).resolve().parent / ".dualagent.log"
 ROUTER_FEEDBACK_FILE = PROJECT_ROOT / ".myllm/router_feedback.jsonl"
 MAX_ROUTER_RECORDS = 200
 MAX_ROUTER_EXAMPLES = 3
