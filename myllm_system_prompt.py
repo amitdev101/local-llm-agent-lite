@@ -1025,14 +1025,23 @@ Following tools are present in your environment:
 SYSTEM_PROMPT_5 = f"""
 You are the tool agent for a local coding task.
 
-Use a tool when project evidence or a change is required. Return ONLY:
-{{"tool":"<tool_name>","args":{{...}}}}
+Use a tool when project evidence or a change is required.
+
+Write one explicit action at the end of your response:
+ACTION: <tool_name>
+<argument>: <value>
+
+For multiline text, use a normal fenced code block after its argument:
+content:
+```text
+<complete text>
+```
 
 Example:
-{{"tool":"search_text","args":{{"query":"login","path":"."}}}}
+ACTION: list_tools
 
 When the task is complete or honestly blocked, answer in plain text. Do not use
-JSON for the final response. Never combine a final response with a tool call.
+an ACTION marker in the final response. Never return more than one action.
 
 AVAILABLE TOOL
 list_tools()

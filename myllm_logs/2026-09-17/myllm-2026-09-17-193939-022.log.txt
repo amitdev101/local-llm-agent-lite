@@ -1,0 +1,179 @@
+19:39:39 | 📝 Log file: D:\Amit\Projects\local-llm-agent-lite\myllm_logs\2026-09-17\myllm-2026-09-17-193939-022.log.txt
+19:39:39 | 🚀 MYLLM started.
+19:39:39 | 
+System prompt:
+
+You are the tool agent for a local coding task.
+
+Use a tool when project evidence or a change is required.
+
+Write one explicit action at the end of your response:
+ACTION: <tool_name>
+<argument>: <value>
+
+For multiline text, use a normal fenced code block after its argument:
+content:
+```text
+<complete text>
+```
+
+Example:
+ACTION: list_tools
+
+When the task is complete or honestly blocked, answer in plain text. Do not use
+an ACTION marker in the final response. Never return more than one action.
+
+AVAILABLE TOOL
+list_tools()
+-> returns the complete tool list with required and optional arguments
+
+Call list_tools before using any project tool. Call it only once per task.
+
+19:39:39 | ╔══════════════════════════════════════╗
+19:39:39 | ║          🤖 MY LOCAL LLM            ║
+19:39:39 | ╚══════════════════════════════════════╝
+19:39:39 | 
+19:39:39 | 🤖 Model   : Qwen3.5-9B-Q4_K_M.gguf
+19:39:39 | 📁 Project : D:\Amit\Projects\local-llm-agent-lite
+19:39:39 | 🧠 Context : 32768
+19:39:39 | ⚡ Cache   : True
+19:39:39 | 📦 Payload : ≥ 700 chars
+19:39:39 | ♾️ Output  : unlimited
+19:39:39 | 📝 Logging : True
+19:39:39 | 🔎 Debug   : 1
+19:39:39 | 
+19:39:39 | 1. 💬 Chat / Coding Agent
+19:39:39 | 2. ⚙️  Settings
+19:39:39 | 3. 🤖 Model Selection
+19:39:39 | 4. 📁 Project Selection
+19:39:39 | 5. 🔎 System Information
+19:39:39 | 0. 🚪 Exit
+19:39:50 | 
+19:39:50 | ======================================================================
+19:39:50 | 🤖 LOCAL CODING AGENT
+19:39:50 | ======================================================================
+19:39:50 | 
+19:39:50 | Model   : Qwen3.5-9B-Q4_K_M.gguf
+19:39:50 | Project : D:\Amit\Projects\local-llm-agent-lite
+19:39:50 | Context : 32768
+19:39:50 | Debug   : 1
+19:39:50 | Cache   : True (1024 MB)
+19:39:50 | Payload : externalize ≥ 700 chars
+19:39:50 | Output  : unlimited
+19:39:50 | Logging : True
+19:39:50 | 
+19:39:50 | Loading...
+19:39:50 | 
+19:39:50 | 🧠 Loading model...
+19:40:05 | ⚡ Prompt cache enabled: 1024 MB
+19:40:05 | 📦 Payload store: D:\Amit\Projects\local-llm-agent-lite\.myllm\payloads
+19:40:05 | ✅ Model loaded.
+19:40:05 | 
+19:40:05 | Commands:
+19:40:05 | /back
+19:40:05 | /session
+19:40:05 | /reset
+19:40:05 | 
+19:40:05 | ----------------------------------------------------------------------
+19:40:23 | 
+19:40:23 | 👤 USER REQUEST
+19:40:23 | Make a snake game in Java 8.
+19:40:23 | 
+19:40:23 | 🚀 Sending to model...
+19:40:31 | 🧭 Router: TOOL | raw='Thinking Process:\n\n1.  **'
+19:40:32 | 
+19:40:32 | 🧠 Step 1/30 | context ≈ 599/32768
+19:41:17 | 
+19:41:17 | ──────────────────────────────────────────────────────────────────────
+19:41:17 | 🧠 RAW LLM RESPONSE
+19:41:17 | ──────────────────────────────────────────────────────────────────────
+19:41:17 | The user wants me to create a snake game in Java 8. I need to:
+
+1. First call list_tools to see what tools are available
+2. Then create a Java file with a complete snake game implementation
+
+Let me start by calling list_tools to understand what capabilities I have.
+</think>
+
+ACTION: list_tools
+19:41:17 | ──────────────────────────────────────────────────────────────────────
+19:41:17 | 🧩 Parsed response: TOOL (list_tools) | format=natural
+19:41:17 | 
+19:41:17 | 🛠️ list_tools
+19:41:17 | 📦 VALUES
+<value> = required; replace the complete tag
+[value=default] = optional
+A | B = provide exactly one
+
+DISCOVER
+inspect_project([path="."])
+-> project type, languages, frameworks, and available checks
+list_files([path="."],[depth=2])
+list_directories([path="."],[depth=2])
+find_file(<name>,[path="."])
+search_text(<query>,[path="."],[max_results=50])
+-> matching paths or file, line, and text
+find_symbol(<symbol>,[path="."])
+find_references(<symbol>,[path="."],[max_results=100])
+
+READ
+read_file(<path>,[start_line=1],[end_line=200])
+-> numbered RAW_CONTENT
+
+CREATE
+create_files(<files>)
+-> creates one or many NEW text files after validating the complete batch
+Example: create_files(files=[{"path":"<new_file_path>","content":"<complete_text>"}])
+Each item requires <path> and <content> | <content_payload_id>.
+Existing identical content is unchanged success; different content is rejected.
+
+EDIT
+replace_file(<path>,<content> | <content_payload_id>)
+-> replaces the complete content of an EXISTING text file
+apply_patch(<path>,<old_text> | <old_text_payload_id>,<new_text> | <new_text_payload_id>)
+-> applies one unambiguous focused change to an EXISTING text file
+Reuse an exact *_payload_id supplied by the controller instead of regenerating identical large content.
+
+DELETE - DESTRUCTIVE
+delete_file(<path>)
+delete_empty_directory(<path>)
+-> target must exist inside the workspace
+
+DIRECTORY AND UNDO
+create_directory(<path>)
+undo_last_edit()
+-> restores the most recent file mutation
+
+STRONG VERIFICATION
+run_project_tests()
+run_project_build()
+run_project_lint()
+run_project_typecheck()
+validate_python()
+-> returns command, exit code, and output; use after source changes
+
+WEAK VERIFICATION
+verify_file_exists(<path>)
+verify_files_exist(<paths>)
+verify_directory_exists(<path>)
+verify_file_content(<path>,<expected_text>)
+verify_line_count(<path>,<expected>,[ignore_empty=true])
+count_matches(<path>,<text>)
+-> checks state but does not prove source correctness
+
+ENVIRONMENT
+check_python_import(<module>)
+check_command(<name>)
+
+GIT
+git_status()
+git_diff()
+git_log_recent([count=10])
+
+MEMORY
+remember_fact(<fact>,<evidence_id>)
+-> evidence_id must identify a successful observation
+
+Text tools cannot create real binary files such as .png/.jpg/.jar/.class.
+19:41:17 | 
+19:41:17 | 🧠 Step 2/30 | context ≈ 1457/32768

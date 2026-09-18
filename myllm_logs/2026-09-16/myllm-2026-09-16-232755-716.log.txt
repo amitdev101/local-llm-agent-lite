@@ -1,0 +1,121 @@
+23:27:55 | 📝 Log file: D:\Amit\Projects\local-llm-agent-lite\myllm_logs\2026-09-16\myllm-2026-09-16-232755-716.log.txt
+23:27:55 | 🚀 MYLLM started.
+23:27:55 | 
+System prompt:
+
+You are the tool agent for a local coding task.
+
+Use a tool when project evidence or a change is required. Return ONLY:
+{"tool":"<tool_name>","args":{...}}
+
+Example:
+{"tool":"search_text","args":{"query":"login","path":"."}}
+
+When the task is complete or honestly blocked, answer in plain text. Do not use
+JSON for the final response. Never combine a final response with a tool call.
+
+AVAILABLE TOOL
+list_tools()
+-> returns the complete tool list with required and optional arguments
+
+Call list_tools before using any project tool. Call it only once per task.
+
+23:27:55 | ╔══════════════════════════════════════╗
+23:27:55 | ║          🤖 MY LOCAL LLM            ║
+23:27:55 | ╚══════════════════════════════════════╝
+23:27:55 | 
+23:27:55 | 🤖 Model   : Qwen3.5-9B-Q4_K_M.gguf
+23:27:55 | 📁 Project : D:\Amit\Projects\local-llm-agent-lite
+23:27:55 | 🧠 Context : 32768
+23:27:55 | ⚡ Cache   : True
+23:27:55 | 📦 Payload : ≥ 700 chars
+23:27:55 | ♾️ Output  : unlimited
+23:27:55 | 📝 Logging : True
+23:27:55 | 🔎 Debug   : 1
+23:27:55 | 
+23:27:55 | 1. 💬 Chat / Coding Agent
+23:27:55 | 2. ⚙️  Settings
+23:27:55 | 3. 🤖 Model Selection
+23:27:55 | 4. 📁 Project Selection
+23:27:55 | 5. 🔎 System Information
+23:27:55 | 0. 🚪 Exit
+23:28:03 | 
+23:28:03 | ======================================================================
+23:28:03 | 🤖 LOCAL CODING AGENT
+23:28:03 | ======================================================================
+23:28:03 | 
+23:28:03 | Model   : Qwen3.5-9B-Q4_K_M.gguf
+23:28:03 | Project : D:\Amit\Projects\local-llm-agent-lite
+23:28:03 | Context : 32768
+23:28:03 | Debug   : 1
+23:28:03 | Cache   : True (1024 MB)
+23:28:03 | Payload : externalize ≥ 700 chars
+23:28:03 | Output  : unlimited
+23:28:03 | Logging : True
+23:28:03 | 
+23:28:03 | Loading...
+23:28:03 | 
+23:28:03 | 🧠 Loading model...
+23:28:25 | ⚡ Prompt cache enabled: 1024 MB
+23:28:25 | 📦 Payload store: D:\Amit\Projects\local-llm-agent-lite\.myllm\payloads
+23:28:25 | ✅ Model loaded.
+23:28:25 | 
+23:28:25 | Commands:
+23:28:25 | /back
+23:28:25 | /session
+23:28:25 | /reset
+23:28:25 | 
+23:28:25 | ----------------------------------------------------------------------
+23:28:42 | 
+23:28:42 | 👤 USER REQUEST
+23:28:42 | Use project tools to inspect README.md and report only its first Markdown heading. Do not modify any files.
+23:28:42 | 
+23:28:42 | 🚀 Sending to model...
+23:28:53 | 🧭 Router: TOOL | raw='Thinking Process:\n\n1.  **'
+23:28:54 | 
+23:28:54 | 🧠 Step 1/30 | context ≈ 614/32768
+23:29:50 | 
+23:29:50 | ──────────────────────────────────────────────────────────────────────
+23:29:50 | 🧠 RAW LLM RESPONSE
+23:29:50 | ──────────────────────────────────────────────────────────────────────
+23:29:50 | The user wants me to inspect README.md and report only its first Markdown heading. I need to use project tools to read the file. Let me first call list_tools to see what tools are available.
+</think>
+
+{"tool":"list_tools","args":{}}
+23:29:50 | ──────────────────────────────────────────────────────────────────────
+23:29:50 | ⚠️ Tool-shaped JSON detected inside text but was not parsed.
+23:29:50 | 🧩 Parsed response: FINAL
+23:29:50 | ✅ Completion accepted: no pending controller requirements
+23:29:50 | 🏁 Agent loop ended at step 1/30 with a final response.
+23:29:50 | 
+23:29:50 | ======================================================================
+23:29:50 | 🤖 RESPONSE
+23:29:50 | ======================================================================
+23:29:50 | The user wants me to inspect README.md and report only its first Markdown heading. I need to use project tools to read the file. Let me first call list_tools to see what tools are available.
+</think>
+
+{"tool":"list_tools","args":{}}
+23:29:50 | 
+23:29:50 | ----------------------------------------------------------------------
+23:29:59 | ╔══════════════════════════════════════╗
+23:29:59 | ║          🤖 MY LOCAL LLM            ║
+23:29:59 | ╚══════════════════════════════════════╝
+23:29:59 | 
+23:29:59 | 🤖 Model   : Qwen3.5-9B-Q4_K_M.gguf
+23:29:59 | 📁 Project : D:\Amit\Projects\local-llm-agent-lite
+23:29:59 | 🧠 Context : 32768
+23:29:59 | ⚡ Cache   : True
+23:29:59 | 📦 Payload : ≥ 700 chars
+23:29:59 | ♾️ Output  : unlimited
+23:29:59 | 📝 Logging : True
+23:29:59 | 🔎 Debug   : 1
+23:29:59 | 
+23:29:59 | 1. 💬 Chat / Coding Agent
+23:29:59 | 2. ⚙️  Settings
+23:29:59 | 3. 🤖 Model Selection
+23:29:59 | 4. 📁 Project Selection
+23:29:59 | 5. 🔎 System Information
+23:29:59 | 0. 🚪 Exit
+23:29:59 | 
+23:29:59 | 👋 Goodbye.
+23:29:59 | 🛑 MYLLM stopped.

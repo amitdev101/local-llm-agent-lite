@@ -49,6 +49,7 @@ from myllm_tools import (
     validate_tool_arguments,
 )
 from myllm_system_prompt import CHAT_PROMPT, ROUTER_PROMPT, SYSTEM_PROMPT
+from myllm_tool_parser import parse_model_response
 
 logger = get_logger()
 
@@ -1083,34 +1084,25 @@ class CodingAgent:
             )
             logger.info("─" * 70)
 
-        visible = re.sub(r"<think>.*?</think>", "", full_content, flags=re.DOTALL).strip()
+        parsed, parser_format = parse_model_response(full_content)
 
-        if visible.startswith("{"):
-            try:
-                tool_call = json.loads(visible)
-                if not isinstance(tool_call, dict) or set(tool_call) != {"tool", "args"}:
-                    raise ValueError("Tool JSON must contain exactly tool and args.")
-                parsed = {
-                    "type": "tool",
-                    "tool": tool_call.get("tool", ""),
-                    "args": tool_call.get("args", {}),
-                    "message": "",
-                }
-            except (json.JSONDecodeError, ValueError) as error:
-                logger.error("❌ Invalid tool JSON: %s", error)
-                parsed = {
-                    "type": "invalid",
-                    "tool": "",
-                    "args": {},
-                    "message": f"Invalid tool JSON returned by model: {error}",
-                }
+        if parsed["type"] == "tool":
+            logger.info(
+                "🧩 Parsed response: TOOL (%s) | format=%s",
+                parsed["tool"],
+                parser_format,
+            )
+        elif parsed["type"] == "invalid":
+            logger.error("❌ %s", parsed["message"])
+            logger.error(
+                "🧩 Parsed response: INVALID | format=%s",
+                parser_format,
+            )
         else:
-            parsed = {
-                "type": "final",
-                "tool": "",
-                "args": {},
-                "message": visible,
-            }
+            logger.info(
+                "🧩 Parsed response: FINAL | format=%s",
+                parser_format,
+            )
 
         return parsed, full_content
 
@@ -2075,7 +2067,9 @@ class CodingAgent:
                 })
 
                 if state.no_progress_steps >= max_no_progress:
-                    return "🛑 Agent repeatedly returned " "invalid action formats."
+                    result = "🛑 Agent repeatedly returned invalid action formats."
+                    logger.error("🏁 Agent loop ended at step %s/%s: %s", step, max_steps, result)
+                    return result
 
                 continue
 
@@ -2103,6 +2097,15 @@ class CodingAgent:
                 allowed, reason = self.completion_allowed(state)
 
                 if allowed:
+                    logger.info(
+                        "✅ Completion accepted: %s",
+                        reason or "no pending controller requirements",
+                    )
+                    logger.info(
+                        "🏁 Agent loop ended at step %s/%s with a final response.",
+                        step,
+                        max_steps,
+                    )
                     self.append_session_message(
                         "assistant",
                         model_message,
