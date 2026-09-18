@@ -151,8 +151,20 @@ executing partial content.
 
 ## ⌨️ Interactive commands
 
+Enter a coding task normally, or type `0` to choose any command from a numbered menu. `/menu`
+remains available as an explicit alias. This keeps advanced commands discoverable without requiring
+users to memorize them.
+
+The active chat header displays the complete numbered command reference followed by
+`0. ⚙️ Open interactive command menu`, so users can see exactly what the menu contains before
+opening it.
+
+The launcher also provides `8. ⌨️ Interactive commands`, which displays this reference before the
+model is started. Exit remains launcher option `0`.
+
 | Command | Behavior |
 |---|---|
+| `0` or `/menu` | Opens the numbered interactive command menu |
 | `/status` | Loads/reads the model profile and shows model, workspace, context, temperature, mode, session, and data folder |
 | `/undo` | Restores the latest unchanged agent checkpoint |
 | `/resume <run-id>` | Replays and reconciles an interrupted run, then continues at a safe boundary |

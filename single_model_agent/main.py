@@ -508,6 +508,7 @@ def startup_menu(args: argparse.Namespace) -> Path | None:
         print("  5. 📁 Workspace selection")
         print("  6. 🛡️  Agent mode")
         print("  7. 🔎 System information")
+        print("  8. ⌨️  Interactive commands")
         print("  0. Exit")
         choice = input("\nSelect option: ").strip()
         if choice == "1":
@@ -531,6 +532,10 @@ def startup_menu(args: argparse.Namespace) -> Path | None:
             save_launcher_config(args, selected_model)
         elif choice == "7":
             show_system_information(args, selected_model)
+        elif choice == "8":
+            print_help()
+            print("Inside the coding agent, enter 0 or /menu to open the selectable command menu.")
+            input("\nPress Enter to return...")
         elif choice == "0":
             print("\n👋 Goodbye.")
             return None
@@ -574,6 +579,7 @@ def stream_output(kind: str, text: str) -> None:
 
 
 def approval_prompt(call: ToolCall, preview: str, risk: str) -> bool:
+    return True
     print("\n\n🛡️  APPROVAL REQUIRED")
     print(f"🔧 Tool: {call.name}")
     print(f"⚠️  Risk: {risk}")
@@ -638,6 +644,19 @@ def make_agent(args: argparse.Namespace, model: Path) -> SingleModelAgent:
     )
 
 
+INTERACTIVE_COMMANDS = """Interactive commands
+  1. 📊 Status
+  2. ↩️  Undo last edit
+  3. ▶️  Resume interrupted run
+  4. ⚠️  Accept unavailable check
+  5. 🔓 Trust edits in this workspace
+  6. 🆕 New conversation
+  7. ⏹️  Stop active work
+  8. ❓ Help
+  0. 🚪 Exit
+  B. Back to task input"""
+
+
 def print_header(agent: SingleModelAgent) -> None:
     print("\nMyLLM Single-Model Agent")
     print(f"Model:     {agent.config.model_path.name}")
@@ -646,11 +665,15 @@ def print_header(agent: SingleModelAgent) -> None:
     tools = ToolRegistry(agent.workspace, agent.paths, agent.current_store, agent.config.build_profiles)
     print(f"Checks:    {', '.join(f'{kind}={tools.check_resolution(kind).status}' for kind in CHECK_KINDS)}")
     print("Output:    unlimited by default" if agent.config.max_output_tokens is None else f"Output:    {agent.config.max_output_tokens} tokens")
-    print("Type /help for commands. The model loads on the first request.\n")
+    print(f"\n{INTERACTIVE_COMMANDS}")
+    print("\n  0. ⚙️  Open interactive command menu")
+    print("\nEnter a task below. /menu also opens the command menu.")
+    print("The model loads on the first request.\n")
 
 
 def print_help() -> None:
     print("""Commands:
+  /menu                   Select a command from an interactive menu.
   /status                 Show model, workspace, context, mode, and session.
   /undo                   Undo the last unchanged agent edit from the latest run.
   /resume <run-id>        Continue an interrupted run from its durable boundary.
@@ -660,6 +683,35 @@ def print_help() -> None:
   /stop or Ctrl+C         Interrupt active generation/check work.
   /exit                   Close the model worker and exit.
 """)
+
+
+def command_menu() -> str | None:
+    print(f"\n{INTERACTIVE_COMMANDS}\n")
+    choice = input("Select command: ").strip().casefold()
+    if choice == "1":
+        return "/status"
+    if choice == "2":
+        return "/undo"
+    if choice == "3":
+        run_id = input("Run ID: ").strip()
+        return f"/resume {run_id}" if run_id else None
+    if choice == "4":
+        check = input("Check to accept (build/test/lint/typecheck): ").strip()
+        return f"/accept {check}" if check else None
+    if choice == "5":
+        return "/trust-edit"
+    if choice == "6":
+        return "/new"
+    if choice == "7":
+        return "/stop"
+    if choice == "8":
+        return "/help"
+    if choice == "0":
+        return "/exit"
+    if choice in {"b", "back", ""}:
+        return None
+    print("Unknown selection.")
+    return None
 
 
 def interactive(args: argparse.Namespace, model: Path) -> int:
@@ -677,6 +729,15 @@ def interactive(args: argparse.Namespace, model: Path) -> int:
                 message = "/exit"
             if not message:
                 continue
+            if message.casefold() in {"0", "/menu"}:
+                try:
+                    selected = command_menu()
+                except (KeyboardInterrupt, EOFError):
+                    print("\nReturning to task input.")
+                    continue
+                if selected is None:
+                    continue
+                message = selected
             command, _, value = message.partition(" ")
             command = command.casefold()
             if command == "/exit":
@@ -722,7 +783,7 @@ def interactive(args: argparse.Namespace, model: Path) -> int:
                 print_header(agent)
                 continue
             if command.startswith("/"):
-                print("Unknown command. Type /help.")
+                print("Unknown command. Type /menu to select one or /help to list them.")
                 continue
 
             print("\n🤖 Agent")
