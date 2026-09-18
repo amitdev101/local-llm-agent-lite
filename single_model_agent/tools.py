@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import ast
 import difflib
 import hashlib
 import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
 import uuid
@@ -17,9 +15,11 @@ from threading import Event
 from typing import Any
 
 try:
+    from .build_profiles import BuildProfileConfig, BuildProfileRegistry, CheckPlan
     from .protocol import ToolCall
     from .storage import DataPaths, EventStore, utc_now
 except ImportError:  # Direct execution through main.py.
+    from build_profiles import BuildProfileConfig, BuildProfileRegistry, CheckPlan
     from protocol import ToolCall
     from storage import DataPaths, EventStore, utc_now
 
@@ -87,15 +87,6 @@ class ToolResult:
     checkpoint_id: str | None = None
     verification: str = "NOT_RUN"
     metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
-class CheckPlan:
-    kind: str
-    mode: str
-    argv: tuple[str, ...] = ()
-    description: str = ""
-    safe_auto: bool = False
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -198,10 +189,25 @@ class Workspace:
 
 
 class ToolRegistry:
-    def __init__(self, workspace: Workspace, data_paths: DataPaths, store: EventStore) -> None:
+    def __init__(
+        self,
+        workspace: Workspace,
+        data_paths: DataPaths,
+        store: EventStore,
+        build_config: BuildProfileConfig | None = None,
+    ) -> None:
         self.workspace = workspace
         self.paths = data_paths
         self.store = store
+        self.build_config = build_config or BuildProfileConfig()
+
+    def build_registry(self) -> BuildProfileRegistry:
+        return BuildProfileRegistry(
+            self.workspace.root,
+            self.workspace.visible,
+            self.workspace.protected_roots,
+            self.build_config,
+        )
 
     def validate(self, call: ToolCall) -> ValidationResult:
         spec = TOOL_SPECS.get(call.name)
@@ -285,11 +291,16 @@ class ToolRegistry:
         if call.name == "edit_file":
             return self._edit_preview(call.arguments)
         if call.name == "run_check":
-            plan = self.check_plan(str(call.arguments["kind"]))
+            resolution = self.check_resolution(str(call.arguments["kind"]))
+            plan = resolution.plan
             if not plan:
-                return "No trusted built-in check is available."
+                return f"{resolution.status}: {resolution.reason}"
             command = " ".join(plan.argv) if plan.argv else plan.description
-            return f"Check: {plan.kind}\nMode: {plan.mode}\nCommand: {command}\nCWD: {self.workspace.root}"
+            return (
+                f"Profile: {plan.profile_id}\nCheck: {plan.kind}\nMode: {plan.mode}\n"
+                f"Command: {command}\nCWD: {plan.project_root}\n"
+                f"Automatic in auto mode: {'yes' if plan.safe_auto else 'no'}"
+            )
         return json.dumps(call.arguments, ensure_ascii=False)
 
     def action_state(self, call: ToolCall) -> dict[str, Any]:
@@ -301,12 +312,19 @@ class ToolRegistry:
         if call.name == "run_check":
             manifest = self._source_manifest()
             encoded = json.dumps(manifest, sort_keys=True, separators=(",", ":")).encode("utf-8")
-            plan = self.check_plan(str(call.arguments["kind"]))
+            resolution = self.check_resolution(str(call.arguments["kind"]))
+            plan = resolution.plan
             return {
                 "source_manifest_hash": sha256_bytes(encoded),
                 "source_file_count": len(manifest),
+                "check_plan_status": resolution.status,
+                "check_plan_reason": resolution.reason,
+                "check_profile_id": plan.profile_id if plan else None,
+                "check_project_root": str(plan.project_root) if plan else None,
                 "check_argv": list(plan.argv) if plan else None,
                 "check_mode": plan.mode if plan else None,
+                "check_config_hash": plan.config_hash if plan else None,
+                "check_input_hash": plan.input_hash if plan else None,
             }
         return {}
 
@@ -663,28 +681,11 @@ class ToolRegistry:
             return ToolResult("OK", f"Restored {manifest['path']}.", changed_paths=[manifest["path"]])
         return ToolResult("REJECTED", "No active checkpoint is available to undo.")
 
+    def check_resolution(self, kind: str):
+        return self.build_registry().resolve(kind)
+
     def check_plan(self, kind: str) -> CheckPlan | None:
-        python_files = sorted(path for path in self.workspace.root.rglob("*.py") if self.workspace.visible(path))
-        java_files = sorted(path for path in self.workspace.root.rglob("*.java") if self.workspace.visible(path))
-        if kind == "build" and python_files and java_files:
-            return None
-        if kind in {"build", "lint"} and python_files:
-            return CheckPlan(kind, "python_ast", description="Parse visible Python files with ast.parse", safe_auto=True)
-        if kind == "test" and python_files and not java_files:
-            return CheckPlan(kind, "subprocess", (sys.executable, "-m", "unittest", "discover"), "Python unittest discovery", False)
-        if kind == "build" and java_files:
-            java_home = os.environ.get("JAVA_HOME")
-            javac = Path(java_home) / "bin" / ("javac.exe" if os.name == "nt" else "javac") if java_home else None
-            if not javac or not javac.is_file():
-                return None
-            return CheckPlan(
-                kind,
-                "subprocess",
-                (str(javac.resolve()), "-proc:none", "-d", "<agent-temp>", "@<agent-argfile>"),
-                f"Java compile ({len(java_files)} source files)",
-                False,
-            )
-        return None
+        return self.check_resolution(kind).plan
 
     def _run_check(
         self,
@@ -695,10 +696,19 @@ class ToolRegistry:
         expected_state: dict[str, Any],
         _step: int,
     ) -> ToolResult:
-        plan = self.check_plan(str(args["kind"]))
+        resolution = self.check_resolution(str(args["kind"]))
+        plan = resolution.plan
         if plan is None:
-            return ToolResult("UNAVAILABLE", "No trusted built-in check profile is available.", verification="UNAVAILABLE")
-        if list(plan.argv) != expected_state.get("check_argv") or plan.mode != expected_state.get("check_mode"):
+            return ToolResult("UNAVAILABLE", f"{resolution.status}: {resolution.reason}", verification="UNAVAILABLE")
+        plan_state = {
+            "check_profile_id": plan.profile_id,
+            "check_project_root": str(plan.project_root),
+            "check_argv": list(plan.argv),
+            "check_mode": plan.mode,
+            "check_config_hash": plan.config_hash,
+            "check_input_hash": plan.input_hash,
+        }
+        if any(expected_state.get(key) != value for key, value in plan_state.items()):
             return ToolResult("CONFLICT", "The trusted check profile changed after preview/approval; the check was not started.")
         if dry_run:
             return ToolResult("DRY_RUN", self.preview(ToolCall("run_check", args, "internal", "")), verification="NOT_RUN")
@@ -710,15 +720,18 @@ class ToolRegistry:
             output = self.paths.temporary / f"javac-{uuid.uuid4().hex[:10]}"
             output.mkdir(parents=True, exist_ok=False)
             source_file = output / "sources.args"
-            java_files = sorted(path for path in self.workspace.root.rglob("*.java") if self.workspace.visible(path))
             with source_file.open("x", encoding="utf-8", newline="\n") as handle:
-                for path in java_files:
+                for path in plan.inputs:
+                    if path.suffix.casefold() != ".java":
+                        continue
                     handle.write('"' + path.resolve().as_posix().replace('"', '\\"') + '"\n')
                 handle.flush()
                 os.fsync(handle.fileno())
             plan = CheckPlan(
+                plan.profile_id,
                 plan.kind,
                 plan.mode,
+                plan.project_root,
                 tuple(
                     str(output) if value == "<agent-temp>"
                     else "@" + str(source_file) if value == "@<agent-argfile>"
@@ -727,18 +740,20 @@ class ToolRegistry:
                 ),
                 plan.description,
                 plan.safe_auto,
+                plan.config_hash,
+                plan.input_hash,
+                plan.inputs,
             )
-        if plan.mode == "python_ast":
+        if plan.mode == "python_compile":
             failures: list[str] = []
             cancelled = False
-            for path in self.workspace.root.rglob("*.py"):
+            for path in plan.inputs:
                 if cancel.is_set():
                     cancelled = True
                     break
-                if not self.workspace.visible(path):
-                    continue
                 try:
-                    ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+                    source = path.read_text(encoding="utf-8")
+                    compile(source, str(path), "exec", dont_inherit=True)
                 except (OSError, UnicodeError, SyntaxError) as error:
                     failures.append(f"{self.workspace.relative(path)}: {error}")
             after = self._source_manifest()
@@ -746,7 +761,7 @@ class ToolRegistry:
             if changed:
                 return ToolResult(
                     "CONFLICT",
-                    "Source files changed during Python syntax validation:\n" + "\n".join(changed),
+                    "Source files changed during Python compilation validation:\n" + "\n".join(changed),
                     changed_paths=changed,
                     verification="FAILED",
                 )
@@ -754,7 +769,7 @@ class ToolRegistry:
                 return ToolResult("CANCELLED", "Check cancelled.", verification="CANCELLED")
             status = "FAILED" if failures else "OK"
             verification = "FAILED" if failures else "PASSED"
-            return ToolResult(status, bounded("\n".join(failures) or "Python syntax check passed."), verification=verification)
+            return ToolResult(status, bounded("\n".join(failures) or "Python compilation check passed."), verification=verification)
 
         try:
             result = self._run_subprocess(plan, cancel)
@@ -794,7 +809,7 @@ class ToolRegistry:
         }
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         process = subprocess.Popen(
-            list(plan.argv), cwd=self.workspace.root, env=environment,
+            list(plan.argv), cwd=plan.project_root, env=environment,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, encoding="utf-8", errors="replace", shell=False,
             creationflags=flags,

@@ -133,14 +133,16 @@ The worker reads exposed GGUF metadata, including architecture, name, quantizati
 and `tokenizer.chat_template`. The template and metadata select a Qwen/Hermes/natural adapter;
 filename is only a supporting hint. Profile choice and warnings are logged.
 
-The direct installed Python binding does not reliably expose per-request Qwen3.5
-`enable_thinking`. The agent reports this instead of pretending thinking was disabled.
+The direct installed Python completion method does not expose per-request Qwen3.5
+`enable_thinking`. The provider therefore advertises controlled recovery only when the active GGUF
+template contains that variable and the resolved Jinja chat handler accepts template arguments.
+Otherwise it reports the capability as unavailable rather than pretending thinking was disabled.
 
 ## D-009 — Visible reasoning is status, not evidence
 
 **Status:** Accepted
 
-When the backend exposes a separate reasoning stream, the console labels it `[thinking]` and
+When the backend exposes a separate reasoning stream, the console labels it `🧠 Agent reasoning` and
 keeps the final stream separate. Reasoning is never parsed as permission, verification, or a tool
 result. Models may omit, merge, or malformedly tag it.
 
@@ -187,11 +189,12 @@ Rejected: `git reset --hard` and blind backup restoration.
 
 **Status:** Accepted
 
-The model selects only `build`, `test`, `lint`, or `typecheck`. Python syntax validation uses
-`ast.parse` and is safe-auto. Python `unittest` and Java compilation use exact built-in argv
-profiles; Java disables annotation processing and writes class output to agent temporary storage.
-Executable checks ask for approval. Unsupported checks return `UNAVAILABLE`; commands are never
-guessed from repository configuration.
+The model selects only `build`, `test`, `lint`, or `typecheck`. Python compilation validation is
+internal and does not execute source. Python `unittest` and Java compilation use exact built-in
+profiles; Java disables annotation processing, targets the configured Java version, and writes
+class output to agent temporary storage. Safe profiles can run automatically only in `auto` mode.
+Tests and project-controlled builds require approval. Unsupported checks return `UNAVAILABLE`;
+commands are never guessed from repository configuration.
 
 Before and after subprocess checks, source manifests are compared. A source change becomes
 `CONFLICT`, including after cancellation or timeout.
@@ -215,7 +218,8 @@ sandbox design.
 
 - `ask`: edit and executable checks require exact approval.
 - `auto`: only explicitly trusted capabilities for the exact canonical workspace may skip
-  approval; executable build/test checks still ask.
+  approval; built-in compile-only profiles may also run automatically, while tests and
+  project-controlled builds still ask.
 - `dry-run`: parse, validate, preview, log, and return observations without file or subprocess
   mutation.
 
@@ -377,6 +381,77 @@ default. A sanitized report and evidence summary are durable repository artifact
 
 Trade-off: summarized evidence is reviewable and safe to commit, but cannot answer every future
 forensic question. Future formal benchmarks should preserve a redacted event/timing bundle.
+
+## D-028 — Thinking recovery is capability-checked, single-use, and non-executable
+
+**Status:** Accepted after upstream research and independent review
+
+When a model response cannot be parsed and the active GGUF template plus resolved chat handler
+prove support for `enable_thinking`, the controller may retry the same step once with thinking
+disabled. The malformed response is logged but is not replayed into active history before the
+retry. A malformed recovery response terminates the run clearly.
+
+The provider temporarily wraps the resolved chat handler for that one sequential request and
+restores the original handler in `finally`. Unsupported models keep their normal repair behavior;
+the controller never claims thinking was disabled without capability evidence.
+
+Why:
+
+- Qwen and llama.cpp have documented cases where tool calls land inside reasoning instead of the
+  visible response.
+- Tool-shaped content inside thinking is not executable intent and must remain ignored.
+- One no-thinking retry preserves normal reasoning quality without permitting an open-ended
+  recovery loop.
+
+Trade-off: a format failure costs another prompt evaluation and relies on a pinned private handler
+lookup in `llama-cpp-python`. The integration is isolated and fails closed if handler resolution
+changes. Self-closing shorthand parsing is a separate decision and is not enabled by this change.
+
+## D-029 — Remember only the essential launcher choices
+
+**Status:** Accepted
+
+The no-argument menu persists the selected GGUF model, workspace, agent mode, Build & Check
+Profiles, check selections, and execution policy in `./single_model_agent_data/config.json`.
+Explicit command-line arguments bypass the saved menu configuration.
+
+Advanced performance settings remain launch-local for now. This keeps the persisted contract small
+and prevents an experimental context, thread, GPU, or output setting from silently affecting every
+future run.
+
+## D-030 — Discover Java safely, with an explicit persisted override
+
+**Status:** Accepted
+
+Java builds resolve `javac` in a fixed order: launcher `java_home`, process `JAVA_HOME`, then the
+explicit directories in process `PATH`. The launcher override is available in Build & Check Setup,
+is stored in `./single_model_agent_data/config.json`, and can also be supplied with `--java-home`.
+It must name a JDK directory containing `bin/javac`.
+
+The resolved compiler must remain outside the writable workspace and agent data directory. Empty
+PATH entries are ignored rather than interpreted as the current directory. The controller executes
+the resulting canonical absolute path with `shell=False`; the model still cannot supply a command.
+
+Trade-off: automatic PATH discovery trusts the launcher's inherited, explicit PATH directories.
+Users who need deterministic selection can pin a JDK through the persisted override.
+
+## D-031 — Built-in Build & Check Profiles own deterministic verification
+
+**Status:** Accepted after curious-kid review
+
+The model retains one `run_check(kind)` tool. A controller registry detects built-in profiles and
+creates an immutable plan containing profile ID, check kind, canonical project root, executable,
+exact argv, configuration hash, input hash, and safety classification. Approval state binds these
+fields; any later change returns `CONFLICT` instead of selecting a replacement.
+
+Initial executable profiles are `java.javac`, `python.compile`, and `python.unittest`. Maven and
+Gradle are detected but not executed. Automatic selection requires exactly one ready candidate;
+invalid explicit configuration fails closed, and ambiguity requires a menu selection. Java target
+semantics use `-source/-target` on JDK 8 and `--release` on newer JDKs.
+
+Safe compile-only profiles may auto-run in `auto` mode. Ask mode still asks, and tests always ask.
+This preserves the requested low-friction build loop without treating every operation named
+"build" as safe.
 
 ## Deferred decisions
 

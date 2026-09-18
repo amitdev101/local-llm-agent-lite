@@ -115,15 +115,16 @@ executor. Raw response text is never executable.
 - `kind` is exactly `build`, `test`, `lint`, or `typecheck`.
 - The controller selects an argv list from a detected project profile.
 - The model cannot supply commands, executables, shell fragments, or a working directory.
-- Use `shell=False`, workspace cwd, scrubbed environment, timeout, output cap, and process-tree
+- Use `shell=False`, the detected canonical project root, a scrubbed environment, timeout, output cap, and process-tree
   cancellation.
 - Never install dependencies or use a network fallback.
-- Initial command profiles are hard-coded allow-listed argv templates. Repository files may
+- Initial Build & Check Profiles are built-in allow-listed argv templates. Repository files may
   help detect a project type but never supply an executable command.
-- If no built-in trusted profile exists, return `CHECK_UNAVAILABLE`; never guess.
-- Initial built-in checks must redirect generated output to agent temporary storage when the
-  tool supports it. Build/test commands capable of executing repository code always require
-  explicit approval, even in a trusted workspace.
+- Automatic selection requires exactly one ready candidate. Return `AMBIGUOUS`, `INVALID_CONFIG`,
+  or `CHECK_UNAVAILABLE` rather than guessing or silently falling back.
+- Initial built-in checks redirect generated output to agent temporary storage when supported.
+  Compile-only profiles proven not to execute project code may run automatically in `auto` mode;
+  tests and project-controlled build systems always require approval.
 - Record a source-file manifest before and after every check. Report unexpected source changes
   and mark verification conflicted; never describe a check as read-only merely because its
   requested purpose was verification.
@@ -252,11 +253,10 @@ Layers are parser -> schema -> path/workspace -> task constraint -> risk -> appr
 - Low risk: list/search/read; automatic.
 - Medium risk: workspace edit; ask in `ask` mode, automatic only for its granted capability in
   an exact trusted `auto` workspace, and simulated in `dry-run`.
-- `run_check` requires approval by default. It may be automatic only when its built-in profile is
+- `run_check` requires approval by default. In `auto` mode it may be automatic only when its built-in profile is
   explicitly classified as unable to execute arbitrary/project code, mutate source, or use the
-  network, and it still has timeout/output limits. Build and test always require approval.
-  Lint/typecheck also require approval unless that exact built-in invocation meets the safe
-  classification; project plugins or configuration make it approval-required.
+  network, and it still has timeout/output limits. Compile-only build/lint/typecheck profiles can
+  meet that classification; tests and project-controlled build systems cannot.
 - High risk: delete, network, Git history changes, arbitrary shell; unavailable initially.
 - Forbidden: path escape, system destruction, credential access, binary overwrite; always block.
 

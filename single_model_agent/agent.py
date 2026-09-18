@@ -11,12 +11,14 @@ from pathlib import Path
 from typing import Callable
 
 try:
+    from .build_profiles import BuildProfileConfig, ProfileDetection
     from .prompts import observation_message, repair_message, system_prompt
     from .protocol import FinalMessage, InvalidResponse, ToolCall, parse_response
     from .provider import LlamaCppProvider, ModelProvider, ModelRequest
     from .storage import DataPaths, EventStore, TrustStore, new_id
     from .tools import ToolRegistry, ToolResult, Workspace
 except ImportError:  # Direct execution through main.py.
+    from build_profiles import BuildProfileConfig, ProfileDetection
     from prompts import observation_message, repair_message, system_prompt
     from protocol import FinalMessage, InvalidResponse, ToolCall, parse_response
     from provider import LlamaCppProvider, ModelProvider, ModelRequest
@@ -85,7 +87,19 @@ class TaskRequirements:
             ):
                 paths.add(candidate_path.as_posix())
 
-        checks = {kind_name for kind_name in ("build", "test", "lint", "typecheck") if kind_name in tokens}
+        check_words = {
+            "build": {"build", "compile", "compiled", "compiler", "compiling", "compilation"},
+            "test": {"test", "tests", "tested", "testing"},
+            "lint": {"lint", "linted", "linter", "linting"},
+            "typecheck": {"typecheck", "typechecking"},
+        }
+        checks = {check for check, words in check_words.items() if tokens & words}
+        if "run" in tokens and tokens & {"java", "python", "code", "program", "game", "project"}:
+            checks.add("build")
+            if kind == "conversational":
+                kind = "read_only"
+        elif checks and kind == "conversational":
+            kind = "read_only"
         operations = {"edit"} if kind == "mutation" else set()
         workspace_words = {"code", "file", "folder", "project", "repo", "repository", "workspace"}
         requires_evidence = kind == "read_only" and bool(paths or tokens & workspace_words)
@@ -122,6 +136,7 @@ class AgentConfig:
     threads: int | None = None
     max_steps: int = 20
     mode: str = "ask"
+    build_profiles: BuildProfileConfig = field(default_factory=BuildProfileConfig)
 
 
 @dataclass
@@ -135,6 +150,24 @@ class RunResult:
 
 StreamCallback = Callable[[str, str], None]
 ApprovalCallback = Callable[[ToolCall, str, str], bool]
+
+
+def profile_record(item: ProfileDetection, *, include_evidence: bool) -> dict[str, object]:
+    record: dict[str, object] = {
+        "profile_id": item.profile_id,
+        "status": item.status,
+        "project_root": str(item.project_root),
+        "reason": item.reason,
+        "capabilities": sorted(item.capabilities),
+        "executable": str(item.executable) if item.executable else None,
+        "executable_source": item.executable_source,
+        "version": item.version,
+        "input_count": len(item.inputs),
+    }
+    if include_evidence:
+        record["evidence"] = list(item.evidence[:100])
+        record["evidence_truncated"] = len(item.evidence) > 100
+    return record
 
 
 class SingleModelAgent:
@@ -200,12 +233,18 @@ class SingleModelAgent:
             session_id=self.session_id,
         )
         self.current_store = store
-        tools = ToolRegistry(self.workspace, self.paths, store)
+        tools = ToolRegistry(self.workspace, self.paths, store, self.config.build_profiles)
         self.current_tools = tools
+        detections = [
+            profile_record(item, include_evidence=True)
+            for item in tools.build_registry().detections()
+        ]
         store.append("RunStarted", {
             "mode": self.config.mode,
             "context_size": self.config.context_size,
             "max_output_tokens": self.config.max_output_tokens,
+            "build_profiles": self.config.build_profiles.to_json(),
+            "build_profile_detections": detections,
             "resumed_from": _resume.get("run_id") if _resume else None,
         })
         store.append("UserMessage", {"content": user_message})
@@ -216,6 +255,8 @@ class SingleModelAgent:
         last_failure = ""
         repeated_failure = 0
         final_message = ""
+        format_retry_used = False
+        format_retry_pending = False
 
         try:
             profile = self.provider.metadata()
@@ -224,7 +265,6 @@ class SingleModelAgent:
                 self.stream_callback("status", f"Warning: {warning}\n")
 
             temperature = self.config.temperature if self.config.temperature is not None else profile.temperature
-            request = ModelRequest(temperature, self.config.max_output_tokens)
 
             if _resume:
                 conflict = str(_resume.get("conflict", ""))
@@ -246,7 +286,7 @@ class SingleModelAgent:
                     preview = tools.preview(call)
                     if not self._approve(store, call, preview, str(pending.get("risk", "medium")), expected_state, 0):
                         return self._end(store, RunState.FAILED, "User rejected the resumed action.")
-                    result = self._execute(tools, call, store, expected_state, 0)
+                    result = self._execute(tools, call, store, expected_state, 0, preview)
                     self._record_result(call, result, store)
                     self.history.append({"role": "user", "content": observation_message(call.name, result.status, self._active_text(result.content))})
                     if result.status == "CONFLICT":
@@ -260,6 +300,14 @@ class SingleModelAgent:
                 self._compact_if_needed(store, profile.context_size, step)
                 messages = self._messages()
                 estimated = self._estimate_tokens(messages)
+                recovery_attempt = format_retry_pending
+                format_retry_pending = False
+                enable_thinking = False if recovery_attempt else None
+                request = ModelRequest(
+                    temperature,
+                    self.config.max_output_tokens,
+                    enable_thinking=enable_thinking,
+                )
                 context_percent = min(100.0, (estimated / profile.context_size) * 100)
                 self.stream_callback(
                     "status",
@@ -267,13 +315,22 @@ class SingleModelAgent:
                     f"({context_percent:.1f}%)\n",
                 )
                 store.append("ContextPrepared", {"estimated_tokens": estimated, "message_count": len(messages)}, step)
-                store.append("ModelStarted", {"temperature": temperature, "output_limit": self.config.max_output_tokens}, step)
+                store.append("ModelStarted", {
+                    "temperature": temperature,
+                    "output_limit": self.config.max_output_tokens,
+                    "attempt": "format_recovery" if recovery_attempt else "normal",
+                    "enable_thinking_requested": enable_thinking,
+                    "thinking_control": profile.thinking_control,
+                }, step)
 
                 response_parts: list[str] = []
                 reasoning_parts: list[str] = []
                 started = time.monotonic()
                 first_token_ms: int | None = None
-                self.stream_callback("waiting", "🧠 Thinking…")
+                self.stream_callback(
+                    "waiting",
+                    "🛠️ Retrying without thinking…" if recovery_attempt else "🧠 Thinking…",
+                )
                 for chunk in self.provider.stream(messages, request):
                     if self.cancel_event.is_set():
                         self.provider.cancel_current()
@@ -296,11 +353,32 @@ class SingleModelAgent:
                     "reasoning_chars": sum(map(len, reasoning_parts)),
                     "duration_ms": int((time.monotonic() - started) * 1000),
                     "first_token_ms": first_token_ms,
+                    "attempt": "format_recovery" if recovery_attempt else "normal",
+                    "enable_thinking_requested": enable_thinking,
                 }, step)
 
                 parsed = parse_response(response, profile.parser_name)
                 if isinstance(parsed, InvalidResponse):
                     store.append("ParseFailed", asdict(parsed), step)
+                    if recovery_attempt:
+                        return self._end(
+                            store,
+                            RunState.FAILED,
+                            f"Non-thinking format recovery failed: {parsed.reason}",
+                        )
+                    if not format_retry_used and profile.thinking_control == "template_kwargs":
+                        format_retry_used = True
+                        format_retry_pending = True
+                        store.append("FormatRetryScheduled", {
+                            "reason": parsed.reason,
+                            "enable_thinking": False,
+                            "raw_summary": parsed.raw_summary,
+                        }, step)
+                        self.stream_callback(
+                            "status",
+                            "🔄 Tool format failed; retrying once without thinking.\n",
+                        )
+                        continue
                     fingerprint = self._fingerprint("parse", parsed.reason)
                     repeated_failure = repeated_failure + 1 if fingerprint == last_failure else 1
                     last_failure = fingerprint
@@ -355,20 +433,30 @@ class SingleModelAgent:
                 except (OSError, RuntimeError, ValueError) as error:
                     store.append("PolicyDenied", {"tool": parsed.name, "reason": str(error)}, step)
                     result = ToolResult("REJECTED", str(error))
+                    self._show_tool_result(parsed, result, 0)
                     self._record_result(parsed, result, store, step)
                     self.history.append({"role": "user", "content": observation_message(parsed.name, result.status, self._active_text(result.content))})
                     continue
-                if preview.startswith("REJECTED:"):
+                if parsed.name == "run_check" and action_state.get("check_plan_status") != "READY":
+                    store.append("CheckUnavailable", {
+                        "kind": parsed.arguments["kind"],
+                        "status": action_state.get("check_plan_status"),
+                        "reason": action_state.get("check_plan_reason"),
+                    }, step)
+                    result = ToolResult("UNAVAILABLE", preview, verification="UNAVAILABLE")
+                    self._show_tool_result(parsed, result, 0)
+                elif preview.startswith("REJECTED:"):
                     store.append("PolicyDenied", {"tool": parsed.name, "reason": preview}, step)
                     result = ToolResult("REJECTED", preview.removeprefix("REJECTED: "))
+                    self._show_tool_result(parsed, result, 0)
                 elif self._needs_approval(parsed, risk, tools):
                     approved = self._approve(store, parsed, preview, risk, action_state, step)
                     if not approved:
                         return self._end(store, RunState.FAILED, "User rejected the requested action.")
-                    result = self._execute(tools, parsed, store, action_state, step)
+                    result = self._execute(tools, parsed, store, action_state, step, preview)
                 else:
                     store.append("PolicyAllowed", {"tool": parsed.name, "risk": risk, "mode": self.config.mode}, step)
-                    result = self._execute(tools, parsed, store, action_state, step)
+                    result = self._execute(tools, parsed, store, action_state, step, preview)
 
                 if result.status in {"FAILED", "REJECTED", "TIMED_OUT", "CONFLICT", "UNAVAILABLE"}:
                     fingerprint = self._fingerprint(parsed.name, result.status, parsed.arguments, result.content[:300])
@@ -382,6 +470,8 @@ class SingleModelAgent:
 
                 self._record_result(parsed, result, store, step)
                 self.history.append({"role": "user", "content": observation_message(parsed.name, result.status, self._active_text(result.content))})
+                if parsed.name == "run_check" and result.status == "UNAVAILABLE":
+                    return self._end(store, RunState.FAILED, result.content)
                 if result.status == "CONFLICT":
                     return self._end(store, RunState.CONFLICT, result.content)
                 if result.status == "CANCELLED":
@@ -404,7 +494,10 @@ class SingleModelAgent:
         store: EventStore,
         action_state: dict[str, object],
         step: int,
+        preview: str,
     ) -> ToolResult:
+        self._show_tool_start(call, preview)
+        started = time.monotonic()
         store.append("ToolStarted", {"tool": call.name, "arguments": call.arguments, "action_state": action_state}, step)
         result = tools.execute(
             call,
@@ -414,9 +507,48 @@ class SingleModelAgent:
             expected_state=action_state,
             step=step,
         )
+        duration_ms = int((time.monotonic() - started) * 1000)
         event = "ToolOutput" if result.status in {"OK", "DRY_RUN"} else "ToolFailed"
-        store.append(event, {"tool": call.name, "arguments": call.arguments, **asdict(result)}, step)
+        store.append(event, {
+            "tool": call.name,
+            "arguments": call.arguments,
+            "duration_ms": duration_ms,
+            **asdict(result),
+        }, step)
+        self._show_tool_result(call, result, duration_ms)
         return result
+
+    def _show_tool_start(self, call: ToolCall, preview: str) -> None:
+        if call.name == "run_check":
+            kind = str(call.arguments.get("kind", "check"))
+            self.stream_callback("tool_start", f"🔧 Starting {kind} check\n{preview}\n")
+            self.stream_callback("waiting", f"🔧 Running {kind}…")
+            return
+        arguments = ", ".join(f"{key}={value}" for key, value in call.arguments.items())
+        suffix = f" — {arguments}" if arguments else ""
+        self.stream_callback("tool_start", f"🔧 {call.name}{suffix}\n")
+
+    def _show_tool_result(self, call: ToolCall, result: ToolResult, duration_ms: int) -> None:
+        icon = {
+            "OK": "✅", "DRY_RUN": "👁️", "FAILED": "❌", "REJECTED": "⛔",
+            "UNAVAILABLE": "⚠️", "TIMED_OUT": "⏱️", "CANCELLED": "⏹️",
+            "CONFLICT": "⚠️",
+        }.get(result.status, "•")
+        elapsed = f" in {duration_ms / 1000:.2f}s" if duration_ms else ""
+        if call.name == "run_check":
+            kind = str(call.arguments.get("kind", "check"))
+            heading = f"{icon} {kind.capitalize()} {result.status}{elapsed}"
+            content = result.content.strip() or "<no output>"
+            self.stream_callback("tool_result", f"{heading}\n{self._active_text(content, 12_000)}\n")
+            return
+        if result.status not in {"OK", "DRY_RUN"}:
+            self.stream_callback(
+                "tool_result",
+                f"{icon} {call.name} {result.status}{elapsed}\n{self._active_text(result.content, 4_000)}\n",
+            )
+            return
+        changed = f" — {', '.join(result.changed_paths)}" if result.changed_paths else ""
+        self.stream_callback("tool_result", f"{icon} {call.name} {result.status}{elapsed}{changed}\n")
 
     def _approve(
         self,
@@ -446,11 +578,13 @@ class SingleModelAgent:
         return approved
 
     def _needs_approval(self, call: ToolCall, risk: str, tools: ToolRegistry) -> bool:
-        if self.config.mode == "dry-run" or risk == "low":
+        if self.config.mode == "dry-run":
             return False
         if call.name == "run_check":
             plan = tools.check_plan(str(call.arguments["kind"]))
-            return not bool(plan and plan.safe_auto)
+            return not bool(self.config.mode == "auto" and plan and plan.safe_auto)
+        if risk == "low":
+            return False
         if self.config.mode == "ask":
             return True
         capabilities = TrustStore(self.paths).capabilities(self.workspace.root)
@@ -697,6 +831,11 @@ class SingleModelAgent:
 
     def status(self) -> dict[str, object]:
         profile = self.provider.metadata()
+        tools = ToolRegistry(self.workspace, self.paths, self.current_store, self.config.build_profiles)
+        detections = [
+            profile_record(item, include_evidence=False)
+            for item in tools.build_registry().detections()
+        ]
         return {
             "state": self.state.value,
             "model": profile.name,
@@ -706,6 +845,8 @@ class SingleModelAgent:
             "temperature": self.config.temperature if self.config.temperature is not None else profile.temperature,
             "max_output_tokens": self.config.max_output_tokens,
             "mode": self.config.mode,
+            "build_profiles": self.config.build_profiles.to_json(),
+            "build_profile_detections": detections,
             "session_id": self.session_id,
             "data_dir": str(self.paths.root),
         }

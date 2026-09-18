@@ -9,19 +9,38 @@ from pathlib import Path
 
 try:
     from .agent import AgentConfig, SingleModelAgent
+    from .build_profiles import (
+        AMBIGUOUS,
+        CHECK_KINDS,
+        INVALID_CONFIG,
+        READY,
+        BuildProfileConfig,
+        BuildProfileRegistry,
+    )
     from .protocol import ToolCall
     from .storage import TrustStore
+    from .tools import ToolRegistry, Workspace
 except ImportError:  # `python single_model_agent/main.py`
     from agent import AgentConfig, SingleModelAgent
+    from build_profiles import (
+        AMBIGUOUS,
+        CHECK_KINDS,
+        INVALID_CONFIG,
+        READY,
+        BuildProfileConfig,
+        BuildProfileRegistry,
+    )
     from protocol import ToolCall
     from storage import TrustStore
+    from tools import ToolRegistry, Workspace
 
 
 HERE = Path(__file__).resolve().parent
 REPOSITORY = HERE.parent
+LAUNCHER_CONFIG = Path.cwd() / "single_model_agent_data" / "config.json"
 MODE_DESCRIPTIONS = {
     "ask": "Approve file edits and executable checks.",
-    "auto": "Trusted edits can run automatically; executable checks still ask.",
+    "auto": "Trusted edits and safe checks run automatically; tests and project builds still ask.",
     "dry-run": "Preview and log actions without edits or subprocess checks.",
 }
 
@@ -75,6 +94,75 @@ class CliSpinner:
 
 
 CLI_SPINNER = CliSpinner()
+
+
+def load_launcher_config(args: argparse.Namespace) -> None:
+    if not LAUNCHER_CONFIG.is_file():
+        return
+    try:
+        saved = json.loads(LAUNCHER_CONFIG.read_text(encoding="utf-8"))
+        if not isinstance(saved, dict):
+            raise ValueError("configuration root must be an object")
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        print(f"⚠️ Saved launcher settings could not be loaded: {error}")
+        return
+
+    model_value = saved.get("model_path")
+    if isinstance(model_value, str) and model_value:
+        try:
+            model = Path(model_value).expanduser().resolve(strict=True)
+            if model.is_file() and model.suffix.casefold() == ".gguf":
+                args.model = model
+        except OSError:
+            print(f"⚠️ Saved model was not found: {model_value}")
+
+    workspace_value = saved.get("workspace")
+    if isinstance(workspace_value, str) and workspace_value:
+        try:
+            workspace = Path(workspace_value).expanduser().resolve(strict=True)
+            if workspace.is_dir():
+                args.workspace = workspace
+        except OSError:
+            print(f"⚠️ Saved workspace was not found: {workspace_value}")
+
+    mode = saved.get("mode")
+    if mode in MODE_DESCRIPTIONS:
+        args.mode = mode
+
+    build_value = saved.get("build_profiles", {})
+    combined = dict(build_value) if isinstance(build_value, dict) else {}
+    combined["check_selection"] = saved.get("check_selection", {})
+    combined["execution_policy"] = saved.get("execution_policy", {})
+    if "java_home" in saved and "java" not in combined:
+        combined["java"] = {"java_home": saved.get("java_home") or "auto"}
+    args.build_profiles = BuildProfileConfig.from_json(combined)
+
+
+def save_launcher_config(args: argparse.Namespace, model: Path | None) -> None:
+    build_value = args.build_profiles.to_json()
+    payload = {
+        "schema_version": 3,
+        "model_path": str(model.resolve()) if model else "",
+        "workspace": str(args.workspace.expanduser().resolve()),
+        "mode": args.mode,
+        "build_profiles": {
+            "java": build_value["java"],
+            "python": build_value["python"],
+        },
+        "check_selection": build_value["check_selection"],
+        "execution_policy": build_value["execution_policy"],
+    }
+    temporary = LAUNCHER_CONFIG.with_name(LAUNCHER_CONFIG.name + ".tmp")
+    try:
+        LAUNCHER_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        temporary.replace(LAUNCHER_CONFIG)
+    except OSError as error:
+        try:
+            temporary.unlink(missing_ok=True)
+        except OSError:
+            pass
+        print(f"⚠️ Launcher settings could not be saved: {error}")
 
 
 def discover_models(folder: Path) -> list[Path]:
@@ -214,6 +302,166 @@ def advanced_settings_menu(args: argparse.Namespace) -> None:
             print(f"Invalid value: {error}")
 
 
+def build_registry(args: argparse.Namespace) -> BuildProfileRegistry:
+    data_root = (args.data_dir or Path.cwd() / "single_model_agent_data").expanduser().resolve()
+    workspace = Workspace(args.workspace.expanduser().resolve(), (data_root,))
+    return BuildProfileRegistry(
+        workspace.root,
+        workspace.visible,
+        workspace.protected_roots,
+        args.build_profiles,
+    )
+
+
+def build_status_summary(args: argparse.Namespace) -> str:
+    registry = build_registry(args)
+    ready = []
+    problems = []
+    for kind in CHECK_KINDS:
+        resolution = registry.resolve(kind)
+        if resolution.status == READY and resolution.plan:
+            ready.append(f"{kind}:{resolution.plan.profile_id}")
+        elif resolution.status in {AMBIGUOUS, INVALID_CONFIG}:
+            problems.append(f"{kind}:{resolution.status.lower()}")
+    if problems:
+        return "⚠️ " + ", ".join(problems)
+    if ready:
+        return "✅ " + ", ".join(ready)
+    return "⚪ no ready checks"
+
+
+def show_build_profiles(args: argparse.Namespace) -> None:
+    registry = build_registry(args)
+    print("\n" + "=" * 70)
+    print("🧰 BUILD & CHECK SETUP")
+    print("=" * 70)
+    print(f"Workspace: {args.workspace}")
+    print(f"Safe profiles in auto mode: {'automatic' if args.build_profiles.safe_profiles_auto else 'ask'}")
+    if args.build_profiles.config_errors:
+        print("⛔ Configuration errors:")
+        for error in args.build_profiles.config_errors:
+            print(f"   - {error}")
+    print("\nDetected profiles:")
+    for item in registry.detections():
+        icon = {
+            "READY": "✅", "NOT_DETECTED": "⚪", "SETUP_REQUIRED": "🟡",
+            "AMBIGUOUS": "⚠️", "DISABLED": "⏸️", "INVALID_CONFIG": "⛔",
+            "DETECTED_UNSUPPORTED": "🟡",
+        }.get(item.status, "•")
+        capabilities = ", ".join(sorted(item.capabilities))
+        root = item.project_root.relative_to(registry.workspace).as_posix() or "."
+        print(f"  {icon} {item.profile_id} [{item.status}] — {capabilities}")
+        print(f"     Project: {root} | {item.reason}")
+        if item.executable:
+            version = f" | {item.version}" if item.version else ""
+            print(f"     Executable: {item.executable} ({item.executable_source}){version}")
+        if item.evidence:
+            sample = ", ".join(item.evidence[:3])
+            suffix = f" (+{len(item.evidence) - 3} more)" if len(item.evidence) > 3 else ""
+            print(f"     Evidence: {sample}{suffix}")
+    print("\nSelected plans:")
+    for kind in CHECK_KINDS:
+        resolution = registry.resolve(kind)
+        if resolution.plan:
+            automatic = "auto" if resolution.plan.safe_auto else "approval"
+            print(f"  ✅ {kind:<9} {resolution.plan.profile_id} ({automatic})")
+        else:
+            print(f"  ⚠️  {kind:<9} {resolution.status}: {resolution.reason}")
+
+
+def configure_java_profile(config: BuildProfileConfig) -> None:
+    enabled = input(f"Enable Java profiles? [{'Y/n' if config.java_enabled else 'y/N'}]: ").strip().casefold()
+    if enabled in {"y", "yes"}:
+        config.java_enabled = True
+    elif enabled in {"n", "no"}:
+        config.java_enabled = False
+    if not config.java_enabled:
+        return
+    home = input(f"JDK home [{config.java_home}] (use 'auto' for discovery): ").strip().strip('"')
+    if home:
+        config.java_home = home
+    target = input(f"Java target version [{config.java_target_version}]: ").strip()
+    if target:
+        if not target.isdigit() or int(target) < 7:
+            print("Java target must be an integer of 7 or greater.")
+        else:
+            config.java_target_version = target
+
+
+def choose_check_profile(args: argparse.Namespace) -> None:
+    print("\nCheck kinds:")
+    for index, kind in enumerate(CHECK_KINDS, 1):
+        print(f"  {index}. {kind} (current: {args.build_profiles.check_selection.get(kind, 'auto')})")
+    value = input("Select check kind (0 = back): ").strip()
+    if value == "0":
+        return
+    if not value.isdigit() or not 1 <= int(value) <= len(CHECK_KINDS):
+        print("Invalid check kind.")
+        return
+    kind = CHECK_KINDS[int(value) - 1]
+    candidates = [item for item in build_registry(args).detections() if kind in item.capabilities]
+    print("  0. auto")
+    for index, item in enumerate(candidates, 1):
+        print(f"  {index}. {item.profile_id} [{item.status}] — {item.project_root}")
+    selected = input("Select profile: ").strip()
+    if selected == "0":
+        args.build_profiles.check_selection[kind] = "auto"
+    elif selected.isdigit() and 1 <= int(selected) <= len(candidates):
+        args.build_profiles.check_selection[kind] = candidates[int(selected) - 1].profile_id
+    else:
+        print("Invalid profile selection.")
+
+
+def preview_build_plans(args: argparse.Namespace) -> None:
+    registry = build_registry(args)
+    print("\nDeterministic plans:")
+    for kind in CHECK_KINDS:
+        resolution = registry.resolve(kind)
+        plan = resolution.plan
+        if not plan:
+            print(f"\n{kind}: {resolution.status} — {resolution.reason}")
+            continue
+        command = " ".join(plan.argv) if plan.argv else plan.description
+        print(f"\n{kind}: {plan.profile_id}")
+        print(f"  CWD: {plan.project_root}")
+        print(f"  Command: {command}")
+        print(f"  Auto in auto mode: {'yes' if plan.safe_auto else 'no'}")
+
+
+def build_setup_menu(args: argparse.Namespace) -> None:
+    while True:
+        show_build_profiles(args)
+        print("\n  1. 🔄 Re-detect workspace")
+        print("  2. ☕ Configure Java")
+        print(f"  3. 🐍 {'Disable' if args.build_profiles.python_enabled else 'Enable'} Python profiles")
+        print("  4. 🎯 Choose profile for a check")
+        print("  5. 👁️  Preview deterministic plans")
+        print(f"  6. 🛡️  Safe-profile auto-run: {'ON' if args.build_profiles.safe_profiles_auto else 'OFF'}")
+        print("  7. ♻️  Reset build configuration")
+        print("  0. Back")
+        choice = input("\nSelect option: ").strip()
+        if choice == "0":
+            return
+        if choice == "1":
+            continue
+        if choice == "2":
+            configure_java_profile(args.build_profiles)
+        elif choice == "3":
+            args.build_profiles.python_enabled = not args.build_profiles.python_enabled
+        elif choice == "4":
+            choose_check_profile(args)
+        elif choice == "5":
+            preview_build_plans(args)
+            input("\nPress Enter to continue...")
+        elif choice == "6":
+            args.build_profiles.safe_profiles_auto = not args.build_profiles.safe_profiles_auto
+        elif choice == "7":
+            args.build_profiles = BuildProfileConfig()
+            print("Build configuration reset.")
+        else:
+            print("Enter one of the listed numbers.")
+
+
 def show_system_information(args: argparse.Namespace, model: Path | None) -> None:
     data_dir = (args.data_dir or Path.cwd() / "single_model_agent_data").expanduser().resolve()
     print("\n" + "=" * 70)
@@ -232,12 +480,16 @@ def show_system_information(args: argparse.Namespace, model: Path | None) -> Non
     print(f"Maximum steps   : {args.max_steps}")
     print(f"Output limit    : {display_value(args.max_output_tokens, 'unlimited')}")
     print(f"Runtime data    : {data_dir}")
+    print(f"Build checks    : {build_status_summary(args)}")
+    print(f"Saved config    : {LAUNCHER_CONFIG}")
     input("\nPress Enter to return...")
 
 
 def startup_menu(args: argparse.Namespace) -> Path | None:
     models = discover_models(args.models_dir)
-    selected_model = models[0] if len(models) == 1 else None
+    selected_model = args.model if args.model and args.model.is_file() else None
+    if selected_model is None and len(models) == 1:
+        selected_model = models[0]
     while True:
         print("\n╔══════════════════════════════════════╗")
         print("║      🤖 MYLLM CODING AGENT          ║")
@@ -248,25 +500,36 @@ def startup_menu(args: argparse.Namespace) -> Path | None:
         print(f"🧠 Context   : {args.context} tokens")
         print(f"🌡️  Temp      : {display_value(args.temperature, 'model default')}")
         print(f"♾️  Output    : {display_value(args.max_output_tokens, 'unlimited')}")
+        print(f"🧰 Checks    : {build_status_summary(args)}")
         print("\n  1. 💬 Start coding agent")
-        print("  2. ⚙️  Advanced settings")
-        print("  3. 🤖 Model selection")
-        print("  4. 📁 Workspace selection")
-        print("  5. 🛡️  Agent mode")
-        print("  6. 🔎 System information")
+        print("  2. 🧰 Build & check setup")
+        print("  3. ⚙️  Advanced settings")
+        print("  4. 🤖 Model selection")
+        print("  5. 📁 Workspace selection")
+        print("  6. 🛡️  Agent mode")
+        print("  7. 🔎 System information")
         print("  0. Exit")
         choice = input("\nSelect option: ").strip()
         if choice == "1":
-            return selected_model or choose_model(models)
+            selected_model = selected_model or choose_model(models)
+            save_launcher_config(args, selected_model)
+            return selected_model
         if choice == "2":
-            advanced_settings_menu(args)
+            build_setup_menu(args)
+            save_launcher_config(args, selected_model)
         elif choice == "3":
-            selected_model = choose_model(models)
+            advanced_settings_menu(args)
+            save_launcher_config(args, selected_model)
         elif choice == "4":
-            args.workspace = choose_workspace(args.workspace)
+            selected_model = choose_model(models)
+            save_launcher_config(args, selected_model)
         elif choice == "5":
-            args.mode = choose_mode(args.mode)
+            args.workspace = choose_workspace(args.workspace)
+            save_launcher_config(args, selected_model)
         elif choice == "6":
+            args.mode = choose_mode(args.mode)
+            save_launcher_config(args, selected_model)
+        elif choice == "7":
             show_system_information(args, selected_model)
         elif choice == "0":
             print("\n👋 Goodbye.")
@@ -284,6 +547,13 @@ def stream_output(kind: str, text: str) -> None:
         CLI_SPINNER.start(text)
         return
     CLI_SPINNER.stop()
+    if kind in {"tool_start", "tool_result"}:
+        if getattr(stream_output, "thinking", False) or getattr(stream_output, "response_started", False):
+            print()
+        stream_output.thinking = False
+        stream_output.response_started = False
+        print(text, end="", flush=True)
+        return
     if kind == "status":
         print(text, end="", flush=True)
         return
@@ -319,6 +589,7 @@ def approval_prompt(call: ToolCall, preview: str, risk: str) -> bool:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the MyLLM single-model local coding agent.")
+    parser.set_defaults(build_profiles=BuildProfileConfig())
     parser.add_argument("--model", type=Path, help="Path to one GGUF model.")
     parser.add_argument("--models-dir", type=Path, default=REPOSITORY / "models")
     parser.add_argument("--workspace", type=Path, default=Path.cwd())
@@ -330,7 +601,20 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--threads", type=int)
     parser.add_argument("--max-steps", type=int, default=20)
     parser.add_argument("--mode", choices=("ask", "auto", "dry-run"), default="ask")
+    parser.add_argument(
+        "--java-home",
+        dest="java_home_override",
+        help="JDK home containing bin/javac; overrides JAVA_HOME and PATH discovery.",
+    )
+    parser.add_argument("--java-target", dest="java_target_override", help="Java source target, such as 8 or 17.")
     return parser
+
+
+def apply_build_cli_overrides(args: argparse.Namespace) -> None:
+    if args.java_home_override:
+        args.build_profiles.java_home = args.java_home_override
+    if args.java_target_override:
+        args.build_profiles.java_target_version = args.java_target_override
 
 
 def make_agent(args: argparse.Namespace, model: Path) -> SingleModelAgent:
@@ -345,6 +629,7 @@ def make_agent(args: argparse.Namespace, model: Path) -> SingleModelAgent:
         threads=args.threads,
         max_steps=args.max_steps,
         mode=args.mode,
+        build_profiles=args.build_profiles,
     )
     return SingleModelAgent(
         config,
@@ -358,6 +643,8 @@ def print_header(agent: SingleModelAgent) -> None:
     print(f"Model:     {agent.config.model_path.name}")
     print(f"Workspace: {agent.workspace.root}")
     print(f"Mode:      {agent.config.mode}")
+    tools = ToolRegistry(agent.workspace, agent.paths, agent.current_store, agent.config.build_profiles)
+    print(f"Checks:    {', '.join(f'{kind}={tools.check_resolution(kind).status}' for kind in CHECK_KINDS)}")
     print("Output:    unlimited by default" if agent.config.max_output_tokens is None else f"Output:    {agent.config.max_output_tokens} tokens")
     print("Type /help for commands. The model loads on the first request.\n")
 
@@ -427,7 +714,7 @@ def interactive(args: argparse.Namespace, model: Path) -> int:
                 continue
             if command == "/trust-edit":
                 TrustStore(agent.paths).grant(agent.workspace.root, {"edit_file"})
-                print("Edit capability granted to this exact workspace. Executable checks still ask.")
+                print("Edit capability granted. Safe checks auto-run only in auto mode; tests still ask.")
                 continue
             if command == "/new":
                 agent.close()
@@ -454,6 +741,10 @@ def interactive(args: argparse.Namespace, model: Path) -> int:
 def main() -> int:
     multiprocessing.freeze_support()
     args = build_parser().parse_args()
+    if len(sys.argv) == 1:
+        load_launcher_config(args)
+    else:
+        apply_build_cli_overrides(args)
     menu_model = startup_menu(args) if len(sys.argv) == 1 else None
     if len(sys.argv) == 1 and menu_model is None:
         return 0

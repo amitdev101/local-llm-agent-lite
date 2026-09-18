@@ -48,6 +48,8 @@ It is not currently intended for:
 - A continuous CLI spinner during context preparation and first-token waiting, plus estimated
   context usage and first-token timing. Redirected output uses plain status lines without animation.
 - Distinct `👤` user, `🤖` agent, and `🛡️` approval labels make it clear whose turn it is.
+- Tool execution is visible in the terminal: selected profile, exact command/CWD, a running spinner,
+  duration, status, and complete bounded output for build/test/lint/typecheck checks.
 - Crash-aware checkpoint reconciliation and conservative session resume.
 - No explicit output-token cap unless the user chooses one.
 
@@ -62,9 +64,33 @@ python single_model_agent/main.py
 With no command-line options, the launcher shows a beginner-friendly status screen and menu. It
 can start the agent, select a model or workspace, change between `ask`, `auto`, and `dry-run`, open
 advanced settings, and display complete system information. Advanced settings expose context,
-temperature, GPU layers, CPU threads, agent steps, output limits, and runtime storage with short
-explanations and safe defaults. It searches `models/` recursively for `.gguf` files and selects the
-only model automatically. The model loads on the first request, not before the prompt appears.
+temperature, GPU layers, CPU threads, agent steps, output limits, and runtime storage. A separate
+Build & Check Setup screen detects toolchains, shows whether each profile is ready, configures Java
+and Python, selects ambiguous profiles, and previews exact plans. It searches `models/` recursively
+for `.gguf` files and selects the only model automatically. The model loads on the first request.
+
+The menu remembers the selected model, workspace, mode, build profiles, check selections, and
+execution policy in `./single_model_agent_data/config.json`. Invalid explicit toolchain overrides
+fail closed and remain visible in the setup screen; they never silently fall back.
+
+```json
+{
+  "schema_version": 3,
+  "build_profiles": {
+    "java": {"enabled": true, "java_home": "auto", "target_version": "8"},
+    "python": {"enabled": true, "interpreter": "current"}
+  },
+  "check_selection": {
+    "build": "auto", "test": "auto", "lint": "auto", "typecheck": "auto"
+  },
+  "execution_policy": {
+    "safe_profiles": "auto", "project_code_profiles": "ask"
+  }
+}
+```
+
+The setup screen reports `READY`, `SETUP_REQUIRED`, `AMBIGUOUS`, `INVALID_CONFIG`, `DISABLED`,
+`NOT_DETECTED`, or `DETECTED_UNSUPPORTED` independently from the presence of source files.
 
 Choose an explicit model and project:
 
@@ -103,6 +129,8 @@ llama-cpp-python==0.3.35
 | `--threads <n>` | CPU count minus one | llama.cpp worker threads |
 | `--max-steps <n>` | `20` | Bounded agent loop |
 | `--mode <mode>` | `ask` | `ask`, `auto`, or `dry-run` |
+| `--java-home <path>` | automatic | JDK directory containing `bin/javac`; overrides environment/PATH discovery |
+| `--java-target <n>` | `8` | Java source/bytecode target used by the deterministic javac profile |
 
 Examples:
 
@@ -268,29 +296,38 @@ Rules:
 run_check(kind=<build|test|lint|typecheck>)
 ```
 
-The model cannot provide a command. The controller chooses only a built-in profile:
+The model cannot provide a command. The controller chooses only a built-in Build & Check Profile:
 
 | Project/check | Implementation | Auto-safe |
 |---|---|---:|
-| Python `build`/`lint` | Read visible `.py` files and call `ast.parse` | Yes |
+| Python `build`/`lint` | Compile visible `.py` source to code objects without executing or writing bytecode | Yes in `auto` mode |
 | Python `test` | Exact current-Python `-m unittest discover` argv | No; approval |
-| Java `build` | Canonical `$JAVA_HOME/bin/javac -proc:none -d <agent-temp> @<agent-argfile>` using all visible `.java` files | No; approval |
+| Java `build`/`typecheck` | Fixed `javac -proc:none` with configured target and temporary output | Yes in `auto` mode |
+| Java `lint` | Same fixed compile profile with `-Xlint:all` | Yes in `auto` mode |
+| Maven/Gradle | Detected and shown, but not executed in the first profile version | No execution |
 | Unsupported combination | `UNAVAILABLE` | No execution |
 
 - No `shell=True`.
 - No repository-provided executable string.
-- Java compilation requires a valid controller environment `JAVA_HOME`; repository `PATH`
-  shadowing is not trusted.
+- Java compiler precedence is saved/CLI `java_home` → process `JAVA_HOME` → explicit directories
+  in process `PATH`.
+- Java 8 compilers use `-source/-target`; JDK 9+ uses `--release` for the configured target.
+- `auto` selects a profile only when exactly one ready candidate supports the check. Multiple
+  candidates return `AMBIGUOUS` until the user chooses one in Build & Check Setup.
+- Empty/current-directory PATH entries and compilers inside the workspace or agent data directory
+  are rejected, preventing repository executable shadowing.
 - No dependency installation or network fallback.
 - Provider/API secrets are removed from the child environment.
 - Timeout is 120 seconds.
 - Cancellation terminates the process tree.
 - Output is bounded while preserving useful beginning/end sections.
+- Terminal check output is bounded separately so compiler/test failures remain visible without
+  flooding the interactive session; the complete bounded tool result remains in the run log.
 - Visible source hashes are compared before and after a subprocess.
 - Any unexpected source change becomes `CONFLICT`.
 
-Repository tests/builds may execute repository code. Approval is therefore meaningful even when
-the executable name is trusted.
+Safe compile-only profiles disable annotation processors or execute internally. Tests and future
+project-controlled builds remain approval-required because they can execute repository code.
 
 ### `finish`
 
@@ -389,15 +426,16 @@ A denied read returns an explicit policy error. It is never presented as an empt
 
 ### Ask mode (default)
 
-- List/search/read and safe internal syntax checks run automatically.
-- Edits and executable project checks show an exact preview and require `y`.
+- List/search/read run automatically.
+- Edits and every executable check, including otherwise-safe compilation, require `y`.
 
 ### Auto mode
 
 - Still has the same schemas and path policy.
 - Only capabilities explicitly granted to the exact workspace can skip approval.
 - `/trust-edit` grants only edits.
-- Build/test and project-configurable lint/typecheck remain approval-required.
+- Built-in profiles classified as safe run automatically when safe-profile auto-run is enabled.
+- Tests and project-controlled Maven/Gradle/package builds remain approval-required.
 
 ### Dry-run mode
 
@@ -539,10 +577,18 @@ quantization indicator, and selected context. It chooses:
 Filename hints are not the only source of truth. If `tokenizer.chat_template` is unavailable, the
 log contains a warning.
 
-Qwen3.5 commonly enables thinking by default. The direct `llama-cpp-python` API used here does not
-guarantee per-request `chat_template_kwargs={enable_thinking: false}`. The agent therefore:
+Qwen3.5 commonly enables thinking by default. The public direct `llama-cpp-python` completion API
+does not expose `chat_template_kwargs`, but its resolved Jinja chat handler accepts them. When the
+active GGUF template explicitly contains `enable_thinking` and its handler resolves successfully,
+the provider records `thinking_control=template_kwargs`. The agent then:
 
-- Does not claim thinking was disabled when it was not.
+- Uses the template default during normal generations.
+- After one non-executable parse failure, retries that step once with `enable_thinking=false`.
+- Restores the original chat handler after the recovery generation, including on errors.
+- Fails clearly if the recovery response is also malformed; it never recursively retries.
+- Does not replay the malformed response into active model history before recovery, although the
+  complete response and recovery decision remain in the run log.
+- Does not claim thinking was disabled when the active template/handler cannot prove support.
 - Shows a separate reasoning stream only when the runtime provides one.
 - Removes complete `<think>...</think>` blocks before plain-text parsing. For the Qwen3.5 adapter
   only, one orphan `</think>` is accepted because some llama.cpp templates consume the opening
@@ -550,8 +596,9 @@ guarantee per-request `chat_template_kwargs={enable_thinking: false}`. The agent
 - Rejects dangling/ambiguous thinking around tool-shaped output.
 - Keeps reasoning separate from permission and verification.
 
-A future llama-server provider can implement confirmed per-request thinking control behind the same
-provider interface.
+This recovery uses the same handler-wrapping mechanism exposed by llama.cpp's Python server layer,
+but keeps it isolated inside the sequential model worker because the public direct binding does not
+offer the setting as a normal completion argument.
 
 ### Live GGUF validation — 2026-09-18
 
@@ -574,10 +621,11 @@ provider interface.
 | File | Single responsibility |
 |---|---|
 | `main.py` | Model menu, CLI, commands, streaming display, approval input |
+| `build_profiles.py` | Built-in profile detection, configuration, deterministic selection, and plans |
 | `agent.py` | Task contract, state machine, loop, policy orchestration, completion, compaction, resume |
 | `provider.py` | Provider protocol, GGUF profile, persistent llama.cpp worker, cancellation |
 | `protocol.py` | Canonical response types and bounded response adapters |
-| `tools.py` | Six schemas, workspace guard, execution, checks, checkpoints, undo |
+| `tools.py` | Six schemas, workspace guard, profile-plan execution, checkpoints, undo |
 | `storage.py` | Paths, JSONL/text events, archives, trust, redaction, durability |
 | `prompts.py` | Compact system/tool/observation/repair prompts |
 | `PLAN.md` | Reviewed implementation plan and complete dry-run matrix |

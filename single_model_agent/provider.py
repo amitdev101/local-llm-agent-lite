@@ -22,6 +22,7 @@ class ModelProfile:
     supports_native_tools: bool
     quantization: str
     warnings: tuple[str, ...] = ()
+    thinking_control: str = "unavailable"
 
 
 @dataclass(frozen=True)
@@ -32,6 +33,7 @@ class ModelRequest:
     top_k: int = 20
     min_p: float = 0.0
     repeat_penalty: float = 1.0
+    enable_thinking: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -62,7 +64,11 @@ def _profile_from_metadata(model_path: str, metadata: dict[str, Any], requested_
     if "qwen3.5" in combined or "qwen35" in combined or "qwen3.5" in lowered:
         parser = "qwen35"
         default_temperature = 0.6
-        thinking = "template-default; per-request control unavailable in direct binding"
+        thinking = (
+            "template-default; controlled recovery pending handler resolution"
+            if "enable_thinking" in template
+            else "template-default; controlled recovery unavailable"
+        )
     elif "qwen" in combined or "qwen" in lowered:
         parser = "hermes"
         default_temperature = 0.6
@@ -87,6 +93,7 @@ def _profile_from_metadata(model_path: str, metadata: dict[str, Any], requested_
         supports_native_tools=False,
         quantization=quantization,
         warnings=tuple(warnings),
+        thinking_control="template_kwargs" if "enable_thinking" in template else "unavailable",
     )
 
 
@@ -98,12 +105,28 @@ def _worker_main(
     cancel_event: Any,
 ) -> None:
     try:
-        from llama_cpp import Llama
+        from llama_cpp import Llama, llama_chat_format
 
         model = Llama(model_path=model_path, verbose=False, **load_options)
         metadata = {str(key): value for key, value in dict(getattr(model, "metadata", {}) or {}).items()}
         profile = _profile_from_metadata(model_path, metadata, int(load_options["n_ctx"]))
-        responses.put({"type": "ready", "profile": asdict(profile)})
+        base_chat_handler = None
+        if profile.thinking_control == "template_kwargs":
+            try:
+                handlers = getattr(model, "_chat_handlers", {})
+                base_chat_handler = (
+                    model.chat_handler
+                    or handlers.get(model.chat_format)
+                    or llama_chat_format.get_chat_completion_handler(model.chat_format)
+                )
+            except Exception:
+                base_chat_handler = None
+        profile_data = asdict(profile)
+        if base_chat_handler is None:
+            profile_data["thinking_control"] = "unavailable"
+        else:
+            profile_data["thinking_mode"] = "template-default; one-step recovery can disable thinking"
+        responses.put({"type": "ready", "profile": profile_data})
     except Exception:
         responses.put({"type": "fatal", "error": traceback.format_exc()})
         return
@@ -116,6 +139,7 @@ def _worker_main(
             continue
         request_id = command["request_id"]
         cancel_event.clear()
+        original_chat_handler = model.chat_handler
         try:
             kwargs: dict[str, Any] = {
                 "messages": command["messages"],
@@ -130,27 +154,44 @@ def _worker_main(
             if isinstance(maximum, int) and maximum > 0:
                 kwargs["max_tokens"] = maximum
 
+            enable_thinking = command["request"].get("enable_thinking")
+            if isinstance(enable_thinking, bool):
+                if base_chat_handler is None:
+                    raise RuntimeError("The active model template does not support controlled thinking.")
+
+                def chat_handler_with_thinking(*args: Any, **handler_kwargs: Any) -> Any:
+                    return base_chat_handler(
+                        *args,
+                        **{**handler_kwargs, "enable_thinking": enable_thinking},
+                    )
+
+                model.chat_handler = chat_handler_with_thinking
+
             first = True
-            for chunk in model.create_chat_completion(**kwargs):
-                if cancel_event.is_set():
-                    responses.put({"type": "cancelled", "request_id": request_id})
-                    break
-                choice = (chunk.get("choices") or [{}])[0]
-                delta = choice.get("delta", {})
-                text = delta.get("content") or ""
-                reasoning = delta.get("reasoning_content") or ""
-                if text or reasoning:
-                    responses.put({
-                        "type": "chunk",
-                        "request_id": request_id,
-                        "text": text,
-                        "reasoning": reasoning,
-                        "first": first,
-                    })
-                    first = False
-            else:
-                responses.put({"type": "done", "request_id": request_id})
+            try:
+                for chunk in model.create_chat_completion(**kwargs):
+                    if cancel_event.is_set():
+                        responses.put({"type": "cancelled", "request_id": request_id})
+                        break
+                    choice = (chunk.get("choices") or [{}])[0]
+                    delta = choice.get("delta", {})
+                    text = delta.get("content") or ""
+                    reasoning = delta.get("reasoning_content") or ""
+                    if text or reasoning:
+                        responses.put({
+                            "type": "chunk",
+                            "request_id": request_id,
+                            "text": text,
+                            "reasoning": reasoning,
+                            "first": first,
+                        })
+                        first = False
+                else:
+                    responses.put({"type": "done", "request_id": request_id})
+            finally:
+                model.chat_handler = original_chat_handler
         except Exception:
+            model.chat_handler = original_chat_handler
             responses.put({"type": "error", "request_id": request_id, "error": traceback.format_exc()})
 
 
