@@ -233,14 +233,15 @@ approval, checkpoint, mutation, interruption, and terminal events are flushed an
 Per-token durable events are disabled by default to avoid slowing local generation. Complete
 responses, first-token latency, duration, parser, policy, tool, output, and verification are kept.
 
-## D-017 — External state directory by default
+## D-017 — Local state directory by default
 
 **Status:** Accepted
 
-Windows defaults to `%LOCALAPPDATA%/MyLLM/single_model_agent`; other systems use
-`$XDG_STATE_HOME/myllm/single_model_agent` or `~/.local/state/...`. This prevents the model from
-editing its own policy, trust, events, and snapshots. `--data-dir` can override it; a directory
-inside the workspace is still denied to model tools and should be ignored by Git.
+Runtime state defaults to `./single_model_agent_data`, relative to the directory from which the
+agent is started. This keeps logs, runs, sessions, archives, snapshots, and trust visible beside
+the local application instead of placing them in an OS user directory. `--data-dir` can override
+the location. When the data directory is inside the selected workspace, it remains a protected
+root that model tools cannot read or modify, and the default directory is ignored by Git.
 
 ## D-018 — Archive before deterministic compaction
 
@@ -371,7 +372,7 @@ timing, parser/tool/check behavior, discovered defects, code changes, tradeoffs,
 next hypotheses. A useful final artifact must not overwrite the historical fact that the original
 agent run failed.
 
-Raw logs are external state and may contain private source or secrets. They are not committed by
+Raw logs are runtime state and may contain private source or secrets. They are not committed by
 default. A sanitized report and evidence summary are durable repository artifacts.
 
 Trade-off: summarized evidence is reviewable and safe to commit, but cannot answer every future

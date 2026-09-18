@@ -317,7 +317,7 @@ reloads the model if termination was required.
 
 ## Persistence and resume
 
-Runtime data defaults to an OS user-data location outside the selected workspace, with `logs/`,
+Runtime data defaults to `./single_model_agent_data`, relative to the launch directory, with `logs/`,
 `runs/`, `sessions/`, `snapshots/`, and `archives/`. A user may override it, but a location inside
 the workspace is ignored by scans, denied to model-facing tools, and must be Git-ignored.
 Reconstruct state by replaying complete events. An unterminated run

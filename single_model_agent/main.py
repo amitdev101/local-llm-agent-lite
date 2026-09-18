@@ -4,6 +4,7 @@ import argparse
 import json
 import multiprocessing
 import sys
+import threading
 from pathlib import Path
 
 try:
@@ -18,6 +19,62 @@ except ImportError:  # `python single_model_agent/main.py`
 
 HERE = Path(__file__).resolve().parent
 REPOSITORY = HERE.parent
+MODE_DESCRIPTIONS = {
+    "ask": "Approve file edits and executable checks.",
+    "auto": "Trusted edits can run automatically; executable checks still ask.",
+    "dry-run": "Preview and log actions without edits or subprocess checks.",
+}
+
+
+class CliSpinner:
+    FRAMES = ("|", "/", "-", "\\")
+
+    def __init__(self) -> None:
+        self.enabled = sys.stdout.isatty()
+        self.label = ""
+        self.width = 0
+        self.frame = 0
+        self.stop_event = threading.Event()
+        self.lock = threading.Lock()
+        self.thread: threading.Thread | None = None
+
+    def start(self, label: str) -> None:
+        if not self.enabled:
+            print(label, flush=True)
+            return
+        with self.lock:
+            self.label = label
+            self._draw()
+            if self.thread and self.thread.is_alive():
+                return
+            self.stop_event.clear()
+            self.thread = threading.Thread(target=self._run, name="myllm-spinner", daemon=True)
+            self.thread.start()
+
+    def _run(self) -> None:
+        while not self.stop_event.wait(0.12):
+            with self.lock:
+                self._draw()
+
+    def _draw(self) -> None:
+        line = f"{self.FRAMES[self.frame]} {self.label}"
+        self.frame = (self.frame + 1) % len(self.FRAMES)
+        self.width = max(self.width, len(line) + 2)
+        print("\r" + line.ljust(self.width), end="", flush=True)
+
+    def stop(self) -> None:
+        if not self.enabled or not self.thread:
+            return
+        self.stop_event.set()
+        self.thread.join(timeout=0.5)
+        with self.lock:
+            print("\r" + (" " * self.width) + "\r", end="", flush=True)
+        self.thread = None
+        self.width = 0
+        self.frame = 0
+
+
+CLI_SPINNER = CliSpinner()
 
 
 def discover_models(folder: Path) -> list[Path]:
@@ -49,25 +106,211 @@ def choose_model(models: list[Path]) -> Path:
         print("Enter one of the listed numbers.")
 
 
+def choose_mode(current: str) -> str:
+    modes = tuple(MODE_DESCRIPTIONS)
+    print("\nAvailable modes:")
+    for index, mode in enumerate(modes, 1):
+        marker = " (current)" if mode == current else ""
+        print(f"  {index}. {mode}{marker} - {MODE_DESCRIPTIONS[mode]}")
+    print("  0. Back")
+    while True:
+        value = input("Select mode: ").strip()
+        if value == "0":
+            return current
+        if value.isdigit() and 1 <= int(value) <= len(modes):
+            return modes[int(value) - 1]
+        print("Enter one of the listed numbers.")
+
+
+def choose_workspace(current: Path) -> Path:
+    value = input(f"Workspace [{current}]: ").strip().strip('"')
+    if not value:
+        return current
+    try:
+        workspace = Path(value).expanduser().resolve(strict=True)
+    except OSError as error:
+        print(f"Workspace not found: {error}")
+        return current
+    if not workspace.is_dir():
+        print("Workspace must be a directory.")
+        return current
+    return workspace
+
+
+def display_value(value: object, fallback: str) -> str:
+    return fallback if value is None else str(value)
+
+
+def advanced_settings_menu(args: argparse.Namespace) -> None:
+    while True:
+        output = display_value(args.max_output_tokens, "unlimited")
+        temperature = display_value(args.temperature, "model default")
+        threads = display_value(args.threads, "automatic")
+        data_dir = args.data_dir or Path.cwd() / "single_model_agent_data"
+        print("\n" + "=" * 70)
+        print("⚙️  ADVANCED SETTINGS — changes apply to this launch")
+        print("=" * 70)
+        print(f"  1. Context size       : {args.context} tokens (higher uses more memory)")
+        print(f"  2. Temperature        : {temperature} (higher is more varied)")
+        print(f"  3. GPU layers         : {args.gpu_layers} (0 = CPU, -1 = all possible)")
+        print(f"  4. CPU threads        : {threads} (automatic is recommended)")
+        print(f"  5. Maximum steps      : {args.max_steps} (agent actions per request)")
+        print(f"  6. Model output limit : {output} (0 = unlimited)")
+        print(f"  7. Runtime data folder: {data_dir}")
+        print("  8. Reset advanced settings")
+        print("  0. Back")
+        choice = input("\nSelect option: ").strip()
+        try:
+            if choice == "0":
+                return
+            if choice == "1":
+                value = int(input("Context tokens (minimum 1024): ").strip())
+                if value < 1024:
+                    raise ValueError("Context size must be at least 1024.")
+                args.context = value
+            elif choice == "2":
+                value = input("Temperature (0-2, or 'default'): ").strip().casefold()
+                if value in {"", "default"}:
+                    args.temperature = None
+                else:
+                    temperature_value = float(value)
+                    if not 0 <= temperature_value <= 2:
+                        raise ValueError("Temperature must be between 0 and 2.")
+                    args.temperature = temperature_value
+            elif choice == "3":
+                value = int(input("GPU layers (0 = CPU, -1 = all): ").strip())
+                if value < -1:
+                    raise ValueError("GPU layers must be -1 or greater.")
+                args.gpu_layers = value
+            elif choice == "4":
+                value = int(input("CPU threads (0 = automatic): ").strip())
+                if value < 0:
+                    raise ValueError("CPU threads cannot be negative.")
+                args.threads = value or None
+            elif choice == "5":
+                value = int(input("Maximum agent steps: ").strip())
+                if value < 1:
+                    raise ValueError("Maximum steps must be at least 1.")
+                args.max_steps = value
+            elif choice == "6":
+                value = int(input("Maximum output tokens (0 = unlimited): ").strip())
+                if value < 0:
+                    raise ValueError("Output tokens cannot be negative.")
+                args.max_output_tokens = value or None
+            elif choice == "7":
+                value = input("Runtime data folder (Enter = local default): ").strip().strip('"')
+                args.data_dir = Path(value).expanduser() if value else None
+            elif choice == "8":
+                defaults = build_parser().parse_args([])
+                for name in (
+                    "context", "temperature", "gpu_layers", "threads",
+                    "max_steps", "max_output_tokens", "data_dir",
+                ):
+                    setattr(args, name, getattr(defaults, name))
+                print("Advanced settings reset.")
+            else:
+                print("Enter one of the listed numbers.")
+        except ValueError as error:
+            print(f"Invalid value: {error}")
+
+
+def show_system_information(args: argparse.Namespace, model: Path | None) -> None:
+    data_dir = (args.data_dir or Path.cwd() / "single_model_agent_data").expanduser().resolve()
+    print("\n" + "=" * 70)
+    print("🔎 SYSTEM INFORMATION")
+    print("=" * 70)
+    print(f"Model file      : {model or 'Not selected'}")
+    if model and model.exists():
+        print(f"Model size      : {model.stat().st_size / (1024 ** 3):.2f} GiB")
+    print(f"Model search    : {args.models_dir}")
+    print(f"Workspace       : {args.workspace}")
+    print(f"Mode            : {args.mode} — {MODE_DESCRIPTIONS[args.mode]}")
+    print(f"Context         : {args.context} tokens")
+    print(f"Temperature     : {display_value(args.temperature, 'model default')}")
+    print(f"GPU layers      : {args.gpu_layers}")
+    print(f"CPU threads     : {display_value(args.threads, 'automatic')}")
+    print(f"Maximum steps   : {args.max_steps}")
+    print(f"Output limit    : {display_value(args.max_output_tokens, 'unlimited')}")
+    print(f"Runtime data    : {data_dir}")
+    input("\nPress Enter to return...")
+
+
+def startup_menu(args: argparse.Namespace) -> Path | None:
+    models = discover_models(args.models_dir)
+    selected_model = models[0] if len(models) == 1 else None
+    while True:
+        print("\n╔══════════════════════════════════════╗")
+        print("║      🤖 MYLLM CODING AGENT          ║")
+        print("╚══════════════════════════════════════╝")
+        print(f"\n🤖 Model     : {selected_model.name if selected_model else 'Not selected'}")
+        print(f"📁 Workspace : {args.workspace}")
+        print(f"🛡️  Mode      : {args.mode}")
+        print(f"🧠 Context   : {args.context} tokens")
+        print(f"🌡️  Temp      : {display_value(args.temperature, 'model default')}")
+        print(f"♾️  Output    : {display_value(args.max_output_tokens, 'unlimited')}")
+        print("\n  1. 💬 Start coding agent")
+        print("  2. ⚙️  Advanced settings")
+        print("  3. 🤖 Model selection")
+        print("  4. 📁 Workspace selection")
+        print("  5. 🛡️  Agent mode")
+        print("  6. 🔎 System information")
+        print("  0. Exit")
+        choice = input("\nSelect option: ").strip()
+        if choice == "1":
+            return selected_model or choose_model(models)
+        if choice == "2":
+            advanced_settings_menu(args)
+        elif choice == "3":
+            selected_model = choose_model(models)
+        elif choice == "4":
+            args.workspace = choose_workspace(args.workspace)
+        elif choice == "5":
+            args.mode = choose_mode(args.mode)
+        elif choice == "6":
+            show_system_information(args, selected_model)
+        elif choice == "0":
+            print("\n👋 Goodbye.")
+            return None
+        else:
+            print("Enter one of the listed numbers.")
+
+
 def stream_output(kind: str, text: str) -> None:
+    if kind == "waiting":
+        if getattr(stream_output, "thinking", False) or getattr(stream_output, "response_started", False):
+            print()
+        stream_output.thinking = False
+        stream_output.response_started = False
+        CLI_SPINNER.start(text)
+        return
+    CLI_SPINNER.stop()
+    if kind == "status":
+        print(text, end="", flush=True)
+        return
     if kind == "reasoning":
         # Keep thinking visibly separate without claiming it is reliable evidence.
-        prefix = "\n[thinking] " if not getattr(stream_output, "thinking", False) else ""
+        prefix = "🧠 Agent reasoning:\n" if not getattr(stream_output, "thinking", False) else ""
         stream_output.thinking = True
         print(prefix + text, end="", flush=True)
         return
     if getattr(stream_output, "thinking", False):
-        print("\n[response] ", end="", flush=True)
+        print("\n🤖 Agent response:\n", end="", flush=True)
         stream_output.thinking = False
+        stream_output.response_started = True
+    elif not getattr(stream_output, "response_started", False):
+        print("🤖 Agent response:\n", end="", flush=True)
+        stream_output.response_started = True
     print(text, end="", flush=True)
 
 
 def approval_prompt(call: ToolCall, preview: str, risk: str) -> bool:
-    print("\n\nApproval required")
-    print(f"Tool: {call.name} | Risk: {risk}")
+    print("\n\n🛡️  APPROVAL REQUIRED")
+    print(f"🔧 Tool: {call.name}")
+    print(f"⚠️  Risk: {risk}")
+    print("📄 Proposed action:")
     print(preview)
     while True:
-        answer = input("Approve this exact action? [y/N]: ").strip().casefold()
+        answer = input("👤 Your decision — approve this exact action? [y/N]: ").strip().casefold()
         if answer in {"y", "yes"}:
             return True
         if answer in {"", "n", "no"}:
@@ -138,7 +381,7 @@ def interactive(args: argparse.Namespace, model: Path) -> int:
     try:
         while True:
             try:
-                message = input("You> ").strip()
+                message = input("👤 You › ").strip()
             except KeyboardInterrupt:
                 agent.stop()
                 print("\nStopped. Press Ctrl+C again at the prompt or use /exit to leave.")
@@ -195,11 +438,15 @@ def interactive(args: argparse.Namespace, model: Path) -> int:
                 print("Unknown command. Type /help.")
                 continue
 
-            print("Agent> ", end="", flush=True)
-            result = agent.run(message)
-            print(f"\n\n[{result.state.value}] {result.message}")
-            print(f"Run: {result.run_id}")
-            print(f"Log: {result.log_file}\n")
+            print("\n🤖 Agent")
+            try:
+                result = agent.run(message)
+            finally:
+                CLI_SPINNER.stop()
+            result_icon = "✅" if result.state.value == "COMPLETED" else "⚠️"
+            print(f"\n\n{result_icon} [{result.state.value}] {result.message}")
+            print(f"🆔 Run: {result.run_id}")
+            print(f"📝 Log: {result.log_file}\n")
     finally:
         agent.close()
 
@@ -207,11 +454,18 @@ def interactive(args: argparse.Namespace, model: Path) -> int:
 def main() -> int:
     multiprocessing.freeze_support()
     args = build_parser().parse_args()
+    menu_model = startup_menu(args) if len(sys.argv) == 1 else None
+    if len(sys.argv) == 1 and menu_model is None:
+        return 0
     workspace = args.workspace.expanduser().resolve(strict=True)
     if not workspace.is_dir():
         raise SystemExit(f"Workspace must be a directory: {workspace}")
     args.workspace = workspace
-    model = args.model.expanduser().resolve(strict=True) if args.model else choose_model(discover_models(args.models_dir))
+    model = (
+        args.model.expanduser().resolve(strict=True)
+        if args.model
+        else menu_model or choose_model(discover_models(args.models_dir))
+    )
     if model.suffix.casefold() != ".gguf":
         raise SystemExit(f"Model must be a GGUF file: {model}")
     return interactive(args, model)

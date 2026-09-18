@@ -89,12 +89,8 @@ class DataPaths:
     def create(cls, override: str | Path | None = None) -> "DataPaths":
         if override:
             root = Path(override).expanduser().resolve()
-        elif os.name == "nt":
-            base = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
-            root = base / "MyLLM" / "single_model_agent"
         else:
-            base = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-            root = base / "myllm" / "single_model_agent"
+            root = (Path.cwd() / "single_model_agent_data").resolve()
 
         paths = cls(
             root=root,

@@ -182,6 +182,7 @@ class SingleModelAgent:
             raise ValueError("User message cannot be empty.")
         if len(user_message) > 65_536:
             raise ValueError("User message exceeds the 65,536-character safety limit.")
+        self.stream_callback("waiting", "⏳ Preparing context…")
         self.cancel_event.clear()
         self.changed_paths = set(_resume.get("changed_paths", [])) if _resume else set()
         self.checks = dict(_resume.get("checks", {})) if _resume else {}
@@ -259,6 +260,12 @@ class SingleModelAgent:
                 self._compact_if_needed(store, profile.context_size, step)
                 messages = self._messages()
                 estimated = self._estimate_tokens(messages)
+                context_percent = min(100.0, (estimated / profile.context_size) * 100)
+                self.stream_callback(
+                    "status",
+                    f"📊 Context: ≈{estimated:,}/{profile.context_size:,} tokens "
+                    f"({context_percent:.1f}%)\n",
+                )
                 store.append("ContextPrepared", {"estimated_tokens": estimated, "message_count": len(messages)}, step)
                 store.append("ModelStarted", {"temperature": temperature, "output_limit": self.config.max_output_tokens}, step)
 
@@ -266,12 +273,17 @@ class SingleModelAgent:
                 reasoning_parts: list[str] = []
                 started = time.monotonic()
                 first_token_ms: int | None = None
+                self.stream_callback("waiting", "🧠 Thinking…")
                 for chunk in self.provider.stream(messages, request):
                     if self.cancel_event.is_set():
                         self.provider.cancel_current()
                         raise InterruptedError("Run cancelled during model generation.")
                     if chunk.first and first_token_ms is None:
                         first_token_ms = int((time.monotonic() - started) * 1000)
+                        self.stream_callback(
+                            "status",
+                            f"⚡ First token: {first_token_ms / 1000:.2f}s\n",
+                        )
                     if chunk.reasoning:
                         reasoning_parts.append(chunk.reasoning)
                         self.stream_callback("reasoning", chunk.reasoning)

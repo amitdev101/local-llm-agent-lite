@@ -45,6 +45,9 @@ It is not currently intended for:
 - Controller-owned task requirements and completion evidence.
 - JSONL run/session events and readable dated logs.
 - Context accounting, archive-before-compaction, and deterministic compaction.
+- A continuous CLI spinner during context preparation and first-token waiting, plus estimated
+  context usage and first-token timing. Redirected output uses plain status lines without animation.
+- Distinct `👤` user, `🤖` agent, and `🛡️` approval labels make it clear whose turn it is.
 - Crash-aware checkpoint reconciliation and conservative session resume.
 - No explicit output-token cap unless the user chooses one.
 
@@ -56,9 +59,12 @@ From the repository root:
 python single_model_agent/main.py
 ```
 
-The launcher searches `models/` recursively for `.gguf` files. It selects the only model
-automatically or shows a numbered menu when several exist. The model loads on the first request,
-not before the interactive prompt appears.
+With no command-line options, the launcher shows a beginner-friendly status screen and menu. It
+can start the agent, select a model or workspace, change between `ask`, `auto`, and `dry-run`, open
+advanced settings, and display complete system information. Advanced settings expose context,
+temperature, GPU layers, CPU threads, agent steps, output limits, and runtime storage with short
+explanations and safe defaults. It searches `models/` recursively for `.gguf` files and selects the
+only model automatically. The model loads on the first request, not before the prompt appears.
 
 Choose an explicit model and project:
 
@@ -89,7 +95,7 @@ llama-cpp-python==0.3.35
 | `--model <path>` | model menu | Exact GGUF file |
 | `--models-dir <path>` | repository `models/` | Folder searched recursively |
 | `--workspace <path>` | current directory | Only project the agent can inspect/change |
-| `--data-dir <path>` | OS user-data folder | Events, sessions, logs, archives, trust, snapshots |
+| `--data-dir <path>` | `./single_model_agent_data` | Events, sessions, logs, archives, trust, snapshots |
 | `--context <tokens>` | `32768` | llama.cpp context allocation |
 | `--temperature <value>` | model profile | Explicit sampling override |
 | `--max-output-tokens <n>` | omitted | Optional output cap; absent means no explicit cap |
@@ -439,23 +445,18 @@ Force-stopping model inference trades a future model reload for deterministic in
 
 ## 🧾 Runs, sessions, and local files
 
-Default Windows root:
+Default root, relative to the directory from which the agent is started:
 
 ```text
-%LOCALAPPDATA%\MyLLM\single_model_agent\
+./single_model_agent_data/
 ```
 
-Default Linux/macOS-style root:
-
-```text
-$XDG_STATE_HOME/myllm/single_model_agent/
-# fallback: ~/.local/state/myllm/single_model_agent/
-```
+Use `--data-dir <path>` when an explicit alternative location is required.
 
 Layout:
 
 ```text
-single_model_agent state/
+single_model_agent_data/
 ├── archives/<run-id>/context-*.txt
 ├── logs/<YYYY-MM-DD>/<run-id>.log.txt
 ├── runs/<run-id>.jsonl
