@@ -10,6 +10,8 @@ Customize each theme's JSON/CSS pair in [`frontend/themes/`](frontend/themes/). 
 
 The composer groups system instructions, temperature, and advanced sampling under **Options**. **Thinking On/Off** stays visible beside it and synchronized with Settings; it applies to the next response on compatible models. The model control shows a shorter name, with the full path in its menu, and the compact context percentage opens detailed usage.
 
+Failed and stopped responses keep their partial text, with a clear status and a Copy action. **Retry** is available for the latest response and reuses its original prompt and response settings with the loaded model, without adding the user message again. Earlier attempts remain visible. If the server already finished an answer while the connection was lost, Retry recovers the saved answer instead of generating it again. Retry remains available after reopening a chat.
+
 ### Screenshots
 
 These Playwright screenshots use deterministic sample conversations and metrics, not a live inference benchmark. They predate the grouped composer controls.
@@ -80,3 +82,14 @@ python local_llm_playground/main.py
 - 🔄 Refresh with `Ctrl+F5`
 - 📦 Confirm files end in `.gguf`
 - 📁 Keep models in the repository's root `models/` folder
+
+## Recovery checks
+
+From the repository root, run the backend and frontend recovery checks without a browser or a real model:
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s local_llm_playground/tests -p test_recovery.py
+node --test local_llm_playground/tests/recovery.test.cjs
+```
+
+The checks use isolated temporary chats and a fake model, plus simulated DOM and network surfaces for the chat controller. They cover partial failures, interrupted streams, Retry settings, repeated submissions, saved-answer recovery, and cleanup. Review the resulting UI manually in each theme and color mode.

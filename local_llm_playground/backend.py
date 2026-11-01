@@ -96,15 +96,26 @@ def chat_view(chat_id: str) -> dict:
     title = "New chat"
     settings = {}
     messages = []
+    generation_request = None
     created_at = events[0].get("time", "") if events else ""
-    for event in events:
+    for index, event in enumerate(events):
         kind = event.get("type")
         if kind in {"created", "renamed"}:
             title = event.get("title", title)
         elif kind == "settings":
             settings.update(event.get("values", {}))
-        elif kind in {"user", "assistant"}:
-            messages.append(event)
+        elif kind == "user":
+            generation_request = {
+                key: value for key, value in settings.items()
+                if key in GenerateRequest.model_fields
+            }
+            generation_request.update({
+                "message": event.get("content", ""),
+                "request_id": event.get("request_id") or f"legacy-{index}",
+            })
+            messages.append({**event, "request": generation_request})
+        elif kind == "assistant":
+            messages.append({**event, "request": generation_request})
     return {
         "id": chat_id,
         "title": title,
@@ -179,6 +190,7 @@ class ChatUpdate(BaseModel):
 
 class GenerateRequest(BaseModel):
     message: str = Field(min_length=1)
+    request_id: str | None = Field(None, min_length=1, max_length=80, pattern=r"^[\w-]+$")
     system_prompt: str = ""
     thinking: bool = False
     temperature: float = Field(0.0, ge=0.0, le=2.0)
@@ -289,59 +301,94 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
     if not runtime.generation_lock.acquire(blocking=False):
         raise HTTPException(409, "A generation is already active")
 
-    events = read_events(chat_id)
-    history = [{
-        "role": item["type"],
-        "content": item.get("content", "")
-    } for item in events if item.get("type") in {"user", "assistant"}
-               and item.get("status", "complete") == "complete"]
-    visible_message = request.message.strip()
-    directive = "/think" if request.thinking else "/no_think"
-    effective_message = f"{visible_message}\n\n{directive}"
-    messages = []
-    if request.system_prompt.strip():
-        messages.append({"role": "system", "content": request.system_prompt.strip()})
-    system_count = len(messages)
-    messages.extend(history)
-    messages.append({"role": "user", "content": effective_message})
+    runtime.cancel.clear()
+    completed = None
+    try:
+        chat = chat_view(chat_id)
+        saved = chat["messages"]
+        target = next((index for index, item in enumerate(saved)
+                       if item["type"] == "user" and request.request_id
+                       and item["request"]["request_id"] == request.request_id), None)
+        if target is not None:
+            if any(item["type"] == "user" for item in saved[target + 1:]):
+                raise HTTPException(409, "Only the latest response can be retried")
+            if saved[target]["content"] != request.message.strip():
+                raise HTTPException(409, "This request ID belongs to a different prompt")
+            # Retry the original response settings, even after reopening the chat.
+            request = GenerateRequest(**saved[target]["request"])
+            completed = next((item for item in reversed(saved[target + 1:])
+                              if item.get("status", "complete") == "complete"), None)
 
-    context_size = int(read_config()["context_size"])
-    trimmed_messages = 0
-    while len(messages) > system_count + 1:
-        estimated = len(runtime.llm.tokenize(json.dumps(messages).encode("utf-8")))
-        if estimated <= int(context_size * 0.80):
-            break
-        remove_count = 1
-        if (messages[system_count].get("role") == "user" and len(messages) > system_count + 2
-                and messages[system_count + 1].get("role") == "assistant"):
-            remove_count = 2
-        del messages[system_count:system_count + remove_count]
-        trimmed_messages += remove_count
+        if completed is None:
+            visible_message = request.message.strip()
+            if not visible_message:
+                raise HTTPException(400, "Enter a message")
+            request_id = request.request_id or str(uuid.uuid4())
+            history = []
+            pending_user = None
+            for item in saved[:target] if target is not None else saved:
+                if item["type"] == "user":
+                    pending_user = item
+                elif pending_user and item.get("status", "complete") == "complete":
+                    history.extend([
+                        {"role": "user", "content": pending_user["content"]},
+                        {"role": "assistant", "content": item.get("content", "")},
+                    ])
+                    pending_user = None
+            directive = "/think" if request.thinking else "/no_think"
+            messages = []
+            if request.system_prompt.strip():
+                messages.append({"role": "system", "content": request.system_prompt.strip()})
+            system_count = len(messages)
+            messages.extend(history)
+            messages.append({"role": "user", "content": f"{visible_message}\n\n{directive}"})
 
-    settings = request.model_dump(exclude={"message", "system_prompt"})
-    settings.update({"system_prompt": request.system_prompt, "model": runtime.model_path})
-    append_event(chat_id, {"type": "settings", "values": settings})
-    append_event(chat_id, {"type": "user", "content": visible_message, "status": "complete"})
-    if not any(item.get("type") == "user" for item in events):
-        append_event(chat_id, {"type": "renamed", "title": visible_message[:60]})
+            context_size = int(read_config()["context_size"])
+            trimmed_messages = 0
+            while len(messages) > system_count + 1:
+                estimated = len(runtime.llm.tokenize(json.dumps(messages).encode("utf-8")))
+                if estimated <= int(context_size * 0.80):
+                    break
+                del messages[system_count:system_count + 2]
+                trimmed_messages += 2
+
+            settings = request.model_dump(exclude={"message", "request_id"})
+            settings["model"] = runtime.model_path
+            append_event(chat_id, {"type": "settings", "values": settings})
+            if target is None:
+                append_event(chat_id, {"type": "user", "content": visible_message,
+                                       "status": "complete", "request_id": request_id})
+                if not any(item["type"] == "user" for item in saved):
+                    append_event(chat_id, {"type": "renamed", "title": visible_message[:60]})
+    except Exception:
+        runtime.cancel.clear()
+        runtime.generation_lock.release()
+        raise
+
+    if completed is not None:
+        # A lost connection may hide a successful answer. Replay it without inference.
+        runtime.generation_lock.release()
+
+        def replay() -> Iterator[str]:
+            yield event({"type": "start"})
+            yield event({"type": "token", "text": completed.get("content", "")})
+            yield event({"type": "done", "metrics": completed.get("metrics")})
+
+        return StreamingResponse(replay(), media_type="application/x-ndjson")
 
     def stream() -> Iterator[str]:
         response = ""
         started = time.perf_counter()
         first_token = None
-        runtime.cancel.clear()
         message_id = str(uuid.uuid4())
-        yield event({"type": "start", "message_id": message_id})
-        if trimmed_messages:
-            yield event({
-                "type":
-                "context_trimmed",
-                "messages":
-                trimmed_messages,
-                "message":
-                f"Excluded {trimmed_messages} older message(s) from this request.",
-            })
         try:
+            yield event({"type": "start", "message_id": message_id})
+            if trimmed_messages:
+                yield event({
+                    "type": "context_trimmed",
+                    "messages": trimmed_messages,
+                    "message": f"Excluded {trimmed_messages} older message(s) from this request.",
+                })
             kwargs = {
                 "messages": messages,
                 "temperature": request.temperature,
@@ -386,22 +433,32 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
                     "type": "assistant",
                     "content": response,
                     "status": "interrupted" if stopped else "complete",
+                    "request_id": request_id,
                     "metrics": metrics,
                 },
             )
-            yield event({"type": "stopped" if stopped else "done", "metrics": metrics})
+            terminal = {"type": "stopped" if stopped else "done", "metrics": metrics}
             logger.info("Generation %s in %.2fs", "stopped" if stopped else "completed", elapsed)
+        except GeneratorExit:
+            append_event(chat_id, {
+                "type": "assistant", "content": response, "status": "interrupted",
+                "request_id": request_id,
+            })
+            raise
         except Exception as error:
             logger.exception("Generation failed")
             append_event(chat_id, {
                 "type": "assistant",
                 "content": response,
                 "status": "error",
+                "request_id": request_id,
                 "error": str(error)
             })
-            yield event({"type": "error", "message": str(error)})
+            terminal = {"type": "error", "message": str(error)}
         finally:
             runtime.cancel.clear()
             runtime.generation_lock.release()
+        # The UI can issue its next request as soon as it receives this record.
+        yield event(terminal)
 
     return StreamingResponse(stream(), media_type="application/x-ndjson")

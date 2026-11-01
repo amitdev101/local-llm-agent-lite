@@ -99,6 +99,11 @@ body[data-chat-state="active"] .welcome { display: none; }
 .thinking-content pre { white-space: pre-wrap; font: inherit; }
 .metrics { display: flex; flex-wrap: wrap; gap: 7px; color: var(--muted); font: 10px var(--font-sans); margin-top: 16px; }
 .metrics span { padding: 3px 7px; border: 1px solid var(--line); border-radius: 6px; }
+.response-notice { margin-top: 12px; padding: 12px 14px; border: 1px solid var(--line); border-left: 3px solid var(--danger); border-radius: var(--button-radius); background: var(--panel-2); font: 12px/1.5 var(--font-sans); }
+.response-notice p { margin: 5px 0 0; color: var(--muted); overflow-wrap: anywhere; }
+.response-notice details { margin-top: 8px; }
+.response-notice summary { cursor: pointer; color: var(--muted); width: fit-content; }
+.assistant[data-status="interrupted"] .response-notice { border-left-color: var(--warning); }
 .message-actions { display: flex; gap: 3px; margin-top: 9px; }
 .message-actions button { display: inline-flex; align-items: center; gap: 5px; border: 0; background: transparent; color: var(--muted); padding: 6px 7px; font: 11px var(--font-sans); }
 .message-actions [data-icon] { width: 15px; height: 15px; }

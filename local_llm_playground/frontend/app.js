@@ -162,7 +162,7 @@ function attachCopyButtons(container) {
   });
 }
 
-function messageElement(role, content = "", metrics = null, status = "complete", sourcePrompt = "") {
+function messageElement(role, content = "", metrics = null, status = "complete", sourcePrompt = "", request = null, error = "") {
   document.body.dataset.chatState = "active";
   const wrapper = document.createElement("article");
   wrapper.className = `message ${role}`;
@@ -170,19 +170,38 @@ function messageElement(role, content = "", metrics = null, status = "complete",
     wrapper.innerHTML = `<div class="bubble"></div>`;
     wrapper.firstElementChild.textContent = content;
   } else {
-    wrapper.innerHTML = `<div class="assistant-head"><img class="assistant-icon" data-brand-logo alt=""><span data-text="assistantName"></span></div><div class="thinking-slot"></div><div class="content"></div><div class="metrics"></div><div class="message-actions"><button class="copy-response"><span data-icon="copy"></span><span data-text="copy"></span></button><button class="regenerate"><span data-icon="regenerate"></span><span data-text="regenerate"></span></button><button class="continue-response"><span data-icon="continue"></span><span data-text="continue"></span></button></div>`;
+    wrapper.generationRequest = request;
+    wrapper.innerHTML = `<div class="assistant-head"><img class="assistant-icon" data-brand-logo alt=""><span data-text="assistantName"></span></div><div class="thinking-slot"></div><div class="content"></div><div class="response-notice" hidden></div><div class="metrics"></div><div class="message-actions"><button class="copy-response"><span data-icon="copy"></span><span data-text="copy"></span></button><button class="regenerate"><span data-icon="regenerate"></span><span data-text="regenerate"></span></button><button class="continue-response"><span data-icon="continue"></span><span data-text="continue"></span></button></div>`;
     wrapper.querySelector(".copy-response").onclick = async () => { await navigator.clipboard.writeText(wrapper.dataset.raw || ""); showToast(text("copiedResponse")); };
-    wrapper.querySelector(".regenerate").onclick = () => send(sourcePrompt || lastUserMessage);
+    wrapper.querySelector(".regenerate").onclick = () => {
+      const retry = ["error", "interrupted"].includes(wrapper.dataset.status);
+      return send(sourcePrompt || lastUserMessage, retry ? wrapper.generationRequest : null);
+    };
     wrapper.querySelector(".continue-response").onclick = () => send("Continue.");
-    updateAssistant(wrapper, content, metrics, status);
+    updateAssistant(wrapper, content, metrics, status, 0, error);
     refreshThemeContent(wrapper);
   }
   ui.messages.appendChild(wrapper);
+  updateResponseActions();
   scrollDown();
   return wrapper;
 }
 
-function updateAssistant(element, raw, metrics = null, status = "complete", liveSeconds = 0) {
+function updateResponseActions() {
+  const latest = [...ui.messages.querySelectorAll(".message")].at(-1);
+  ui.messages.querySelectorAll(".assistant").forEach(element => {
+    const retry = ["error", "interrupted"].includes(element.dataset.status);
+    const available = element === latest && Boolean(element.generationRequest);
+    const button = element.querySelector(".regenerate");
+    button.disabled = generating || (retry && !available);
+    button.title = retry ? text(available ? "retryHelp" : "retryLatestOnly") : "";
+    element.querySelector(".continue-response").hidden = retry;
+    element.querySelector(".continue-response").disabled = generating;
+  });
+}
+
+function updateAssistant(element, raw, metrics = null, status = "complete", liveSeconds = 0, error = "") {
+  const statusChanged = element.dataset.status !== status;
   element.dataset.raw = raw;
   element.dataset.status = status;
   const parts = splitThinking(raw);
@@ -197,9 +216,14 @@ function updateAssistant(element, raw, metrics = null, status = "complete", live
   const content = element.querySelector(".content");
   if (status === "streaming") content.textContent = parts.answer;
   else {
-    content.innerHTML = markdown(parts.answer || (status === "interrupted" ? "[Interrupted]" : ""));
+    content.innerHTML = markdown(parts.answer);
     attachCopyButtons(content);
   }
+  const notice = element.querySelector(".response-notice");
+  const failed = status === "error" || status === "interrupted";
+  notice.hidden = !failed;
+  notice.setAttribute("role", status === "error" ? "alert" : "status");
+  notice.innerHTML = failed ? `<strong data-text="${status === "error" ? "responseFailed" : "responseStopped"}">${escapeHtml(text(status === "error" ? "responseFailed" : "responseStopped"))}</strong><p data-text="responseKept">${escapeHtml(text("responseKept"))}</p>${error ? `<details><summary data-text="errorDetails">${escapeHtml(text("errorDetails"))}</summary><p>${escapeHtml(error)}</p></details>` : ""}` : "";
   const metricsBox = element.querySelector(".metrics");
   if (metrics) {
     const values = [
@@ -213,6 +237,7 @@ function updateAssistant(element, raw, metrics = null, status = "complete", live
   const retryLabel = element.querySelector(".regenerate [data-text]");
   retryLabel.dataset.text = status === "error" || status === "interrupted" ? "retry" : "regenerate";
   retryLabel.textContent = text(retryLabel.dataset.text);
+  if (statusChanged) updateResponseActions();
 }
 
 function scrollDown() {
@@ -412,7 +437,7 @@ async function openChat(id) {
   let sourcePrompt = "";
   chat.messages.forEach((message) => {
     if (message.type === "user") { sourcePrompt = message.content; lastUserMessage = message.content; }
-    messageElement(message.type, message.content, message.metrics, message.status, sourcePrompt);
+    messageElement(message.type, message.content, message.metrics, message.status, sourcePrompt, message.request, message.error);
     conversationChars += message.content.length;
   });
   const lastMetrics = [...chat.messages].reverse().find((message) => message.metrics)?.metrics;
@@ -452,60 +477,119 @@ function runtimeModelMatchesSelection() {
   return Boolean(loadedModelPath) && loadedModelPath === (ui.customModel.value.trim() || ui.quickModelSelect.value);
 }
 
-async function send(message = ui.prompt.value.trim()) {
+async function send(message = ui.prompt.value.trim(), retryRequest = null) {
   if (!message || generating) return;
+  const request = retryRequest || { message, ...generationValues(), request_id: crypto.randomUUID() };
+  // Reserve the UI before the first await so rapid clicks cannot submit twice.
+  generating = true;
   closeComposerPopovers();
-  const status = await api("/api/status");
-  if (!["ready", "stopped"].includes(status.status)) return openSettings(true);
-  if (!activeChat) await newChat();
-  lastUserMessage = message; ui.prompt.value = ""; resizePrompt();
-  messageElement("user", message);
-  conversationChars += message.length; updateContext();
-  const assistant = messageElement("assistant", "", null, "streaming", message);
-  generating = true; ui.quickModelSelect.disabled = true; ui.quickLoadModel.disabled = true; ui.sendButton.classList.add("hidden"); ui.stopButton.classList.remove("hidden");
+  ui.quickModelSelect.disabled = true; ui.quickLoadModel.disabled = true; ui.loadModel.disabled = true;
+  ui.sendButton.classList.add("hidden"); ui.stopButton.classList.remove("hidden"); ui.stopButton.disabled = true;
+  updateResponseActions();
   let elapsedSeconds = 0;
+  let raw = "", assistant = null, failed = false;
   setStatus("generating", { key: "preparing" });
-  generationTimer = setInterval(() => {
-    elapsedSeconds += 1;
-    setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
-    updateAssistant(assistant, raw, null, "streaming", elapsedSeconds);
-  }, 1000);
-  let raw = "";
   try {
+    const status = await api("/api/status");
+    if (!["ready", "stopped"].includes(status.status)) {
+      if (status.status === "generating") showToast(text("generationBusy"));
+      else openSettings(true);
+      return;
+    }
+    if (!activeChat) {
+      const chat = await api("/api/chats", { method: "POST", body: JSON.stringify(request) });
+      activeChat = chat.id; resetMessages(); conversationChars = request.system_prompt.length;
+      if (mobile.matches) setSidebar(false);
+    }
+    lastUserMessage = request.message;
+    if (!retryRequest) {
+      // The prompt remains editable until we have a chat ready to receive it.
+      if (ui.prompt.value.trim() === request.message) { ui.prompt.value = ""; resizePrompt(); }
+      messageElement("user", request.message);
+      conversationChars += request.message.length; updateContext();
+    }
+    assistant = messageElement("assistant", "", null, "streaming", request.message, request);
+    generationTimer = setInterval(() => {
+      elapsedSeconds += 1;
+      setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
+      updateAssistant(assistant, raw, null, "streaming", elapsedSeconds);
+    }, 1000);
     const response = await fetch(`/api/chats/${activeChat}/generate`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ message, ...generationValues() })
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request)
     });
-    if (!response.ok) throw new Error((await response.json()).detail || response.statusText);
+    if (!response.ok) {
+      let detail = response.statusText;
+      try { detail = (await response.json()).detail || detail; } catch (_) {}
+      throw new Error(typeof detail === "string" ? detail : text("responseRequestFailed"));
+    }
+    if (!response.body) throw new Error(text("streamInterrupted"));
+    ui.stopButton.disabled = false;
     const reader = response.body.getReader(); const decoder = new TextDecoder(); let pending = "";
-    while (true) {
-      const { value, done } = await reader.read();
-      pending += decoder.decode(value || new Uint8Array(), { stream: !done });
-      const lines = pending.split("\n"); pending = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        const item = JSON.parse(line);
-        if (item.type === "start") setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
-        else if (item.type === "context_trimmed") contextNotice(item.message);
-        else if (item.type === "token") { raw += item.text; updateAssistant(assistant, raw, null, "streaming", elapsedSeconds); scrollDown(); }
-        else if (item.type === "done" || item.type === "stopped") {
-          updateAssistant(assistant, raw, item.metrics, item.type === "stopped" ? "interrupted" : "complete");
-          updateContext(item.metrics.context_used, item.metrics.context_size, true);
-        }
-        else if (item.type === "error") throw new Error(item.message);
+    let terminal = false;
+    const consume = line => {
+      if (!line.trim() || terminal) return;
+      const item = JSON.parse(line);
+      if (item.type === "start") setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
+      else if (item.type === "context_trimmed") contextNotice(item.message);
+      else if (item.type === "token") { raw += item.text; updateAssistant(assistant, raw, null, "streaming", elapsedSeconds); scrollDown(); }
+      else if (item.type === "done" || item.type === "stopped") {
+        terminal = true;
+        clearInterval(generationTimer);
+        updateAssistant(assistant, raw, item.metrics, item.type === "stopped" ? "interrupted" : "complete", elapsedSeconds);
+        if (item.metrics) updateContext(item.metrics.context_used, item.metrics.context_size, true);
       }
-      if (done) break;
+      else if (item.type === "error") throw new Error(item.message);
+    };
+    try {
+      while (!terminal) {
+        const { value, done } = await reader.read();
+        pending += decoder.decode(value || new Uint8Array(), { stream: !done });
+        const lines = pending.split("\n"); pending = lines.pop();
+        for (const line of lines) consume(line);
+        if (done) { consume(pending); break; }
+      }
+      if (!terminal) throw new Error(text("streamInterrupted"));
+    } finally {
+      reader.releaseLock();
     }
   } catch (error) {
-    updateAssistant(assistant, `${raw}\n\n[Error: ${error.message}]`, null, "complete"); setStatus("error", error.message);
+    failed = true;
+    if (assistant) updateAssistant(assistant, raw, null, "error", elapsedSeconds, error.message);
+    else showToast(text("requestFailed"));
   } finally {
     clearInterval(generationTimer); generationTimer = null; conversationChars += raw.length;
-    generating = false; ui.quickModelSelect.disabled = false; ui.quickLoadModel.disabled = false; ui.sendButton.classList.remove("hidden"); ui.stopButton.classList.add("hidden");
-    const current = await api("/api/status"); if (current.status !== "error") setStatus("ready");
-    await refreshChats(); ui.prompt.focus();
+    generating = false;
+    ui.quickModelSelect.disabled = false; ui.quickLoadModel.disabled = false; ui.loadModel.disabled = false;
+    ui.sendButton.classList.remove("hidden"); ui.stopButton.classList.add("hidden"); ui.stopButton.disabled = false;
+    updateResponseActions();
+    // Cleanup failures must not relabel a completed answer or hide a failed one.
+    const [statusResult, chatsResult] = await Promise.allSettled([api("/api/status"), refreshChats()]);
+    if (statusResult.status === "fulfilled") {
+      const current = statusResult.value;
+      updateModelStatus(current);
+      if (failed && !assistant && current.status === "ready") setStatus("ready", { key: "requestFailed" });
+    } else {
+      setStatus("error", { key: "connectionLost" });
+      ui.sendButton.disabled = false;
+    }
+    if (chatsResult.status === "rejected" && statusResult.status === "fulfilled") showToast(text("chatListUnavailable"));
+    if ([ui.sendButton, ui.stopButton, document.body].includes(document.activeElement)) ui.prompt.focus();
   }
 }
 
-async function stop() { if (generating) { ui.stopButton.disabled = true; clearInterval(generationTimer); setStatus("generating", { key: "stopping" }); await api("/api/generation/stop", { method: "POST" }); ui.stopButton.disabled = false; } }
+async function stop() {
+  if (!generating || ui.stopButton.disabled) return;
+  ui.stopButton.disabled = true;
+  setStatus("generating", { key: "stopping" });
+  try {
+    await api("/api/generation/stop", { method: "POST" });
+    clearInterval(generationTimer);
+  } catch (_) {
+    showToast(text("stopFailed"));
+  } finally {
+    ui.stopButton.disabled = !generating;
+  }
+}
 function resizePrompt() { ui.prompt.style.height = "auto"; ui.prompt.style.height = `${Math.min(ui.prompt.scrollHeight, 180)}px`; }
 
 ui.settingsButton.onclick = () => openSettings(true); ui.closeSettings.onclick = () => openSettings(false); ui.overlay.onclick = () => { openSettings(false); if (mobile.matches) setSidebar(false); };
@@ -552,6 +636,7 @@ document.addEventListener("themechange", () => {
   ui.messages.querySelectorAll(".assistant").forEach(node => {
     node.querySelector(".thinking-box summary").textContent = text(node.dataset.status === "streaming" ? "working" : "worked", { duration: node.dataset.duration });
   });
+  updateResponseActions();
   resizePrompt();
 });
 
