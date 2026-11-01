@@ -1,0 +1,39 @@
+{
+  "id": "chatgpt",
+  "displayName": "ChatGPT",
+  "branding": {
+    "appName": "Local LLM Playground",
+    "logoLight": "/assets/themes/assets/chatgpt-light.svg",
+    "logoDark": "/assets/themes/assets/chatgpt-dark.svg"
+  },
+  "layout": { "modelPicker": "header", "emptyComposer": "center", "settings": "dialog" },
+  "text": {
+    "welcomeTitle": "What are you working on?",
+    "welcomeSubtitle": "Chat directly with your local model.",
+    "promptPlaceholder": "Ask {appName} anything",
+    "newChat": "New chat",
+    "recentChats": "Your chats",
+    "regenerate": "Try again",
+    "settingsTitle": "Settings"
+  },
+  "icons": { "newChat": "edit", "send": "arrow-up" },
+  "vars": {
+    "--sidebar-width": "260px", "--chat-max-width": "768px",
+    "--composer-radius": "28px", "--button-radius": "10px", "--send-radius": "50%",
+    "--font-sans": "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+    "--font-conversation": "ui-sans-serif, system-ui, sans-serif",
+    "--text-size": "15px", "--line-height": "1.75", "--shadow": "0 4px 20px #00000008"
+  },
+  "modes": {
+    "light": {
+      "--bg": "#ffffff", "--panel": "#f9f9f9", "--panel-2": "#f3f3f3", "--panel-3": "#eaeaea",
+      "--text": "#171717", "--muted": "#666666", "--line": "#dedede", "--accent": "#171717", "--on-accent": "#ffffff",
+      "--danger": "#bd2525", "--warning": "#896110", "--success": "#237850", "--focus": "#426edb", "--code-bg": "#f7f7f8", "--overlay": "#00000055"
+    },
+    "dark": {
+      "--bg": "#212121", "--panel": "#171717", "--panel-2": "#2f2f2f", "--panel-3": "#383838",
+      "--text": "#ececec", "--muted": "#aaaaaa", "--line": "#424242", "--accent": "#f3f3f3", "--on-accent": "#171717",
+      "--danger": "#ff9494", "--warning": "#e4bb79", "--success": "#65c9a6", "--focus": "#8ab4f8", "--code-bg": "#171717", "--overlay": "#00000099"
+    }
+  }
+}

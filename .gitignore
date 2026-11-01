@@ -6,6 +6,9 @@ __pycache__/
 # Local model binaries are large and must not be committed.
 models/*.gguf
 
+# Development-only Playwright browser binaries.
+local_llm_playground/.playwright-browsers/
+
 # Local conversation history
 data/*.jsonl
 data/*.json
@@ -234,3 +237,4 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+.playwright-browsers/*

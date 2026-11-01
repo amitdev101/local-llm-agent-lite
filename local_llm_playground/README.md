@@ -2,6 +2,22 @@
 
 A lightweight browser chat for testing local GGUF models directly.
 
+## Appearance
+
+Open **Settings → Appearance** to choose **ChatGPT**, **Claude**, or **GitHub Copilot**, then **Light** or **Dark**. Each family has its own layout, typography, navigation, composer, and buttons, with Local LLM Playground branding. Choices stay in this browser; switching preserves your draft, conversation, model, and generation settings, including an ongoing response.
+
+Customize each theme's JSON/CSS pair in [`frontend/themes/`](frontend/themes/). See the [customization guide](docs/themes.md) for changing names, logos, wording, colors, fonts, buttons, and supported component positions. These are local recreations of the browser chat styles; they do not add the products' cloud services or agent features.
+
+### Screenshots
+
+These Playwright screenshots use deterministic sample conversations and metrics, not a live inference benchmark.
+
+| Theme | Light | Dark |
+| --- | --- | --- |
+| ChatGPT | ![ChatGPT light](docs/images/themes/chatgpt-light.png) | ![ChatGPT dark](docs/images/themes/chatgpt-dark.png) |
+| Claude | ![Claude light](docs/images/themes/claude-light.png) | ![Claude dark](docs/images/themes/claude-dark.png) |
+| GitHub Copilot | ![GitHub Copilot light](docs/images/themes/github-copilot-light.png) | ![GitHub Copilot dark](docs/images/themes/github-copilot-dark.png) |
+
 ## 🎯 Built for
 
 - 🧪 People evaluating model responses and speed

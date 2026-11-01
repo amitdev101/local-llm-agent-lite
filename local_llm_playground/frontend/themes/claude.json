@@ -1,0 +1,37 @@
+{
+  "id": "claude",
+  "displayName": "Claude",
+  "branding": {
+    "appName": "Local LLM Playground",
+    "logoLight": "/assets/themes/assets/claude.svg",
+    "logoDark": "/assets/themes/assets/claude.svg"
+  },
+  "layout": { "modelPicker": "composer", "emptyComposer": "center", "settings": "dialog" },
+  "text": {
+    "welcomeTitle": "How can I help you today?",
+    "welcomeSubtitle": "Your ideas, your model, your space.",
+    "promptPlaceholder": "Reply to {appName}…",
+    "newChat": "New chat", "recentChats": "Recents", "searchChats": "Search chats",
+    "regenerate": "Retry", "settingsTitle": "Settings", "colorMode": "Color mode"
+  },
+  "icons": { "newChat": "plus", "send": "arrow-up" },
+  "vars": {
+    "--sidebar-width": "272px", "--chat-max-width": "740px",
+    "--composer-radius": "18px", "--button-radius": "8px", "--send-radius": "8px",
+    "--font-sans": "ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif",
+    "--font-conversation": "Georgia, 'Times New Roman', serif",
+    "--text-size": "16px", "--line-height": "1.7", "--shadow": "0 3px 14px #0000000d"
+  },
+  "modes": {
+    "light": {
+      "--bg": "#faf9f5", "--panel": "#f0eee6", "--panel-2": "#ffffff", "--panel-3": "#e8e6de",
+      "--text": "#2d2b27", "--muted": "#6a675f", "--line": "#d9d6cc", "--accent": "#a9472a", "--on-accent": "#ffffff",
+      "--danger": "#b32929", "--warning": "#866019", "--success": "#36704a", "--focus": "#9e563c", "--code-bg": "#f0eee7", "--overlay": "#29261f55"
+    },
+    "dark": {
+      "--bg": "#262624", "--panel": "#1f1f1e", "--panel-2": "#30302e", "--panel-3": "#3a3935",
+      "--text": "#eeeade", "--muted": "#b2afa5", "--line": "#49483f", "--accent": "#d88968", "--on-accent": "#231b16",
+      "--danger": "#f69c95", "--warning": "#dfbd75", "--success": "#a0c598", "--focus": "#e4a586", "--code-bg": "#1f1f1d", "--overlay": "#00000099"
+    }
+  }
+}

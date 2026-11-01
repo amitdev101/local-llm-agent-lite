@@ -1,0 +1,12 @@
+:root[data-theme="github-copilot"] .sidebar { border-right: 1px solid var(--line); padding: 16px; }
+:root[data-theme="github-copilot"] .sidebar-top { margin-bottom: 24px; }
+:root[data-theme="github-copilot"] .new-chat { border: 1px solid var(--line); background: var(--panel-2); justify-content: space-between; }
+:root[data-theme="github-copilot"] .new-chat [data-icon] { order: 1; }
+:root[data-theme="github-copilot"] .topbar { border-bottom: 1px solid var(--line); background: var(--panel); }
+:root[data-theme="github-copilot"] .page-title { flex: 1; }
+:root[data-theme="github-copilot"] .welcome h1 { font-size: clamp(27px, 3vw, 36px); font-weight: 600; letter-spacing: -.035em; }
+:root[data-theme="github-copilot"] .welcome-mark { width: 54px; height: 54px; }
+:root[data-theme="github-copilot"] .message.user { justify-content: flex-start; }
+:root[data-theme="github-copilot"] .message.user .bubble { background: transparent; padding: 0; max-width: 100%; font-size: 20px; font-weight: 600; }
+:root[data-theme="github-copilot"] .content pre { border-radius: 6px; }
+:root[data-theme="github-copilot"] .metrics span { border-radius: 4px; }

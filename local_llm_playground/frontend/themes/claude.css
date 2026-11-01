@@ -1,0 +1,10 @@
+:root[data-theme="claude"] .sidebar { border-right: 1px solid var(--line); }
+:root[data-theme="claude"] .brand strong { font-family: var(--font-conversation); font-size: 17px; font-weight: 500; }
+:root[data-theme="claude"] .topbar { border-bottom: 1px solid transparent; }
+:root[data-theme="claude"] .page-subtitle { display: none; }
+:root[data-theme="claude"] .new-chat { background: var(--panel-2); border-color: var(--line); box-shadow: 0 1px 2px #0001; }
+:root[data-theme="claude"] .welcome h1 { font-family: var(--font-conversation); font-size: clamp(30px, 3.5vw, 42px); font-weight: 400; }
+:root[data-theme="claude"] .welcome-mark { width: 42px; height: 42px; }
+:root[data-theme="claude"] .assistant-head { display: none; }
+:root[data-theme="claude"] .message.user .bubble { border-radius: 12px; }
+:root[data-theme="claude"] .settings-button { border-color: transparent; }

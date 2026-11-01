@@ -1,6 +1,8 @@
+import { initThemes, text, refreshThemeContent } from "./theme.js";
+
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
-  "sidebar chatList chatSearch newChat statusDot statusText activeModel modelMeta messages welcome prompt sendButton stopButton composerStatus temperatureLabel contextBar contextLabel settingsButton settingsPanel closeSettings overlay toast menuButton modelSelect quickModelSelect quickLoadModel customModel contextSize gpuLayers threads loadModel systemPrompt systemSummary systemPreset thinking temperature temperatureNumber topP topK minP repeatPenalty seed resetSettings"
+  "sidebar sidebarClose chatList chatSearch newChat statusDot statusText activeModel modelMeta messages welcome prompt sendButton stopButton composerStatus temperatureLabel contextBar contextLabel settingsButton settingsPanel closeSettings overlay toast menuButton modelSelect quickModelSelect quickLoadModel customModel contextSize gpuLayers threads loadModel systemPrompt systemSummary systemPreset thinking temperature temperatureNumber topP topK minP repeatPenalty seed resetSettings"
     .split(" ").map((id) => [id, $(id)])
 );
 
@@ -11,6 +13,17 @@ let lastUserMessage = "";
 let allChats = [];
 let conversationChars = 0;
 let generationTimer = null;
+let loadedModelPath = "";
+let loadingModel = false;
+let lastStatus = { status: "not_loaded", detail: "" };
+let settingsReturnFocus = null;
+let sidebarExpanded = true;
+const mobile = matchMedia("(max-width: 720px)");
+
+function resetMessages() {
+  ui.messages.replaceChildren(ui.welcome);
+  document.body.dataset.chatState = "empty";
+}
 
 function showToast(message) {
   ui.toast.textContent = message;
@@ -33,11 +46,11 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[character]));
 }
 
-function markdown(text) {
+function markdown(source) {
   const blocks = [];
-  let safe = escapeHtml(text).replace(/```([^\n]*)\n([\s\S]*?)```/g, (_, language, code) => {
+  let safe = escapeHtml(source).replace(/```([^\n]*)\n([\s\S]*?)```/g, (_, language, code) => {
     const index = blocks.length;
-    blocks.push(`<pre><button class="copy-code">Copy</button><code data-language="${language.trim()}">${code}</code></pre>`);
+    blocks.push(`<pre><button class="copy-code" data-text="copy">${escapeHtml(text("copy"))}</button><code data-language="${language.trim()}">${code}</code></pre>`);
     return `@@BLOCK${index}@@`;
   });
   safe = safe
@@ -68,25 +81,26 @@ function attachCopyButtons(container) {
   container.querySelectorAll(".copy-code").forEach((button) => {
     button.onclick = async () => {
       await navigator.clipboard.writeText(button.nextElementSibling.textContent);
-      button.textContent = "Copied";
-      setTimeout(() => button.textContent = "Copy", 1000);
+      button.dataset.text = "copied"; button.textContent = text("copied");
+      setTimeout(() => { button.dataset.text = "copy"; button.textContent = text("copy"); }, 1000);
     };
   });
 }
 
 function messageElement(role, content = "", metrics = null, status = "complete", sourcePrompt = "") {
-  ui.welcome?.remove();
+  document.body.dataset.chatState = "active";
   const wrapper = document.createElement("article");
   wrapper.className = `message ${role}`;
   if (role === "user") {
     wrapper.innerHTML = `<div class="bubble"></div>`;
     wrapper.firstElementChild.textContent = content;
   } else {
-    wrapper.innerHTML = `<div class="assistant-head"><span class="assistant-icon">L</span><span>Local model</span></div><div class="thinking-slot"></div><div class="content"></div><div class="metrics"></div><div class="message-actions"><button class="copy-response">Copy</button><button class="regenerate">${status === "error" || status === "interrupted" ? "Retry" : "Regenerate"}</button><button class="continue-response">Continue</button></div>`;
-    wrapper.querySelector(".copy-response").onclick = async () => { await navigator.clipboard.writeText(wrapper.dataset.raw || ""); showToast("Response copied"); };
+    wrapper.innerHTML = `<div class="assistant-head"><img class="assistant-icon" data-brand-logo alt=""><span data-text="assistantName"></span></div><div class="thinking-slot"></div><div class="content"></div><div class="metrics"></div><div class="message-actions"><button class="copy-response"><span data-icon="copy"></span><span data-text="copy"></span></button><button class="regenerate"><span data-icon="regenerate"></span><span data-text="regenerate"></span></button><button class="continue-response"><span data-icon="continue"></span><span data-text="continue"></span></button></div>`;
+    wrapper.querySelector(".copy-response").onclick = async () => { await navigator.clipboard.writeText(wrapper.dataset.raw || ""); showToast(text("copiedResponse")); };
     wrapper.querySelector(".regenerate").onclick = () => send(sourcePrompt || lastUserMessage);
     wrapper.querySelector(".continue-response").onclick = () => send("Continue.");
     updateAssistant(wrapper, content, metrics, status);
+    refreshThemeContent(wrapper);
   }
   ui.messages.appendChild(wrapper);
   scrollDown();
@@ -95,14 +109,16 @@ function messageElement(role, content = "", metrics = null, status = "complete",
 
 function updateAssistant(element, raw, metrics = null, status = "complete", liveSeconds = 0) {
   element.dataset.raw = raw;
+  element.dataset.status = status;
   const parts = splitThinking(raw);
   const thinkingSlot = element.querySelector(".thinking-slot");
   const duration = metrics?.total_seconds ?? liveSeconds;
-  const summary = status === "streaming" ? `Working for ${workedFor(duration)}` : `Worked for ${workedFor(duration)}`;
-  const reasoning = parts.thinking.trim() || (status === "streaming"
-    ? "Waiting for the model's reasoning…"
-    : "This model did not return a separate thinking trace.");
-  thinkingSlot.innerHTML = `<details class="thinking-box"${status === "streaming" && parts.thinking ? " open" : ""}><summary>${escapeHtml(summary)}</summary><div class="thinking-content">${markdown(reasoning)}</div></details>`;
+  element.dataset.duration = workedFor(duration);
+  const summary = text(status === "streaming" ? "working" : "worked", { duration: element.dataset.duration });
+  const reasoningKey = status === "streaming" ? "waitingReasoning" : "noReasoning";
+  const previous = thinkingSlot.querySelector("details");
+  const expanded = previous ? previous.open : status === "streaming" && Boolean(parts.thinking);
+  thinkingSlot.innerHTML = `<details class="thinking-box"${expanded ? " open" : ""}><summary>${escapeHtml(summary)}</summary><div class="thinking-content">${parts.thinking.trim() ? markdown(parts.thinking.trim()) : `<p data-text="${reasoningKey}">${escapeHtml(text(reasoningKey))}</p>`}</div></details>`;
   const content = element.querySelector(".content");
   if (status === "streaming") content.textContent = parts.answer;
   else {
@@ -119,6 +135,9 @@ function updateAssistant(element, raw, metrics = null, status = "complete", live
     metricsBox.innerHTML = values.map((value) => `<span>${escapeHtml(value)}</span>`).join("");
   }
   element.querySelector(".message-actions")?.classList.toggle("hidden", status === "streaming");
+  const retryLabel = element.querySelector(".regenerate [data-text]");
+  retryLabel.dataset.text = status === "error" || status === "interrupted" ? "retry" : "regenerate";
+  retryLabel.textContent = text(retryLabel.dataset.text);
 }
 
 function scrollDown() {
@@ -142,17 +161,44 @@ function contextNotice(message) {
 }
 
 function setStatus(status, detail = "") {
-  const labels = { not_loaded: "Not loaded", loading: "Loading model", ready: "Ready", generating: "Generating", stopped: "Stopped", error: "Error" };
-  ui.statusText.textContent = detail || labels[status] || status;
+  lastStatus = { status, detail };
+  const label = typeof detail === "object" ? text(detail.key, detail.values) : detail || text(status);
+  ui.statusText.textContent = label;
   ui.statusDot.className = `status-dot ${status === "ready" ? "ready" : status === "loading" || status === "generating" ? "busy" : status === "error" ? "error" : ""}`;
-  ui.composerStatus.textContent = detail || labels[status] || status;
+  ui.composerStatus.textContent = label;
   ui.sendButton.disabled = status !== "ready" || generating;
 }
 
 function openSettings(open = true) {
+  if (open && ui.settingsPanel.hidden) settingsReturnFocus = document.activeElement;
+  if (open && mobile.matches) setSidebar(false);
+  ui.settingsPanel.hidden = !open;
   ui.settingsPanel.classList.toggle("open", open);
-  ui.overlay.classList.toggle("open", open);
+  ui.overlay.classList.toggle("open", open || (mobile.matches && ui.sidebar.classList.contains("open")));
   ui.settingsPanel.setAttribute("aria-hidden", String(!open));
+  document.querySelector(".main").inert = open;
+  ui.sidebar.inert = open || (mobile.matches ? !ui.sidebar.classList.contains("open") : !sidebarExpanded);
+  if (open) ui.closeSettings.focus();
+  else if (settingsReturnFocus?.isConnected) { settingsReturnFocus.focus({ preventScroll: true }); settingsReturnFocus = null; }
+}
+
+function setSidebar(open) {
+  const hadSidebarFocus = ui.sidebar.contains(document.activeElement);
+  if (mobile.matches) {
+    ui.sidebar.classList.toggle("open", open);
+    ui.overlay.classList.toggle("open", open || !ui.settingsPanel.hidden);
+    document.querySelector(".main").inert = open || !ui.settingsPanel.hidden;
+  } else {
+    sidebarExpanded = open;
+    document.body.classList.toggle("sidebar-collapsed", !open);
+    ui.sidebar.classList.remove("open");
+    ui.overlay.classList.toggle("open", !ui.settingsPanel.hidden);
+    document.querySelector(".main").inert = !ui.settingsPanel.hidden;
+  }
+  ui.sidebar.inert = !open || !ui.settingsPanel.hidden;
+  ui.menuButton.setAttribute("aria-expanded", String(open));
+  if (mobile.matches && open) ui.sidebarClose.focus();
+  else if (hadSidebarFocus) ui.menuButton.focus();
 }
 
 function generationValues() {
@@ -177,9 +223,9 @@ function applySettings(settings) {
 }
 
 function updateLabels() {
-  ui.temperatureLabel.textContent = `Temperature ${Number(ui.temperature.value).toFixed(2)}`;
+  ui.temperatureLabel.textContent = text("temperature", { value: Number(ui.temperature.value).toFixed(2) });
   const prompt = ui.systemPrompt.value.trim();
-  $("systemSummary").textContent = prompt ? `System: ${prompt}` : "No system prompt";
+  $("systemSummary").textContent = prompt ? text("system", { prompt }) : text("noSystem");
   $("systemSummary").classList.toggle("active", Boolean(prompt));
 }
 
@@ -190,7 +236,7 @@ async function loadInitial() {
     ]);
     const modelOptions = models.length
       ? models.map((model) => `<option value="${escapeHtml(model.path)}">${escapeHtml(model.name)} · ${(model.size / 1073741824).toFixed(2)} GB</option>`).join("")
-      : '<option value="">No models detected</option>';
+      : `<option value="">${escapeHtml(text("noModels"))}</option>`;
     ui.modelSelect.innerHTML = modelOptions;
     ui.quickModelSelect.innerHTML = modelOptions;
     if (settings.model_path && models.some((model) => model.path === settings.model_path)) ui.modelSelect.value = settings.model_path;
@@ -211,12 +257,13 @@ async function loadInitial() {
 }
 
 function updateModelStatus(status, settings = {}) {
+  loadedModelPath = status.model_path || "";
   setStatus(status.status, status.error || "");
   if (status.model_path) {
     ui.activeModel.textContent = status.model_path.split(/[\\/]/).pop();
     const size = ui.quickModelSelect.selectedOptions[0]?.textContent.split(" · ")[1] || "custom path";
     ui.modelMeta.textContent = `${size} · ${settings.context_size || ui.contextSize.value} context · ${ui.gpuLayers.value} GPU layers`;
-    ui.quickLoadModel.textContent = runtimeModelMatchesSelection() ? "Loaded" : "Load";
+    ui.quickLoadModel.textContent = text(runtimeModelMatchesSelection() ? "loaded" : "load");
   }
 }
 
@@ -233,23 +280,23 @@ function renderChatList() {
   chats.forEach((chat) => {
     const date = new Date(chat.updated_at);
     const today = new Date();
-    const group = date.toDateString() === today.toDateString() ? "Today" : "Earlier";
+    const group = date.toDateString() === today.toDateString() ? "today" : "earlier";
     if (group !== currentGroup) {
-      const heading = document.createElement("div"); heading.className = "chat-group"; heading.textContent = group;
+      const heading = document.createElement("div"); heading.className = "chat-group"; heading.dataset.text = group; heading.textContent = text(group);
       ui.chatList.appendChild(heading); currentGroup = group;
     }
     const row = document.createElement("div"); row.className = "chat-row";
-    row.innerHTML = `<button class="chat-item ${chat.id === activeChat ? "active" : ""}">${escapeHtml(chat.title)}</button><details class="chat-menu"><summary aria-label="Chat actions">•••</summary><div><button class="rename-chat">Rename</button><button class="delete-chat danger">Delete</button></div></details>`;
+    row.innerHTML = `<button class="chat-item ${chat.id === activeChat ? "active" : ""}">${escapeHtml(chat.title)}</button><details class="chat-menu"><summary data-title="chatActions" aria-label="${escapeHtml(text("chatActions"))}">•••</summary><div><button class="rename-chat" data-text="rename">${escapeHtml(text("rename"))}</button><button class="delete-chat danger" data-text="delete">${escapeHtml(text("delete"))}</button></div></details>`;
     row.querySelector(".chat-item").onclick = () => openChat(chat.id);
     row.querySelector(".rename-chat").onclick = async () => {
-      const title = prompt("Rename chat", chat.title);
+      const title = prompt(text("renameChat"), chat.title);
       if (title?.trim()) { await api(`/api/chats/${chat.id}`, { method: "PATCH", body: JSON.stringify({ title: title.trim() }) }); await refreshChats(); }
     };
     row.querySelector(".delete-chat").onclick = async (event) => {
       event.stopPropagation();
-      if (!confirm(`Delete “${chat.title}”?`)) return;
+      if (!confirm(text("deleteConfirm", { title: chat.title }))) return;
       await api(`/api/chats/${chat.id}`, { method: "DELETE" });
-      if (activeChat === chat.id) { activeChat = null; ui.messages.innerHTML = ""; await newChat(); }
+      if (activeChat === chat.id) { activeChat = null; resetMessages(); await newChat(); }
       else await refreshChats();
     };
     ui.chatList.appendChild(row);
@@ -261,15 +308,15 @@ async function newChat() {
   const chat = await api("/api/chats", { method: "POST", body: JSON.stringify({
     system_prompt: ui.systemPrompt.value, thinking: ui.thinking.checked, temperature: Number(ui.temperature.value)
   }) });
-  activeChat = chat.id; ui.messages.innerHTML = ""; lastUserMessage = ""; conversationChars = ui.systemPrompt.value.length;
+  activeChat = chat.id; resetMessages(); lastUserMessage = ""; conversationChars = ui.systemPrompt.value.length;
   updateContext();
-  await refreshChats(); ui.prompt.focus();
+  await refreshChats(); if (mobile.matches) setSidebar(false); ui.prompt.focus();
 }
 
 async function openChat(id) {
   if (generating) return;
   const chat = await api(`/api/chats/${id}`);
-  activeChat = id; ui.messages.innerHTML = ""; lastUserMessage = "";
+  activeChat = id; resetMessages(); lastUserMessage = "";
   applySettings({ ...defaults, ...chat.settings });
   conversationChars = ui.systemPrompt.value.length;
   let sourcePrompt = "";
@@ -282,16 +329,17 @@ async function openChat(id) {
   if (lastMetrics) updateContext(lastMetrics.context_used, lastMetrics.context_size, true);
   else updateContext();
   await refreshChats();
-  ui.sidebar.classList.remove("open"); ui.overlay.classList.remove("open");
+  if (mobile.matches) setSidebar(false);
 }
 
 async function loadModel() {
   const modelPath = ui.customModel.value.trim() || ui.modelSelect.value;
-  if (!modelPath) return setStatus("error", "Select a GGUF model");
+  if (!modelPath) return setStatus("error", text("selectGGUF"));
+  loadingModel = true;
   let seconds = 0;
-  setStatus("loading", "Loading model · 0s"); ui.loadModel.disabled = true; ui.quickModelSelect.disabled = true; ui.quickLoadModel.disabled = true;
-  ui.quickLoadModel.textContent = "Loading…";
-  const loadingTimer = setInterval(() => setStatus("loading", `Loading model · ${++seconds}s`), 1000);
+  setStatus("loading", { key: "loadingStatus", values: { seconds } }); ui.loadModel.disabled = true; ui.quickModelSelect.disabled = true; ui.quickLoadModel.disabled = true;
+  ui.quickLoadModel.textContent = text("loading");
+  const loadingTimer = setInterval(() => setStatus("loading", { key: "loadingStatus", values: { seconds: ++seconds } }), 1000);
   try {
     const loadValues = { model_path: modelPath, context_size: Number(ui.contextSize.value), gpu_layers: Number(ui.gpuLayers.value), threads: Number(ui.threads.value) };
     await api("/api/model/load", { method: "POST", body: JSON.stringify(loadValues) });
@@ -299,17 +347,18 @@ async function loadModel() {
     if ([...ui.quickModelSelect.options].some((option) => option.value === modelPath)) ui.quickModelSelect.value = modelPath;
     updateModelStatus(await api("/api/status"), loadValues); openSettings(false);
     const label = [...ui.quickModelSelect.options].find((option) => option.value === modelPath)?.textContent || modelPath.split(/[\\/]/).pop();
-    showToast(`${label} is ready`);
+    showToast(text("modelReady", { model: label }));
   } catch (error) { setStatus("error", error.message); }
   finally {
     clearInterval(loadingTimer);
+    loadingModel = false;
     ui.loadModel.disabled = false; ui.quickModelSelect.disabled = false; ui.quickLoadModel.disabled = false;
-    ui.quickLoadModel.textContent = runtimeModelMatchesSelection() ? "Loaded" : "Load";
+    ui.quickLoadModel.textContent = text(runtimeModelMatchesSelection() ? "loaded" : "load");
   }
 }
 
 function runtimeModelMatchesSelection() {
-  return ui.activeModel.textContent === ui.quickModelSelect.selectedOptions[0]?.textContent.split(" · ")[0];
+  return Boolean(loadedModelPath) && loadedModelPath === ui.quickModelSelect.value;
 }
 
 async function send(message = ui.prompt.value.trim()) {
@@ -323,10 +372,10 @@ async function send(message = ui.prompt.value.trim()) {
   const assistant = messageElement("assistant", "", null, "streaming", message);
   generating = true; ui.quickModelSelect.disabled = true; ui.quickLoadModel.disabled = true; ui.sendButton.classList.add("hidden"); ui.stopButton.classList.remove("hidden");
   let elapsedSeconds = 0;
-  setStatus("generating", "Preparing prompt…");
+  setStatus("generating", { key: "preparing" });
   generationTimer = setInterval(() => {
     elapsedSeconds += 1;
-    setStatus("generating", `Generating · ${elapsedSeconds}s`);
+    setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
     updateAssistant(assistant, raw, null, "streaming", elapsedSeconds);
   }, 1000);
   let raw = "";
@@ -343,7 +392,7 @@ async function send(message = ui.prompt.value.trim()) {
       for (const line of lines) {
         if (!line.trim()) continue;
         const item = JSON.parse(line);
-        if (item.type === "start") setStatus("generating", `Generating · ${elapsedSeconds}s`);
+        if (item.type === "start") setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
         else if (item.type === "context_trimmed") contextNotice(item.message);
         else if (item.type === "token") { raw += item.text; updateAssistant(assistant, raw, null, "streaming", elapsedSeconds); scrollDown(); }
         else if (item.type === "done" || item.type === "stopped") {
@@ -364,12 +413,14 @@ async function send(message = ui.prompt.value.trim()) {
   }
 }
 
-async function stop() { if (generating) { ui.stopButton.disabled = true; clearInterval(generationTimer); setStatus("generating", "Stopping…"); await api("/api/generation/stop", { method: "POST" }); ui.stopButton.disabled = false; } }
+async function stop() { if (generating) { ui.stopButton.disabled = true; clearInterval(generationTimer); setStatus("generating", { key: "stopping" }); await api("/api/generation/stop", { method: "POST" }); ui.stopButton.disabled = false; } }
 function resizePrompt() { ui.prompt.style.height = "auto"; ui.prompt.style.height = `${Math.min(ui.prompt.scrollHeight, 180)}px`; }
 
-ui.settingsButton.onclick = () => openSettings(true); ui.closeSettings.onclick = () => openSettings(false); ui.overlay.onclick = () => { openSettings(false); ui.sidebar.classList.remove("open"); };
+ui.settingsButton.onclick = () => openSettings(true); ui.closeSettings.onclick = () => openSettings(false); ui.overlay.onclick = () => { openSettings(false); if (mobile.matches) setSidebar(false); };
 ui.systemSummary.onclick = () => { openSettings(true); setTimeout(() => ui.systemPrompt.focus(), 220); };
-ui.menuButton.onclick = () => { ui.sidebar.classList.toggle("open"); ui.overlay.classList.toggle("open", ui.sidebar.classList.contains("open")); };
+ui.menuButton.onclick = () => setSidebar(mobile.matches ? !ui.sidebar.classList.contains("open") : !sidebarExpanded);
+ui.sidebarClose.onclick = () => setSidebar(false);
+mobile.addEventListener("change", () => setSidebar(mobile.matches ? false : sidebarExpanded));
 ui.newChat.onclick = newChat; ui.loadModel.onclick = loadModel; ui.sendButton.onclick = () => send(); ui.stopButton.onclick = stop;
 ui.prompt.oninput = resizePrompt; ui.prompt.onkeydown = (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); } };
 ui.temperature.oninput = () => { ui.temperatureNumber.value = ui.temperature.value; updateLabels(); };
@@ -386,6 +437,27 @@ ui.quickModelSelect.onchange = async () => {
   ui.customModel.value = "";
   await loadModel();
 };
-document.addEventListener("keydown", (event) => { if (event.key === "Escape") openSettings(false); if (event.ctrlKey && event.key.toLowerCase() === "c" && generating) stop(); });
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") { if (!ui.settingsPanel.hidden) openSettings(false); else if (mobile.matches) setSidebar(false); }
+  if (event.ctrlKey && event.key.toLowerCase() === "c" && generating) stop();
+  const panel = !ui.settingsPanel.hidden ? ui.settingsPanel : mobile.matches && ui.sidebar.classList.contains("open") ? ui.sidebar : null;
+  if (event.key === "Tab" && panel) {
+    const controls = [...panel.querySelectorAll('button, input, select, textarea, summary')].filter(node => !node.disabled && node.getClientRects().length);
+    const target = event.shiftKey ? controls.at(-1) : controls[0];
+    if (document.activeElement === (event.shiftKey ? controls[0] : controls.at(-1))) { event.preventDefault(); target?.focus(); }
+  }
+});
 
-loadInitial();
+document.addEventListener("themechange", () => {
+  updateLabels(); setStatus(lastStatus.status, lastStatus.detail);
+  ui.quickLoadModel.textContent = text(loadingModel ? "loading" : runtimeModelMatchesSelection() ? "loaded" : "load");
+  if (!loadedModelPath) { ui.activeModel.textContent = text("noModel"); ui.modelMeta.textContent = text("selectModel"); }
+  ui.messages.querySelectorAll(".assistant").forEach(node => {
+    node.querySelector(".thinking-box summary").textContent = text(node.dataset.status === "streaming" ? "working" : "worked", { duration: node.dataset.duration });
+  });
+  resizePrompt();
+});
+
+await initThemes();
+setSidebar(!mobile.matches);
+await loadInitial();
