@@ -2,6 +2,10 @@
 
 Choose a family and light/dark appearance in **Settings → Appearance**. The browser remembers them under `playground.appearance.v1`. Appearance never changes inference settings or saved conversations.
 
+The composer uses grouped controls in both empty and active chats. **Options** opens system instructions, temperature, and advanced sampling; the compact **Thinking On/Off** switch stays visible beside it. Thinking works with keyboard or touch, stays synchronized with Settings and reopened chats, and applies to the next response. The model control shows a readable name and ready indicator; its menu retains the full model path and a link to loading settings. The context percentage opens exact or estimated token usage, with warnings as it fills.
+
+Options temporarily moves the existing Settings sections into a native popover and restores them when it closes. Inputs, values, and handlers are reused. Popovers close with Escape or an outside click; opening Settings closes them and restores all sections before focusing the dialog. Shared controls use each theme's colors and dimensions. Override `options`, `responseOptions`, `thinkingShort`, `thinkingMode`, `thinkingOn`, `thinkingOff`, `thinkingHelp`, and the context wording in a theme's `text` map.
+
 The implementation uses the existing HTML/chat controller, a small `frontend/theme.js`, and three independent JSON/CSS pairs. No frontend build step is required.
 
 ## Where to edit
@@ -109,13 +113,13 @@ Each configuration specifies three explicit placement choices:
 }
 ```
 
-- `modelPicker`: `header` or `composer`. The existing selector and Load button are moved together; their handlers and values remain intact.
+- `modelPicker`: `header` or `composer`. All bundled themes use `composer`. The model menu button and conditional Load button move together; their handlers and values remain intact.
 - `emptyComposer`: `center` or `bottom`. Active conversations always keep their input at the bottom.
 - `settings`: `dialog` or `drawer`. Both use the same settings controls, focus management, and values.
 
 For a new component arrangement, edit scoped CSS under `:root[data-theme="claude"]` (or the relevant ID). Do not duplicate the composer or replace message nodes to change appearance. The three layouts deliberately share behavior but retain their own structural rules.
 
-Action icons use the local `assets/icons.svg` sprite. Override any of `panel`, `newChat`, `settings`, `send`, `stop`, `close`, `copy`, `regenerate`, and `continue` in `icons`. Values may be `panel`, `edit`, `plus`, `settings`, `arrow-up`, `arrow-right`, `stop`, `close`, `copy`, `retry`, or `send`, or a local SVG asset path:
+Action icons use the local `assets/icons.svg` sprite. Override any of `panel`, `newChat`, `settings`, `send`, `stop`, `close`, `copy`, `regenerate`, `continue`, `thinking`, `options`, and `chevronDown` in `icons`. Values may be `panel`, `edit`, `plus`, `settings`, `arrow-up`, `arrow-right`, `stop`, `close`, `copy`, `retry`, `send`, `brain`, `sliders`, or `chevron-down`, or a local SVG asset path:
 
 ```json
 "icons": { "newChat": "plus", "send": "send" }

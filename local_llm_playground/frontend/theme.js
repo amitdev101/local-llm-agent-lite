@@ -32,11 +32,18 @@ const defaults = {
   context: "Context", gpuLayers: "GPU layers", threads: "Threads", conversation: "Conversation", systemPrompt: "System prompt",
   noPrompt: "No prompt", helpfulAssistant: "Helpful assistant", codingAssistant: "Coding assistant", custom: "Custom",
   responseGeneration: "Response generation", nextResponse: "Next response", thinkingMode: "Thinking mode", compatibleModels: "Qwen-compatible models",
+  thinkingOn: "On", thinkingOff: "Off", thinkingHelp: "Applies to the next response on compatible models.",
+  thinkingShort: "Thinking", options: "Options", optionsCustom: "· Custom", responseOptions: "Response options", modelSettings: "Model loading settings",
+  optionsHelp: "System instructions, temperature, and advanced sampling for the next response.",
+  modelPickerDescription: "Model: {model}, {state}",
+  contextUsage: "Context usage", contextSummary: "Context {percent}%", contextNearLimit: "Near limit · {percent}%",
+  contextExact: "{used} / {limit} tokens · {percent}%", contextApproximate: "Approx. {used} / {limit} tokens · {percent}%",
+  contextWarning: "Older turns may be trimmed as the context fills up.",
   temperatureTitle: "Temperature", advancedGeneration: "Advanced generation", repeatPenalty: "Repeat penalty", seed: "Seed", resetDefaults: "Reset generation defaults",
   messageLabel: "Message", systemPreset: "System prompt preset", systemPlaceholder: "Optional—empty means no system prompt", customModelPlaceholder: "D:\\path\\to\\model.gguf"
 };
-const defaultIcons = { panel: "panel", newChat: "edit", settings: "settings", send: "arrow-up", stop: "stop", close: "close", copy: "copy", regenerate: "retry", continue: "arrow-right" };
-const iconIds = new Set(["panel", "edit", "plus", "settings", "arrow-up", "arrow-right", "stop", "close", "copy", "retry", "send"]);
+const defaultIcons = { panel: "panel", newChat: "edit", settings: "settings", send: "arrow-up", stop: "stop", close: "close", copy: "copy", regenerate: "retry", continue: "arrow-right", thinking: "brain", options: "sliders", chevronDown: "chevron-down" };
+const iconIds = new Set(["panel", "edit", "plus", "settings", "arrow-up", "arrow-right", "stop", "close", "copy", "retry", "send", "brain", "sliders", "chevron-down"]);
 const colorVars = ["--bg", "--panel", "--panel-2", "--panel-3", "--text", "--muted", "--line", "--accent", "--on-accent", "--danger", "--warning", "--success", "--code-bg", "--overlay", "--focus"];
 const dimensionVars = ["--sidebar-width", "--chat-max-width", "--composer-radius", "--button-radius", "--send-radius", "--control-height", "--text-size", "--line-height", "--shadow", "--font-sans", "--font-conversation", "--font-mono"];
 const localAsset = (value) => typeof value === "string" && /^\/assets\/themes\/assets\/[\w./-]+\.svg$/.test(value) && !value.includes("..");
@@ -129,7 +136,7 @@ export function applyTheme(id, colorMode = mode) {
   root.dataset.emptyComposer = config.layout.emptyComposer; root.dataset.settings = config.layout.settings;
   document.title = config.branding.documentTitle || config.branding.appName;
   const picker = document.getElementById("modelPicker");
-  const parent = document.getElementById(config.layout.modelPicker === "header" ? "headerModelSlot" : "composerToolbar");
+  const parent = document.getElementById(config.layout.modelPicker === "header" ? "headerModelSlot" : "composerModelSlot");
   if (picker.parentElement !== parent) parent.prepend(picker);
   document.getElementById("themeSelect").value = id;
   document.getElementById("colorModeSelect").value = mode;

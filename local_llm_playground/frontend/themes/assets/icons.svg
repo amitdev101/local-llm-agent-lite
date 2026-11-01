@@ -10,4 +10,7 @@
   <symbol id="copy" viewBox="0 0 24 24"><rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3"/></symbol>
   <symbol id="retry" viewBox="0 0 24 24"><path d="M20 7v5h-5M4 17v-5h5M5.2 8a7.5 7.5 0 0 1 12.3-3L20 8M4 16l2.5 3A7.5 7.5 0 0 0 19 16"/></symbol>
   <symbol id="send" viewBox="0 0 24 24"><path d="m3 3 19 9-19 9 3-9zM6 12h16"/></symbol>
+  <symbol id="brain" viewBox="0 0 24 24"><path d="M12 5a3 3 0 0 0-5-2 3 3 0 0 0-3 5 4 4 0 0 0 0 7 3 3 0 0 0 3 5 3 3 0 0 0 5-2zm0 0a3 3 0 0 1 5-2 3 3 0 0 1 3 5 4 4 0 0 1 0 7 3 3 0 0 1-3 5 3 3 0 0 1-5-2M7 8c3 0 3 4 0 4m10-4c-3 0-3 4 0 4M6 16h2m8 0h2"/></symbol>
+  <symbol id="sliders" viewBox="0 0 24 24"><path d="M3 6h4m4 0h10M3 12h10m4 0h4M3 18h4m4 0h10"/><circle cx="9" cy="6" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="9" cy="18" r="2"/></symbol>
+  <symbol id="chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
 </svg>

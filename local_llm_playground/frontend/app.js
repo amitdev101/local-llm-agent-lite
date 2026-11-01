@@ -2,7 +2,7 @@ import { initThemes, text, refreshThemeContent } from "./theme.js";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
-  "sidebar sidebarClose chatList chatSearch newChat statusDot statusText activeModel modelMeta messages welcome prompt sendButton stopButton composerStatus temperatureLabel contextBar contextLabel settingsButton settingsPanel closeSettings overlay toast menuButton modelSelect quickModelSelect quickLoadModel customModel contextSize gpuLayers threads loadModel systemPrompt systemSummary systemPreset thinking temperature temperatureNumber topP topK minP repeatPenalty seed resetSettings"
+  "sidebar sidebarClose chatList chatSearch newChat statusDot statusText activeModel modelMeta messages welcome prompt sendButton stopButton composerStatus contextBar contextLabel settingsButton settingsPanel closeSettings overlay toast menuButton modelSelect quickModelSelect quickLoadModel customModel contextSize gpuLayers threads loadModel systemPrompt systemSummary systemPreset thinking quickThinking thinkingState temperature temperatureNumber topP topK minP repeatPenalty seed resetSettings optionsButton optionsPopover composerSettingsSlot modelPickerButton modelPopover modelPickerLabel modelReady selectedModelPath modelSettingsButton contextButton contextPopover contextSummary contextWarning"
     .split(" ").map((id) => [id, $(id)])
 );
 
@@ -19,6 +19,81 @@ let lastStatus = { status: "not_loaded", detail: "" };
 let settingsReturnFocus = null;
 let sidebarExpanded = true;
 const mobile = matchMedia("(max-width: 720px)");
+let lastContext = null;
+const composerPopovers = [[ui.optionsPopover, ui.optionsButton], [ui.modelPopover, ui.modelPickerButton], [ui.contextPopover, ui.contextButton]];
+
+function closeComposerPopovers() {
+  for (const [popover] of composerPopovers) if (popover.matches(":popover-open")) popover.hidePopover();
+}
+
+function positionComposerPopovers() {
+  const viewport = window.visualViewport;
+  const width = viewport?.width || window.innerWidth;
+  const height = viewport?.height || window.innerHeight;
+  const offsetTop = viewport?.offsetTop || 0;
+  const offsetLeft = viewport?.offsetLeft || 0;
+  for (const [popover, button] of composerPopovers) {
+    if (!popover.matches(":popover-open")) continue;
+    popover.style.setProperty("--popover-max-height", `${Math.max(80, height - 32)}px`);
+    const anchor = button.getBoundingClientRect();
+    const bounds = popover.getBoundingClientRect();
+    const left = Math.max(offsetLeft + 16, Math.min(anchor.left, offsetLeft + width - bounds.width - 16));
+    const preferredTop = anchor.top - bounds.height - 10;
+    const top = preferredTop >= offsetTop + 16 ? preferredTop : Math.max(offsetTop + 16, Math.min(anchor.bottom + 10, offsetTop + height - bounds.height - 16));
+    popover.style.left = `${left}px`; popover.style.top = `${top}px`;
+  }
+}
+
+function initComposerPopovers() {
+  // Reuse the live Settings sections; comments mark their original positions.
+  const groups = ["conversationOptions", "generationOptions", "advancedOptions"].map(id => {
+    const section = $(id);
+    const home = document.createComment(id);
+    section.before(home);
+    return { section, home };
+  });
+  for (const [popover, button] of composerPopovers) {
+    popover.addEventListener("beforetoggle", event => {
+      if (popover !== ui.optionsPopover) return;
+      if (event.newState === "open") {
+        for (const { section } of groups) ui.composerSettingsSlot.append(section);
+      } else {
+        const restoreFocus = popover.contains(document.activeElement);
+        for (const { section, home } of groups) home.after(section);
+        if (restoreFocus) queueMicrotask(() => { if (ui.settingsPanel.hidden && !popover.matches(":popover-open")) button.focus({ preventScroll: true }); });
+      }
+    });
+    popover.addEventListener("toggle", event => {
+      const open = event.newState === "open";
+      button.setAttribute("aria-expanded", String(open));
+      if (open) positionComposerPopovers();
+    });
+  }
+  const observer = new ResizeObserver(positionComposerPopovers);
+  composerPopovers.forEach(([popover]) => observer.observe(popover));
+  window.addEventListener("resize", positionComposerPopovers);
+  window.visualViewport?.addEventListener("resize", positionComposerPopovers);
+  window.visualViewport?.addEventListener("scroll", positionComposerPopovers);
+}
+
+function readableModelName(path) {
+  return path.split(/[\\/]/).pop().replace(/\.gguf$/i, "")
+    .replace(/[-_.](?:Q\d[\w.-]*|IQ\d[\w.-]*|BF16|FP16|F16)$/i, "")
+    .replace(/-(\d+(?:\.\d+)?B)(?=-|$)/ig, " · $1");
+}
+
+function updateModelPicker() {
+  const path = ui.customModel.value.trim() || ui.quickModelSelect.value;
+  const matched = runtimeModelMatchesSelection();
+  ui.modelPickerLabel.textContent = path ? readableModelName(path) : text("selectModel");
+  ui.modelPickerButton.setAttribute("aria-label", text("modelPickerDescription", { model: ui.modelPickerLabel.textContent, state: text(loadingModel ? "loading" : matched ? "loaded" : "not_loaded") }));
+  ui.modelPickerButton.title = path || text("selectModel");
+  ui.selectedModelPath.textContent = path;
+  ui.modelReady.hidden = !matched || loadingModel;
+  ui.modelPickerButton.disabled = loadingModel || generating;
+  ui.quickLoadModel.hidden = matched && !loadingModel;
+  ui.quickLoadModel.textContent = text(loadingModel ? "loading" : "load");
+}
 
 function resetMessages() {
   ui.messages.replaceChildren(ui.welcome);
@@ -146,10 +221,15 @@ function scrollDown() {
 }
 
 function updateContext(used = Math.ceil(conversationChars / 4), limit = Number(ui.contextSize.value) || 4096, exact = false) {
+  lastContext = { used, limit, exact };
   const percent = Math.min(100, Math.round((used / limit) * 100));
   ui.contextBar.style.width = `${percent}%`;
   ui.contextBar.className = percent >= 90 ? "danger" : percent >= 75 ? "warning" : "";
-  ui.contextLabel.textContent = `${percent >= 90 ? "Near limit · " : ""}${exact ? "Context" : "Approx. context"} ${used.toLocaleString()}/${limit.toLocaleString()} · ${percent}%`;
+  ui.contextLabel.textContent = text(exact ? "contextExact" : "contextApproximate", { used: used.toLocaleString(), limit: limit.toLocaleString(), percent });
+  ui.contextSummary.textContent = text(percent >= 90 ? "contextNearLimit" : "contextSummary", { percent });
+  ui.contextButton.classList.toggle("warning", percent >= 75 && percent < 90);
+  ui.contextButton.classList.toggle("danger", percent >= 90);
+  ui.contextWarning.hidden = percent < 75;
 }
 
 function contextNotice(message) {
@@ -166,11 +246,14 @@ function setStatus(status, detail = "") {
   ui.statusText.textContent = label;
   ui.statusDot.className = `status-dot ${status === "ready" ? "ready" : status === "loading" || status === "generating" ? "busy" : status === "error" ? "error" : ""}`;
   ui.composerStatus.textContent = label;
+  ui.composerStatus.dataset.status = status;
   ui.sendButton.disabled = status !== "ready" || generating;
+  updateModelPicker();
 }
 
 function openSettings(open = true) {
-  if (open && ui.settingsPanel.hidden) settingsReturnFocus = document.activeElement;
+  if (open && ui.settingsPanel.hidden) settingsReturnFocus = composerPopovers.find(([popover]) => popover.contains(document.activeElement))?.[1] || document.activeElement;
+  if (open) closeComposerPopovers();
   if (open && mobile.matches) setSidebar(false);
   ui.settingsPanel.hidden = !open;
   ui.settingsPanel.classList.toggle("open", open);
@@ -183,6 +266,7 @@ function openSettings(open = true) {
 }
 
 function setSidebar(open) {
+  if (open) closeComposerPopovers();
   const hadSidebarFocus = ui.sidebar.contains(document.activeElement);
   if (mobile.matches) {
     ui.sidebar.classList.toggle("open", open);
@@ -223,10 +307,14 @@ function applySettings(settings) {
 }
 
 function updateLabels() {
-  ui.temperatureLabel.textContent = text("temperature", { value: Number(ui.temperature.value).toFixed(2) });
+  // Settings remains the single value read by generationValues() and newChat().
+  ui.quickThinking.checked = ui.thinking.checked;
+  ui.thinkingState.textContent = text(ui.thinking.checked ? "thinkingOn" : "thinkingOff");
+  ui.quickThinking.title = text("thinkingHelp");
   const prompt = ui.systemPrompt.value.trim();
-  $("systemSummary").textContent = prompt ? text("system", { prompt }) : text("noSystem");
-  $("systemSummary").classList.toggle("active", Boolean(prompt));
+  ui.systemSummary.textContent = text("optionsCustom");
+  ui.systemSummary.hidden = !prompt;
+  ui.optionsButton.title = text("optionsHelp");
 }
 
 async function loadInitial() {
@@ -244,6 +332,7 @@ async function loadInitial() {
     ui.quickModelSelect.value = ui.modelSelect.value;
     ui.contextSize.value = settings.context_size; ui.gpuLayers.value = settings.gpu_layers; ui.threads.value = settings.threads;
     applySettings(settings);
+    updateContext();
     updateModelStatus(status, settings);
     allChats = chats;
     renderChatList();
@@ -263,7 +352,6 @@ function updateModelStatus(status, settings = {}) {
     ui.activeModel.textContent = status.model_path.split(/[\\/]/).pop();
     const size = ui.quickModelSelect.selectedOptions[0]?.textContent.split(" · ")[1] || "custom path";
     ui.modelMeta.textContent = `${size} · ${settings.context_size || ui.contextSize.value} context · ${ui.gpuLayers.value} GPU layers`;
-    ui.quickLoadModel.textContent = text(runtimeModelMatchesSelection() ? "loaded" : "load");
   }
 }
 
@@ -305,6 +393,7 @@ function renderChatList() {
 
 async function newChat() {
   if (generating) return;
+  closeComposerPopovers();
   const chat = await api("/api/chats", { method: "POST", body: JSON.stringify({
     system_prompt: ui.systemPrompt.value, thinking: ui.thinking.checked, temperature: Number(ui.temperature.value)
   }) });
@@ -315,6 +404,7 @@ async function newChat() {
 
 async function openChat(id) {
   if (generating) return;
+  closeComposerPopovers();
   const chat = await api(`/api/chats/${id}`);
   activeChat = id; resetMessages(); lastUserMessage = "";
   applySettings({ ...defaults, ...chat.settings });
@@ -346,6 +436,7 @@ async function loadModel() {
     await api("/api/settings", { method: "PATCH", body: JSON.stringify({ ...loadValues, ...generationValues() }) });
     if ([...ui.quickModelSelect.options].some((option) => option.value === modelPath)) ui.quickModelSelect.value = modelPath;
     updateModelStatus(await api("/api/status"), loadValues); openSettings(false);
+    if (ui.customModel.value.trim()) ui.customModel.value = loadedModelPath;
     const label = [...ui.quickModelSelect.options].find((option) => option.value === modelPath)?.textContent || modelPath.split(/[\\/]/).pop();
     showToast(text("modelReady", { model: label }));
   } catch (error) { setStatus("error", error.message); }
@@ -353,16 +444,17 @@ async function loadModel() {
     clearInterval(loadingTimer);
     loadingModel = false;
     ui.loadModel.disabled = false; ui.quickModelSelect.disabled = false; ui.quickLoadModel.disabled = false;
-    ui.quickLoadModel.textContent = text(runtimeModelMatchesSelection() ? "loaded" : "load");
+    updateModelPicker();
   }
 }
 
 function runtimeModelMatchesSelection() {
-  return Boolean(loadedModelPath) && loadedModelPath === ui.quickModelSelect.value;
+  return Boolean(loadedModelPath) && loadedModelPath === (ui.customModel.value.trim() || ui.quickModelSelect.value);
 }
 
 async function send(message = ui.prompt.value.trim()) {
   if (!message || generating) return;
+  closeComposerPopovers();
   const status = await api("/api/status");
   if (!["ready", "stopped"].includes(status.status)) return openSettings(true);
   if (!activeChat) await newChat();
@@ -417,7 +509,7 @@ async function stop() { if (generating) { ui.stopButton.disabled = true; clearIn
 function resizePrompt() { ui.prompt.style.height = "auto"; ui.prompt.style.height = `${Math.min(ui.prompt.scrollHeight, 180)}px`; }
 
 ui.settingsButton.onclick = () => openSettings(true); ui.closeSettings.onclick = () => openSettings(false); ui.overlay.onclick = () => { openSettings(false); if (mobile.matches) setSidebar(false); };
-ui.systemSummary.onclick = () => { openSettings(true); setTimeout(() => ui.systemPrompt.focus(), 220); };
+ui.modelSettingsButton.onclick = () => { openSettings(true); ui.modelSelect.focus(); };
 ui.menuButton.onclick = () => setSidebar(mobile.matches ? !ui.sidebar.classList.contains("open") : !sidebarExpanded);
 ui.sidebarClose.onclick = () => setSidebar(false);
 mobile.addEventListener("change", () => setSidebar(mobile.matches ? false : sidebarExpanded));
@@ -425,16 +517,20 @@ ui.newChat.onclick = newChat; ui.loadModel.onclick = loadModel; ui.sendButton.on
 ui.prompt.oninput = resizePrompt; ui.prompt.onkeydown = (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); } };
 ui.temperature.oninput = () => { ui.temperatureNumber.value = ui.temperature.value; updateLabels(); };
 ui.temperatureNumber.oninput = () => { ui.temperature.value = Math.max(0, Math.min(2, Number(ui.temperatureNumber.value))); updateLabels(); };
+ui.thinking.onchange = updateLabels;
+ui.quickThinking.onchange = () => { ui.thinking.checked = ui.quickThinking.checked; updateLabels(); };
 ui.systemPrompt.oninput = () => { ui.systemPreset.value = "custom"; updateLabels(); };
 ui.systemPreset.onchange = () => { if (ui.systemPreset.value !== "custom") ui.systemPrompt.value = ui.systemPreset.value; updateLabels(); };
 ui.resetSettings.onclick = () => applySettings(defaults);
-ui.modelSelect.onchange = () => { ui.customModel.value = ""; ui.quickModelSelect.value = ui.modelSelect.value; };
+ui.modelSelect.onchange = () => { ui.customModel.value = ""; ui.quickModelSelect.value = ui.modelSelect.value; updateModelPicker(); };
+ui.customModel.oninput = updateModelPicker;
 ui.quickLoadModel.onclick = loadModel;
 ui.chatSearch.oninput = renderChatList;
 ui.quickModelSelect.onchange = async () => {
   if (generating || !ui.quickModelSelect.value) return;
   ui.modelSelect.value = ui.quickModelSelect.value;
   ui.customModel.value = "";
+  closeComposerPopovers();
   await loadModel();
 };
 document.addEventListener("keydown", (event) => {
@@ -449,8 +545,9 @@ document.addEventListener("keydown", (event) => {
 });
 
 document.addEventListener("themechange", () => {
+  closeComposerPopovers();
   updateLabels(); setStatus(lastStatus.status, lastStatus.detail);
-  ui.quickLoadModel.textContent = text(loadingModel ? "loading" : runtimeModelMatchesSelection() ? "loaded" : "load");
+  if (lastContext) updateContext(lastContext.used, lastContext.limit, lastContext.exact);
   if (!loadedModelPath) { ui.activeModel.textContent = text("noModel"); ui.modelMeta.textContent = text("selectModel"); }
   ui.messages.querySelectorAll(".assistant").forEach(node => {
     node.querySelector(".thinking-box summary").textContent = text(node.dataset.status === "streaming" ? "working" : "worked", { duration: node.dataset.duration });
@@ -458,6 +555,7 @@ document.addEventListener("themechange", () => {
   resizePrompt();
 });
 
+initComposerPopovers();
 await initThemes();
 setSidebar(!mobile.matches);
 await loadInitial();

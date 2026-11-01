@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Local LLM Playground</title>
   <link rel="icon" type="image/svg+xml" href="/assets/themes/assets/fallback.svg">
-  <link rel="stylesheet" href="/assets/styles.css?v=5">
+  <link rel="stylesheet" href="/assets/styles.css?v=7">
   <link rel="stylesheet" href="/assets/themes/chatgpt.css">
   <link rel="stylesheet" href="/assets/themes/claude.css">
   <link rel="stylesheet" href="/assets/themes/github-copilot.css">
@@ -44,19 +44,52 @@
 
       <section class="composer-wrap">
         <div class="composer-box">
-        <div class="composer-toolbar" id="composerToolbar">
-          <div id="modelPicker" class="model-picker"><label class="quick-model-label" for="quickModelSelect"><span data-text="model">Model</span><select id="quickModelSelect"><option>Loading models…</option></select></label>
-          <button class="quick-load" id="quickLoadModel">Load</button></div>
-          <button class="system-summary" id="systemSummary">No system prompt</button>
+          <div class="composer">
+            <textarea id="prompt" rows="1" placeholder="Message your local model…" aria-label="Message" data-label="messageLabel"></textarea>
+          </div>
+          <div class="composer-toolbar" id="composerToolbar">
+            <div class="composer-tools">
+              <button id="optionsButton" class="composer-action" popovertarget="optionsPopover" aria-expanded="false"><span data-icon="options"></span><span data-text="options">Options</span><span id="systemSummary" class="options-state" hidden>· Custom</span></button>
+              <label class="thinking-control">
+                <input id="quickThinking" type="checkbox" role="switch" aria-label="Thinking mode" data-label="thinkingMode" aria-describedby="thinkingHelp">
+                <span data-icon="thinking" aria-hidden="true"></span>
+                <span class="thinking-label" data-text="thinkingShort">Thinking</span>
+                <span class="thinking-state" id="thinkingState" aria-hidden="true">Off</span>
+              </label>
+              <span class="sr-only" id="thinkingHelp" data-text="thinkingHelp">Applies to the next response on compatible models.</span>
+            </div>
+            <div class="composer-model-actions" id="composerModelSlot">
+              <div id="modelPicker" class="model-picker">
+                <button id="modelPickerButton" class="composer-action model-picker-button" popovertarget="modelPopover" aria-expanded="false" aria-label="Select model" data-label="model"><span id="modelReady" class="model-ready-dot" aria-hidden="true" hidden></span><span id="modelPickerLabel">Select model</span><span data-icon="chevronDown"></span></button>
+                <button class="quick-load" id="quickLoadModel">Load</button>
+              </div>
+              <button class="stop-button hidden" id="stopButton" aria-label="Stop response" data-title="stop"><span data-icon="stop"></span></button>
+              <button class="send-button" id="sendButton" aria-label="Send" data-title="send"><span data-icon="send"></span></button>
+            </div>
+          </div>
         </div>
-        <div class="composer">
-          <textarea id="prompt" rows="1" placeholder="Message your local model…" aria-label="Message" data-label="messageLabel"></textarea>
-          <button class="stop-button hidden" id="stopButton" aria-label="Stop response" data-title="stop"><span data-icon="stop"></span></button>
-          <button class="send-button" id="sendButton" aria-label="Send" data-title="send"><span data-icon="send"></span></button>
+        <div class="composer-meta">
+          <span id="composerStatus" class="composer-status">Load a model to start</span>
+          <button id="contextButton" class="context-summary" popovertarget="contextPopover" aria-expanded="false"><span id="contextSummary">Context 0%</span><span data-icon="chevronDown"></span></button>
         </div>
+        <div class="composer-popover" id="optionsPopover" popover="auto" role="dialog" aria-labelledby="optionsTitle">
+          <h2 id="optionsTitle" data-text="responseOptions">Response options</h2>
+          <div id="composerSettingsSlot"></div>
+          <p class="setting-help" data-text="settingsHelp">Changes apply to the next response.</p>
         </div>
-        <div class="composer-meta"><span id="composerStatus">Load a model to start</span><span id="temperatureLabel">Temperature 0.00</span></div>
-        <div class="context-row"><div class="context-track"><span id="contextBar"></span></div><span id="contextLabel">Context 0%</span></div>
+        <div class="composer-popover" id="modelPopover" popover="auto" role="dialog" aria-labelledby="modelPopoverTitle">
+          <h2 id="modelPopoverTitle" data-text="detectedModel">Detected model</h2>
+          <label for="quickModelSelect" class="sr-only" data-text="model">Model</label>
+          <select id="quickModelSelect"><option value="">Loading models…</option></select>
+          <p id="selectedModelPath" class="model-path"></p>
+          <button id="modelSettingsButton" class="text-button" data-text="modelSettings">Model loading settings</button>
+        </div>
+        <div class="composer-popover" id="contextPopover" popover="auto" role="dialog" aria-labelledby="contextTitle">
+          <h2 id="contextTitle" data-text="contextUsage">Context usage</h2>
+          <p id="contextLabel">Context 0%</p>
+          <div class="context-track"><span id="contextBar"></span></div>
+          <p class="setting-help" id="contextWarning" data-text="contextWarning" hidden>Older turns may be trimmed as the context fills up.</p>
+        </div>
         <p class="composer-footnote" data-text="footnote">Local models can make mistakes. Check important information.</p>
       </section>
       </div>
@@ -89,20 +122,20 @@
         <button class="primary-button full" id="loadModel">Load model</button>
       </section>
 
-      <section class="setting-section">
+      <section class="setting-section" id="conversationOptions">
         <div class="section-title" data-text="conversation">Conversation</div>
         <div class="row-between"><label for="systemPrompt" data-text="systemPrompt">System prompt</label><select id="systemPreset" aria-label="System prompt preset" data-label="systemPreset"><option value="" data-text="noPrompt">No prompt</option><option value="You are a helpful assistant." data-text="helpfulAssistant">Helpful assistant</option><option value="You are a concise, expert programming assistant." data-text="codingAssistant">Coding assistant</option><option value="custom" data-text="custom">Custom</option></select></div>
         <textarea id="systemPrompt" rows="5" placeholder="Optional—empty means no system prompt" data-placeholder="systemPlaceholder"></textarea>
       </section>
 
-      <section class="setting-section">
+      <section class="setting-section" id="generationOptions">
         <div class="section-title"><span data-text="responseGeneration">Response generation</span><span class="instant-badge" data-text="nextResponse">Next response</span></div>
         <div class="row-between"><div><strong data-text="thinkingMode">Thinking mode</strong><small data-text="compatibleModels">Qwen-compatible models</small></div><label class="switch"><input id="thinking" type="checkbox" aria-label="Thinking mode" data-title="thinkingMode"><span></span></label></div>
         <label class="range-label" for="temperatureNumber"><span data-text="temperatureTitle">Temperature</span><input id="temperatureNumber" type="number" min="0" max="2" step="0.05" value="0"></label>
         <input id="temperature" type="range" aria-label="Temperature" data-title="temperatureTitle" min="0" max="2" step="0.05" value="0">
       </section>
 
-      <details class="setting-section">
+      <details class="setting-section" id="advancedOptions">
         <summary data-text="advancedGeneration">Advanced generation</summary>
         <div class="grid-two advanced-grid">
           <label>Top-p<input id="topP" type="number" min="0" max="1" step="0.05" value="0.95"></label>
@@ -117,6 +150,6 @@
     <div class="overlay" id="overlay"></div>
     <div class="toast" id="toast" role="status"></div>
   </div>
-  <script type="module" src="/assets/app.js?v=8"></script>
+  <script type="module" src="/assets/app.js?v=10"></script>
 </body>
 </html>

@@ -8,9 +8,11 @@ Open **Settings → Appearance** to choose **ChatGPT**, **Claude**, or **GitHub 
 
 Customize each theme's JSON/CSS pair in [`frontend/themes/`](frontend/themes/). See the [customization guide](docs/themes.md) for changing names, logos, wording, colors, fonts, buttons, and supported component positions. These are local recreations of the browser chat styles; they do not add the products' cloud services or agent features.
 
+The composer groups system instructions, temperature, and advanced sampling under **Options**. **Thinking On/Off** stays visible beside it and synchronized with Settings; it applies to the next response on compatible models. The model control shows a shorter name, with the full path in its menu, and the compact context percentage opens detailed usage.
+
 ### Screenshots
 
-These Playwright screenshots use deterministic sample conversations and metrics, not a live inference benchmark.
+These Playwright screenshots use deterministic sample conversations and metrics, not a live inference benchmark. They predate the grouped composer controls.
 
 | Theme | Light | Dark |
 | --- | --- | --- |

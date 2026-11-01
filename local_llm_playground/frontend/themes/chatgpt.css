@@ -1,6 +1,6 @@
-:root[data-theme="chatgpt"] .page-title { display: none; }
+:root[data-theme="chatgpt"][data-model-picker="header"] .page-title { display: none; }
 :root[data-theme="chatgpt"] .header-model-slot { flex: 1; }
-:root[data-theme="chatgpt"] .header-model-slot select { font-size: 15px; font-weight: 600; }
+:root[data-theme="chatgpt"] .header-model-slot .model-picker-button { font-size: 15px; font-weight: 600; }
 :root[data-theme="chatgpt"] .assistant-head { display: none; }
 :root[data-theme="chatgpt"] .welcome-mark { display: none; }
 :root[data-theme="chatgpt"] .welcome h1 { font-size: clamp(27px, 3vw, 32px); }
@@ -9,4 +9,4 @@
 :root[data-theme="chatgpt"] .sidebar-top .brand strong { font-size: 12px; }
 :root[data-theme="chatgpt"] .settings-button { border-color: transparent; }
 :root[data-theme="chatgpt"] .composer { min-height: 62px; }
-@media (max-width: 720px) { :root[data-theme="chatgpt"] .header-model-slot { max-width: none; } :root[data-theme="chatgpt"] .header-model-slot select { font-size: 12px; } }
+@media (max-width: 720px) { :root[data-theme="chatgpt"] .header-model-slot { max-width: none; } :root[data-theme="chatgpt"] .header-model-slot .model-picker-button { font-size: 12px; } }

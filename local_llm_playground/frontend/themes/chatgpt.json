@@ -6,7 +6,7 @@
     "logoLight": "/assets/themes/assets/chatgpt-light.svg",
     "logoDark": "/assets/themes/assets/chatgpt-dark.svg"
   },
-  "layout": { "modelPicker": "header", "emptyComposer": "center", "settings": "dialog" },
+  "layout": { "modelPicker": "composer", "emptyComposer": "center", "settings": "dialog" },
   "text": {
     "welcomeTitle": "What are you working on?",
     "welcomeSubtitle": "Chat directly with your local model.",
