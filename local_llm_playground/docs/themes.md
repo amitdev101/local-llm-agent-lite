@@ -6,6 +6,8 @@ The composer uses grouped controls in both empty and active chats. **Options** o
 
 Options temporarily moves the existing Settings sections into a native popover and restores them when it closes. Inputs, values, and handlers are reused. Popovers close with Escape or an outside click; opening Settings closes them and restores all sections before focusing the dialog. Shared controls use each theme's colors and dimensions. Override `options`, `responseOptions`, `thinkingShort`, `thinkingMode`, `thinkingOn`, `thinkingOff`, `thinkingHelp`, and the context wording in a theme's `text` map.
 
+Drafts are independent of appearance. Each chat's exact unsent text is stored under `playground.draft.v1:<chatId>`; an unsent new chat uses `playground.draft.v1:new`. `playground.activeChat.v1` remembers which chat to restore after refresh. Saves are debounced while typing and flushed on chat navigation, page hide, and document hide. Browser storage failures keep drafts in memory for the open tab and show a persistent warning; override `draftUnavailable` to change that message. Deleting a chat removes its draft, and response actions preserve any separate text being composed.
+
 The implementation uses the existing HTML/chat controller, a small `frontend/theme.js`, and three independent JSON/CSS pairs. No frontend build step is required.
 
 ## Where to edit

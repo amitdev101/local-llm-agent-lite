@@ -10,7 +10,7 @@ const frontend = join(__dirname, "../frontend");
 const html = readFileSync(join(frontend, "index.html"), "utf8");
 const app = readFileSync(join(frontend, "app.js"), "utf8").replace(/\r/g, "")
   .replace(/^import .*;\n/, "")
-  .replace(/\ninitComposerPopovers\(\);\nawait initThemes\(\);[\s\S]*$/, "");
+  .replace(/\ninitComposerPopovers\(\);[\s\S]*$/, "");
 const theme = readFileSync(join(frontend, "theme.js"), "utf8");
 const words = vm.runInNewContext(theme.slice(theme.indexOf("const defaults ="), theme.indexOf("const defaultIcons")) + "defaults");
 
@@ -24,6 +24,8 @@ class Element {
       contains: k => classes.has(k), toggle: (k, on) => on ? classes.add(k) : classes.delete(k) };
     this.firstElementChild = { textContent: "" };
   }
+  set innerHTML(value) { this.markup = value; this.children = []; }
+  get innerHTML() { return this.markup || ""; }
   querySelector(selector) {
     if (selector === "details") return null;
     if (!this.nodes.has(selector)) this.nodes.set(selector, new Element());
@@ -58,17 +60,26 @@ function setup(options = {}) {
   Object.assign(ui.temperature, { value: "0.6" });
   Object.assign(ui.systemPrompt, { value: "Original instructions" });
   ui.thinking.checked = true;
-  const document = { body: new Element(), activeElement: null,
-    getElementById: id => ui[id], createElement: () => new Element(), addEventListener() {} };
+  ui.draftWarning.hidden = true;
+  const lifecycle = {}, documentEvents = {};
+  const document = { body: new Element(), activeElement: null, visibilityState: "visible",
+    getElementById: id => ui[id], createElement: () => new Element(),
+    addEventListener(type, handler) { documentEvents[type] = handler; } };
   const requests = [], copied = [], toasts = [], timers = new Set();
+  const timeouts = new Map();
+  const storage = options.storage || new Map();
+  const localStorage = options.localStorage || { getItem: key => storage.get(key) ?? null,
+    setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) };
   let requestIndex = 0, timerIndex = 0, statusCalls = 0;
-  const context = vm.createContext({ document, matchMedia: () => ({ matches: false, addEventListener() {} }),
+  const context = vm.createContext({ document, localStorage, confirm: () => true,
+    window: { addEventListener(type, handler) { lifecycle[type] = handler; } },
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
     text: (key, values = {}) => (words[key] || key).replace(/\{(\w+)\}/g, (_, name) => values[name] ?? name),
     refreshThemeContent() {}, crypto: { randomUUID: () => `request-${++requestIndex}` },
     navigator: { clipboard: { writeText: async value => copied.push(value) } },
     TextDecoder, Uint8Array, requestAnimationFrame: fn => fn(),
     setInterval: () => { timers.add(++timerIndex); return timerIndex; }, clearInterval: id => timers.delete(id),
-    setTimeout: () => 0, clearTimeout() {},
+    setTimeout: handler => { timeouts.set(++timerIndex, handler); return timerIndex; }, clearTimeout: id => timeouts.delete(id),
     fetch: async (url, init = {}) => {
       const body = init.body ? JSON.parse(init.body) : null;
       requests.push({ url, body });
@@ -79,17 +90,22 @@ function setup(options = {}) {
       }
       if (url === "/api/chats" && init.method === "POST") return options.createChat?.() || Response.json({ id: "chat-1" });
       if (url === "/api/chats") return options.chats?.() || Response.json([]);
-      if (url === "/api/chats/chat-1" && options.chat) return Response.json(options.chat);
+      if (url === "/api/models") return Response.json([]);
+      if (url === "/api/settings") return Response.json({ context_size: 4096, gpu_layers: 0, threads: 4 });
+      if (url.startsWith("/api/chats/") && init.method === "DELETE") return options.deleteChat?.(url) || Response.json({ deleted: true });
+      if (url.startsWith("/api/chats/") && !init.method) return options.getChat?.(url.slice(11)) || Response.json(options.chat || { settings: {}, messages: [] });
       if (url === "/api/generation/stop") return options.stop?.() || Response.json({ stopping: true });
       if (url.endsWith("/generate")) return options.generate?.(body) || stream([token("Answer"), done()]);
       throw new Error(`Unexpected request: ${url}`);
     } });
   vm.runInContext(app + `\nactiveChat = ${options.newChat ? "null" : '"chat-1"'};
-    globalThis.controller = { send, stop, openChat, updateAssistant,
-      state: () => ({ generating, generationTimer }),
+    globalThis.controller = { send, stop, openChat, newChat, initDrafts, loadInitial, saveDraft, updateAssistant,
+      state: () => ({ generating, generationTimer, activeChat }),
       notify: handler => { showToast = handler; } };`, context);
   context.controller.notify(message => toasts.push(message));
-  return { ui, requests, copied, toasts, timers, ...context.controller };
+  return { ui, requests, copied, toasts, timers, storage, lifecycle, document, documentEvents, timeouts,
+    flushTimeouts() { const pending = [...timeouts.values()]; timeouts.clear(); pending.forEach(handler => handler()); },
+    ...context.controller };
 }
 
 const assistants = fixture => fixture.ui.messages.querySelectorAll(".assistant");
@@ -265,4 +281,225 @@ test("a failed Stop request leaves Stop available while the stream continues", a
   output.enqueue(new TextEncoder().encode(token("Answer") + done())); output.close();
   await sending;
   restored(f);
+});
+
+const draftKey = id => `playground.draft.v1:${id || "new"}`;
+const activeKey = "playground.activeChat.v1";
+function typeDraft(f, value) { f.ui.prompt.value = value; f.ui.prompt.oninput(); }
+async function until(predicate) {
+  for (let i = 0; i < 30 && !predicate(); i++) await new Promise(resolve => setImmediate(resolve));
+  assert.ok(predicate(), "operation reached the expected point");
+}
+
+test("each chat and the unsent new chat restore their own exact drafts", async () => {
+  const storage = new Map([[activeKey, "chat-a"], [draftKey("chat-a"), "Draft A"],
+    [draftKey("chat-b"), "Draft B"], [draftKey(null), "Unsent new chat"]]);
+  const f = setup({ storage }); f.initDrafts();
+  typeDraft(f, "  Revised A\n\nwith 🌍 and spacing  ");
+  await f.openChat("chat-b");
+  assert.equal(f.ui.prompt.value, "Draft B");
+  typeDraft(f, "Revised B");
+  await f.openChat("chat-a");
+  assert.equal(f.ui.prompt.value, "  Revised A\n\nwith 🌍 and spacing  ");
+  await f.newChat();
+  assert.equal(f.ui.prompt.value, "Unsent new chat");
+  typeDraft(f, "Revised new chat");
+  await f.openChat("chat-b");
+  assert.equal(f.ui.prompt.value, "Revised B");
+  await f.newChat();
+  assert.equal(f.ui.prompt.value, "Revised new chat");
+  assert.equal(f.requests.filter(item => item.url === "/api/chats" && item.body).length, 0);
+});
+
+test("refresh restores the last-opened chat even when another chat is more recent", async () => {
+  const storage = new Map([[activeKey, "chat-a"], [draftKey("chat-a"), "Saved A"]]);
+  const chats = () => Response.json([
+    { id: "chat-b", title: "More recent", updated_at: "2026-10-02" },
+    { id: "chat-a", title: "Last opened", updated_at: "2026-10-01" },
+  ]);
+  const first = setup({ storage, chats }); first.initDrafts(); await first.loadInitial();
+  assert.equal(first.state().activeChat, "chat-a");
+  typeDraft(first, "Last keystroke before refresh");
+  first.lifecycle.pagehide();
+  const reloaded = setup({ storage, chats }); reloaded.initDrafts(); await reloaded.loadInitial();
+  assert.equal(reloaded.state().activeChat, "chat-a");
+  assert.equal(reloaded.ui.prompt.value, "Last keystroke before refresh");
+  assert.equal(reloaded.requests.some(item => item.url.endsWith("/generate")), false);
+});
+
+test("a refreshed new-chat draft stays on New chat while saved chats exist", async () => {
+  const f = setup({ storage: new Map([[activeKey, "new"], [draftKey(null), "Still composing"]]),
+    chats: () => Response.json([{ id: "chat-a", title: "Existing", updated_at: "2026-10-01" }]) });
+  f.initDrafts(); await f.loadInitial();
+  assert.equal(f.state().activeChat, null);
+  assert.equal(f.ui.prompt.value, "Still composing");
+});
+
+test("typing is debounced and visibility/pagehide flush the latest text", () => {
+  const f = setup({ storage: new Map([[activeKey, "chat-a"]]) }); f.initDrafts();
+  typeDraft(f, "One"); typeDraft(f, "Two");
+  assert.equal(f.timeouts.size, 1);
+  assert.equal(f.storage.has(draftKey("chat-a")), false);
+  f.flushTimeouts();
+  assert.equal(f.storage.get(draftKey("chat-a")), "Two");
+  typeDraft(f, "Three"); f.document.visibilityState = "hidden"; f.documentEvents.visibilitychange();
+  assert.equal(f.storage.get(draftKey("chat-a")), "Three");
+  typeDraft(f, "Four"); f.lifecycle.pagehide();
+  assert.equal(f.storage.get(draftKey("chat-a")), "Four");
+  assert.equal(f.timeouts.size, 0);
+});
+
+test("accepted sends clear only the submitted draft; rejected sends survive refresh", async () => {
+  for (const accepted of [true, false]) {
+    const storage = new Map([[activeKey, "chat-a"], [draftKey("chat-a"), "Submitted prompt"], [draftKey("chat-b"), "Other draft"]]);
+    const f = setup({ storage, generate: () => accepted ? stream([token("Answer"), done()]) : new Response("Unavailable", { status: 503 }) });
+    f.initDrafts(); await f.send(); f.lifecycle.pagehide();
+    const reloaded = setup({ storage }); reloaded.initDrafts();
+    assert.equal(reloaded.ui.prompt.value, accepted ? "" : "Submitted prompt");
+    assert.equal(storage.get(draftKey("chat-b")), "Other draft");
+    restored(f);
+  }
+});
+
+test("typing while Send waits preserves newer edits, including edits back to the same text", async () => {
+  for (const backToOriginal of [false, true]) {
+    let accept;
+    const f = setup({ storage: new Map([[activeKey, "chat-a"], [draftKey("chat-a"), "Original prompt"]]),
+      generate: () => new Promise(resolve => { accept = resolve; }) });
+    f.initDrafts(); const sending = f.send();
+    await until(() => Boolean(accept));
+    typeDraft(f, "A newer draft");
+    if (backToOriginal) typeDraft(f, "Original prompt");
+    accept(stream([token("Answer"), done()])); await sending; f.lifecycle.pagehide();
+    const expected = backToOriginal ? "Original prompt" : "A newer draft";
+    assert.equal(f.ui.prompt.value, expected);
+    assert.equal(f.storage.get(draftKey("chat-a")), expected);
+  }
+});
+
+test("creating a chat transfers the draft and preserves edits made during creation", async () => {
+  for (const edit of [null, "Next draft", "Same text again"]) {
+    let create;
+    const storage = new Map([[activeKey, "new"], [draftKey(null), "First prompt"]]);
+    const f = setup({ storage, createChat: () => new Promise(resolve => { create = resolve; }) });
+    f.initDrafts(); const sending = f.send();
+    await until(() => Boolean(create));
+    if (edit) typeDraft(f, edit);
+    if (edit === "Same text again") typeDraft(f, "First prompt");
+    create(Response.json({ id: "created-chat" })); await sending; f.lifecycle.pagehide();
+    const expected = edit === "Same text again" ? "First prompt" : edit || "";
+    assert.equal(f.state().activeChat, "created-chat");
+    assert.equal(f.ui.prompt.value, expected);
+    assert.equal(storage.get(draftKey("created-chat")) || "", expected);
+    assert.equal(storage.has(draftKey(null)), false);
+    assert.equal(storage.get(activeKey), "created-chat");
+  }
+});
+
+test("Retry and Continue preserve an unrelated composer draft", async () => {
+  for (const action of ["retry", "continue"]) {
+    let attempt = 0;
+    const f = setup({ generate: () => ++attempt === 1 && action === "retry" ?
+      stream([JSON.stringify({ type: "error", message: "Try again" }) + "\n"]) : stream([token("Answer"), done()]) });
+    await f.send();
+    // Matching the action's prompt still does not make this an explicitly sent draft.
+    const draft = action === "retry" ? "Original prompt" : "Continue.";
+    typeDraft(f, draft);
+    const button = assistants(f)[0].querySelector(action === "retry" ? ".regenerate" : ".continue-response");
+    await button.onclick(); f.saveDraft();
+    assert.equal(f.ui.prompt.value, draft);
+    assert.equal(f.storage.get(draftKey("chat-1")), draft);
+  }
+});
+
+test("unavailable browser storage keeps drafts in this tab and shows a warning", async () => {
+  const unavailable = () => { throw new Error("Storage disabled"); };
+  const f = setup({ localStorage: { getItem: unavailable, setItem: unavailable, removeItem: unavailable } });
+  f.initDrafts();
+  typeDraft(f, "Kept in memory");
+  await f.openChat("chat-b");
+  await f.newChat();
+  assert.equal(f.ui.prompt.value, "Kept in memory");
+  assert.equal(f.ui.draftWarning.hidden, false);
+  assert.equal(f.requests.some(item => item.url.endsWith("/generate")), false);
+});
+
+test("quota failures preserve both drafts and clear the warning after successful saves", async () => {
+  let blocked = true;
+  const storage = new Map([[activeKey, "chat-a"], [draftKey("chat-a"), "Original A"]]);
+  const localStorage = { getItem: key => storage.get(key) ?? null,
+    setItem(key, value) { if (blocked) throw new Error("Quota exceeded"); storage.set(key, value); },
+    removeItem(key) { if (blocked) throw new Error("Quota exceeded"); storage.delete(key); } };
+  const f = setup({ storage, localStorage }); f.initDrafts();
+  typeDraft(f, "Revised A"); f.flushTimeouts();
+  await f.openChat("chat-b"); typeDraft(f, "Revised B"); f.flushTimeouts();
+  await f.openChat("chat-a");
+  assert.equal(f.ui.prompt.value, "Revised A");
+  assert.equal(f.ui.draftWarning.hidden, false);
+  blocked = false; f.saveDraft();
+  await f.openChat("chat-b"); f.saveDraft();
+  assert.equal(f.ui.prompt.value, "Revised B");
+  assert.equal(storage.get(draftKey("chat-a")), "Revised A");
+  assert.equal(storage.get(draftKey("chat-b")), "Revised B");
+  assert.equal(f.ui.draftWarning.hidden, true);
+});
+
+test("deleting a chat removes its draft and preserves the unsent new-chat draft", async () => {
+  let chats = [{ id: "chat-a", title: "Delete me", updated_at: "2026-10-01" }];
+  const storage = new Map([[activeKey, "chat-a"], [draftKey("chat-a"), "Deleted draft"], [draftKey(null), "Other unsent work"]]);
+  const f = setup({ storage, chats: () => Response.json(chats), deleteChat: () => { chats = []; return Response.json({ deleted: true }); } });
+  f.initDrafts(); await f.loadInitial();
+  typeDraft(f, "Newest deleted draft");
+  const row = f.ui.chatList.children.find(node => node.className === "chat-row");
+  await row.querySelector(".delete-chat").onclick({ stopPropagation() {} });
+  f.flushTimeouts();
+  assert.equal(storage.has(draftKey("chat-a")), false);
+  assert.equal(f.ui.prompt.value, "Other unsent work");
+  assert.equal(f.state().activeChat, null);
+});
+
+test("a late chat response cannot replace a newer selection or lose edits made while loading", async () => {
+  const pending = {};
+  const storage = new Map([[activeKey, "chat-a"], [draftKey("chat-a"), "A"],
+    [draftKey("chat-b"), "B"], [draftKey("chat-c"), "C"]]);
+  const f = setup({ storage, getChat: id => new Promise(resolve => { pending[id] = resolve; }) });
+  f.initDrafts();
+  const first = f.openChat("chat-b"), second = f.openChat("chat-c");
+  typeDraft(f, "Latest edit to A");
+  pending["chat-c"](Response.json({ settings: {}, messages: [] })); await second;
+  assert.equal(storage.get(draftKey("chat-a")), "Latest edit to A");
+  pending["chat-b"](Response.json({ settings: {}, messages: [] })); await first;
+  assert.equal(f.state().activeChat, "chat-c");
+  assert.equal(f.ui.prompt.value, "C");
+});
+
+test("a missing last-opened chat falls back without putting its draft in another chat", async () => {
+  const f = setup({ storage: new Map([[activeKey, "deleted-chat"], [draftKey("deleted-chat"), "Old draft"], [draftKey("chat-a"), "A draft"]]),
+    chats: () => Response.json([{ id: "chat-a", title: "Available", updated_at: "2026-10-01" }]) });
+  f.initDrafts(); await f.loadInitial();
+  assert.equal(f.state().activeChat, "chat-a");
+  assert.equal(f.ui.prompt.value, "A draft");
+  assert.equal(f.storage.get(draftKey("deleted-chat")), "Old draft");
+});
+
+test("a failed chat switch keeps the current draft and selection", async () => {
+  const f = setup({ storage: new Map([[activeKey, "chat-a"], [draftKey("chat-a"), "A draft"]]),
+    getChat: () => Promise.reject(new Error("Offline")) });
+  f.initDrafts(); typeDraft(f, "Newest A draft");
+  await assert.rejects(f.openChat("chat-b"), /Offline/);
+  assert.equal(f.state().activeChat, "chat-a");
+  assert.equal(f.ui.prompt.value, "Newest A draft");
+  assert.equal(f.storage.get(draftKey("chat-a")), "Newest A draft");
+});
+
+test("theme changes leave the exact draft, pending save, and generation settings intact", () => {
+  const f = setup({ storage: new Map([[activeKey, "chat-a"]]) }); f.initDrafts();
+  typeDraft(f, "  A multiline\ndraft 🌍  ");
+  const requestsBefore = f.requests.length;
+  f.documentEvents.themechange(); f.flushTimeouts();
+  assert.equal(f.storage.get(draftKey("chat-a")), "  A multiline\ndraft 🌍  ");
+  assert.equal(f.ui.prompt.value, "  A multiline\ndraft 🌍  ");
+  assert.equal(f.ui.temperature.value, "0.6");
+  assert.equal(f.ui.thinking.checked, true);
+  assert.equal(f.requests.length, requestsBefore);
 });

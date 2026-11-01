@@ -32,6 +32,7 @@ const defaults = {
   generationBusy: "A response is already running. Wait for it to finish before trying again.",
   chatListUnavailable: "Couldn't refresh the chat list. Your response is still shown here.",
   stopFailed: "Couldn't stop the response. You can try Stop again.",
+  draftUnavailable: "Couldn't save your draft in this browser. Keep this tab open or copy your text before refreshing.",
   renameChat: "Rename chat", deleteConfirm: "Delete “{title}”?", chatActions: "Chat actions",
   today: "Today", earlier: "Earlier", working: "Working for {duration}", worked: "Worked for {duration}",
   waitingReasoning: "Waiting for the model's reasoning…", noReasoning: "This model did not return a separate thinking trace.",

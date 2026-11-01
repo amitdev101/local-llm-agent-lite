@@ -21,6 +21,81 @@ let sidebarExpanded = true;
 const mobile = matchMedia("(max-width: 720px)");
 let lastContext = null;
 const composerPopovers = [[ui.optionsPopover, ui.optionsButton], [ui.modelPopover, ui.modelPickerButton], [ui.contextPopover, ui.contextButton]];
+const DRAFT_PREFIX = "playground.draft.v1:";
+const ACTIVE_CHAT_KEY = "playground.activeChat.v1";
+const draftCache = new Map();
+const browserStateErrors = new Map();
+let draftSaveTimer = null;
+let draftBaseline = "";
+let promptRevision = 0;
+let chatNavigation = 0;
+
+function draftKey(id = activeChat) { return DRAFT_PREFIX + (id || "new"); }
+
+function readBrowserState(key) {
+  if (browserStateErrors.get(key) === "write") return draftCache.get(key);
+  try {
+    const value = localStorage.getItem(key);
+    draftCache.set(key, value); browserStateErrors.delete(key);
+    $("draftWarning").hidden = !browserStateErrors.size;
+    return value;
+  } catch (_) {
+    browserStateErrors.set(key, "read"); $("draftWarning").hidden = false;
+    return draftCache.get(key) ?? null;
+  }
+}
+
+function writeBrowserState(key, value) {
+  draftCache.set(key, value);
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+    browserStateErrors.delete(key);
+    $("draftWarning").hidden = !browserStateErrors.size;
+    return true;
+  } catch (_) {
+    browserStateErrors.set(key, "write"); $("draftWarning").hidden = false;
+    return false;
+  }
+}
+
+function saveDraft() {
+  clearTimeout(draftSaveTimer); draftSaveTimer = null;
+  if (ui.prompt.value === draftBaseline && browserStateErrors.get(draftKey()) !== "write") return;
+  writeBrowserState(draftKey(), ui.prompt.value || null);
+  draftBaseline = ui.prompt.value;
+}
+
+function promptInput() {
+  promptRevision++;
+  resizePrompt();
+  clearTimeout(draftSaveTimer);
+  draftSaveTimer = setTimeout(saveDraft, 250);
+}
+
+function restoreDraft() {
+  ui.prompt.value = readBrowserState(draftKey()) || "";
+  draftBaseline = ui.prompt.value; promptRevision++;
+  resizePrompt();
+}
+
+function activateChat(id, transferDraft = false) {
+  saveDraft();
+  const previousKey = draftKey();
+  const value = ui.prompt.value;
+  activeChat = id;
+  if (transferDraft && writeBrowserState(draftKey(), value || null)) writeBrowserState(previousKey, null);
+  writeBrowserState(ACTIVE_CHAT_KEY, id || "new");
+  restoreDraft();
+}
+
+function initDrafts() {
+  const selected = readBrowserState(ACTIVE_CHAT_KEY);
+  activeChat = selected && selected !== "new" ? selected : null;
+  restoreDraft();
+  window.addEventListener("pagehide", saveDraft);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveDraft(); });
+}
 
 function closeComposerPopovers() {
   for (const [popover] of composerPopovers) if (popover.matches(":popover-open")) popover.hidePopover();
@@ -343,6 +418,7 @@ function updateLabels() {
 }
 
 async function loadInitial() {
+  const navigation = chatNavigation;
   try {
     const [models, settings, status, chats] = await Promise.all([
       api("/api/models"), api("/api/settings"), api("/api/status"), api("/api/chats")
@@ -361,7 +437,12 @@ async function loadInitial() {
     updateModelStatus(status, settings);
     allChats = chats;
     renderChatList();
-    if (chats.length) await openChat(chats[0].id);
+    if (navigation === chatNavigation) {
+      const selected = readBrowserState(ACTIVE_CHAT_KEY);
+      const initialChat = chats.find(chat => chat.id === selected) || (selected === "new" ? null : chats[0]);
+      if (initialChat) await openChat(initialChat.id);
+      else activateChat(null);
+    }
     if (
       status.status === "not_loaded"
       && settings.model_path
@@ -409,8 +490,14 @@ function renderChatList() {
       event.stopPropagation();
       if (!confirm(text("deleteConfirm", { title: chat.title }))) return;
       await api(`/api/chats/${chat.id}`, { method: "DELETE" });
-      if (activeChat === chat.id) { activeChat = null; resetMessages(); await newChat(); }
-      else await refreshChats();
+      if (activeChat === chat.id) {
+        clearTimeout(draftSaveTimer); draftSaveTimer = null;
+        writeBrowserState(draftKey(chat.id), null);
+        activeChat = null; ui.prompt.value = ""; draftBaseline = "";
+        writeBrowserState(ACTIVE_CHAT_KEY, "new");
+        resetMessages(); await newChat();
+      } else writeBrowserState(draftKey(chat.id), null);
+      await refreshChats();
     };
     ui.chatList.appendChild(row);
   });
@@ -418,20 +505,22 @@ function renderChatList() {
 
 async function newChat() {
   if (generating) return;
+  chatNavigation++;
   closeComposerPopovers();
-  const chat = await api("/api/chats", { method: "POST", body: JSON.stringify({
-    system_prompt: ui.systemPrompt.value, thinking: ui.thinking.checked, temperature: Number(ui.temperature.value)
-  }) });
-  activeChat = chat.id; resetMessages(); lastUserMessage = ""; conversationChars = ui.systemPrompt.value.length;
+  // An unsent new chat has its own draft; create its server record on Send.
+  activateChat(null); resetMessages(); lastUserMessage = ""; conversationChars = ui.systemPrompt.value.length;
   updateContext();
-  await refreshChats(); if (mobile.matches) setSidebar(false); ui.prompt.focus();
+  renderChatList(); if (mobile.matches) setSidebar(false); ui.prompt.focus();
 }
 
 async function openChat(id) {
   if (generating) return;
+  const navigation = ++chatNavigation;
   closeComposerPopovers();
+  saveDraft();
   const chat = await api(`/api/chats/${id}`);
-  activeChat = id; resetMessages(); lastUserMessage = "";
+  if (navigation !== chatNavigation || generating) return;
+  activateChat(id); resetMessages(); lastUserMessage = "";
   applySettings({ ...defaults, ...chat.settings });
   conversationChars = ui.systemPrompt.value.length;
   let sourcePrompt = "";
@@ -477,11 +566,17 @@ function runtimeModelMatchesSelection() {
   return Boolean(loadedModelPath) && loadedModelPath === (ui.customModel.value.trim() || ui.quickModelSelect.value);
 }
 
-async function send(message = ui.prompt.value.trim(), retryRequest = null) {
+async function send(message, retryRequest = null) {
+  const fromComposer = message === undefined;
+  message ??= ui.prompt.value.trim();
   if (!message || generating) return;
+  const submittedDraft = ui.prompt.value;
+  let submittedRevision = promptRevision;
   const request = retryRequest || { message, ...generationValues(), request_id: crypto.randomUUID() };
   // Reserve the UI before the first await so rapid clicks cannot submit twice.
   generating = true;
+  chatNavigation++;
+  saveDraft();
   closeComposerPopovers();
   ui.quickModelSelect.disabled = true; ui.quickLoadModel.disabled = true; ui.loadModel.disabled = true;
   ui.sendButton.classList.add("hidden"); ui.stopButton.classList.remove("hidden"); ui.stopButton.disabled = true;
@@ -498,13 +593,14 @@ async function send(message = ui.prompt.value.trim(), retryRequest = null) {
     }
     if (!activeChat) {
       const chat = await api("/api/chats", { method: "POST", body: JSON.stringify(request) });
-      activeChat = chat.id; resetMessages(); conversationChars = request.system_prompt.length;
+      const revisionBeforeTransfer = promptRevision;
+      activateChat(chat.id, true); resetMessages(); conversationChars = request.system_prompt.length;
+      // Moving the same draft from the new-chat slot is not a user edit.
+      if (submittedRevision === revisionBeforeTransfer) submittedRevision = promptRevision;
       if (mobile.matches) setSidebar(false);
     }
     lastUserMessage = request.message;
     if (!retryRequest) {
-      // The prompt remains editable until we have a chat ready to receive it.
-      if (ui.prompt.value.trim() === request.message) { ui.prompt.value = ""; resizePrompt(); }
       messageElement("user", request.message);
       conversationChars += request.message.length; updateContext();
     }
@@ -523,6 +619,9 @@ async function send(message = ui.prompt.value.trim(), retryRequest = null) {
       throw new Error(typeof detail === "string" ? detail : text("responseRequestFailed"));
     }
     if (!response.body) throw new Error(text("streamInterrupted"));
+    if (fromComposer && ui.prompt.value === submittedDraft && promptRevision === submittedRevision) {
+      ui.prompt.value = ""; resizePrompt(); saveDraft();
+    }
     ui.stopButton.disabled = false;
     const reader = response.body.getReader(); const decoder = new TextDecoder(); let pending = "";
     let terminal = false;
@@ -598,7 +697,7 @@ ui.menuButton.onclick = () => setSidebar(mobile.matches ? !ui.sidebar.classList.
 ui.sidebarClose.onclick = () => setSidebar(false);
 mobile.addEventListener("change", () => setSidebar(mobile.matches ? false : sidebarExpanded));
 ui.newChat.onclick = newChat; ui.loadModel.onclick = loadModel; ui.sendButton.onclick = () => send(); ui.stopButton.onclick = stop;
-ui.prompt.oninput = resizePrompt; ui.prompt.onkeydown = (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); } };
+ui.prompt.oninput = promptInput; ui.prompt.onkeydown = (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); } };
 ui.temperature.oninput = () => { ui.temperatureNumber.value = ui.temperature.value; updateLabels(); };
 ui.temperatureNumber.oninput = () => { ui.temperature.value = Math.max(0, Math.min(2, Number(ui.temperatureNumber.value))); updateLabels(); };
 ui.thinking.onchange = updateLabels;
@@ -641,6 +740,7 @@ document.addEventListener("themechange", () => {
 });
 
 initComposerPopovers();
+initDrafts();
 await initThemes();
 setSidebar(!mobile.matches);
 await loadInitial();

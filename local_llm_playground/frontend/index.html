@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Local LLM Playground</title>
   <link rel="icon" type="image/svg+xml" href="/assets/themes/assets/fallback.svg">
-  <link rel="stylesheet" href="/assets/styles.css?v=8">
+  <link rel="stylesheet" href="/assets/styles.css?v=9">
   <link rel="stylesheet" href="/assets/themes/chatgpt.css">
   <link rel="stylesheet" href="/assets/themes/claude.css">
   <link rel="stylesheet" href="/assets/themes/github-copilot.css">
@@ -72,6 +72,7 @@
           <span id="composerStatus" class="composer-status">Load a model to start</span>
           <button id="contextButton" class="context-summary" popovertarget="contextPopover" aria-expanded="false"><span id="contextSummary">Context 0%</span><span data-icon="chevronDown"></span></button>
         </div>
+        <p id="draftWarning" class="draft-warning" role="status" data-text="draftUnavailable" hidden>Couldn't save your draft in this browser. Keep this tab open or copy your text before refreshing.</p>
         <div class="composer-popover" id="optionsPopover" popover="auto" role="dialog" aria-labelledby="optionsTitle">
           <h2 id="optionsTitle" data-text="responseOptions">Response options</h2>
           <div id="composerSettingsSlot"></div>
@@ -150,6 +151,6 @@
     <div class="overlay" id="overlay"></div>
     <div class="toast" id="toast" role="status"></div>
   </div>
-  <script type="module" src="/assets/app.js?v=11"></script>
+  <script type="module" src="/assets/app.js?v=12"></script>
 </body>
 </html>
