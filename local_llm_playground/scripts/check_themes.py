@@ -30,9 +30,9 @@ ROOT = Path(__file__).resolve().parents[1]
 FRONTEND = ROOT / "frontend"
 OUT = ROOT / "docs" / "images" / "themes"
 os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(ROOT / ".playwright-browsers"))
-CHAT_ID = "sample-chat-01"
-MODEL_A = r"C:\models\assistant.gguf"
-MODEL_B = r"D:\archive\assistant.gguf"
+CHAT_ID = "fixture-chat-01"
+MODEL_A = r"C:\fixture-models\Qwen3-1.7B-Q8_0.gguf"
+MODEL_B = r"D:\fixture-archive\Qwen3-1.7B-Q8_0.gguf"
 
 SETTINGS = {
     "model_path": MODEL_A,
@@ -56,6 +56,8 @@ METRICS = {
     "completion_tokens": 48,
     "temperature": 0.2,
     "thinking": False,
+    "thinking_support": "supported",
+    "model": "Qwen3-1.7B-Q8_0.gguf",
     "context_used": 80,
     "context_size": 4096,
 }
@@ -65,12 +67,14 @@ HISTORY_CHAT = {
     "updated_at": "2026-10-31T12:00:00+00:00",
     "settings": SETTINGS,
     "messages": [
-        {"type": "user", "content": "Write a short Python greeting function."},
+        {"id": "fixture-user-message-01", "type": "user", "content": "Write a short Python greeting function."},
         {
+            "id": "fixture-assistant-message-01",
             "type": "assistant",
             "content": "Here is a small example:\n\n```python\ndef greet(name):\n    return f\"Hello, {name}!\"\n```",
             "metrics": METRICS,
             "status": "complete",
+            "request": {"request_id": "fixture-request-01", "message": "Write a short Python greeting function."},
         },
     ],
 }
@@ -81,6 +85,7 @@ class PreviewHandler(BaseHTTPRequestHandler):
 
     scenario = "history"
     request_log: list[tuple[str, str]] = []
+    request_snapshots: list[tuple[str, str, dict[str, object]]] = []
     lock = threading.Lock()
     protocol_version = "HTTP/1.1"
     stop_requested = threading.Event()
@@ -111,11 +116,12 @@ class PreviewHandler(BaseHTTPRequestHandler):
             }]
             fixtures = {
                 "/api/models": [
-                    {"path": MODEL_A, "name": "assistant.gguf", "size": 2_147_483_648},
-                    {"path": MODEL_B, "name": "assistant.gguf", "size": 3_221_225_472},
+                    {"path": MODEL_A, "name": "Qwen3-1.7B-Q8_0.gguf", "size": 1_850_000_000, "thinking_support": "supported"},
+                    {"path": MODEL_B, "name": "Qwen3-1.7B-Q8_0.gguf", "size": 1_900_000_000, "thinking_support": "supported"},
                 ],
                 "/api/settings": SETTINGS,
-                "/api/status": {"status": "ready", "model_path": MODEL_A, "error": None},
+                "/api/status": {"status": "ready", "model_path": MODEL_A, "thinking_support": "supported",
+                                 "loaded_settings": {"model_path": MODEL_A, "context_size": 4096, "gpu_layers": 0, "threads": 4}, "error": None},
                 "/api/chats": chats,
                 f"/api/chats/{CHAT_ID}": HISTORY_CHAT,
             }
@@ -143,6 +149,11 @@ class PreviewHandler(BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else b""
         with self.lock:
             self.request_log.append(("POST", path))
+            try:
+                snapshot = json.loads(body or b"{}")
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                snapshot = {}
+            self.request_snapshots.append(("POST", path, snapshot if isinstance(snapshot, dict) else {}))
         if path == "/api/chats":
             self._json(200, {**HISTORY_CHAT, "id": "sample-new-chat", "messages": []})
         elif path == "/api/generation/stop":
@@ -161,16 +172,19 @@ class PreviewHandler(BaseHTTPRequestHandler):
                 self.wfile.write(f"{len(data):X}\r\n".encode("ascii") + data + b"\r\n")
                 self.wfile.flush()
 
-            chunk('{"type":"start"}')
+            chunk('{"type":"start","message_id":"fixture-stream-message-01"}')
             time.sleep(1.2)  # Keep one deterministic generation live during the theme-switch check.
             chunk('{"type":"token","text":"Hello from the deterministic local fixture."}')
             time.sleep(0.35)
             kind = "stopped" if self.stop_requested.is_set() else "done"
-            chunk(json.dumps({"type": kind, "metrics": METRICS}))
+            chunk(json.dumps({"type": kind, "metrics": {**METRICS, "thinking_support": "supported", "model": "Qwen3-1.7B-Q8_0.gguf"}}))
             self.wfile.write(b"0\r\n\r\n")
             self.wfile.flush()
         elif path == "/api/model/load":
-            self._json(200, {"status": "ready", "model_path": MODEL_A})
+            request = json.loads(body or b"{}")
+            model_path = request.get("model_path", MODEL_A)
+            self._json(200, {"status": "ready", "model_path": model_path, "thinking_support": "supported",
+                             "loaded_settings": {**request, "model_path": model_path}})
         else:
             self._json(200, {"ok": True, "body": body.decode("utf-8", "replace")})
 
@@ -222,6 +236,10 @@ def verify_initial(page: Page, failures: list[str], scenario: str) -> None:
     else:
         check(page.locator("body").get_attribute("data-chat-state") == "active", "active chat state is exposed", failures)
         check(page.get_by_text("A small Python helper").count() >= 1, "sample chat history rendered", failures)
+        check(page.locator(".message.assistant").evaluate_all("els => els.some(el => el.messageId === 'fixture-assistant-message-01')"),
+              "fixture message ids are rendered", failures)
+        check(page.locator(".response-details").first.evaluate("el => !el.open"),
+              "response details remain collapsed", failures)
 
 
 def set_appearance(page: Page, theme: str, mode: str) -> None:
@@ -239,20 +257,34 @@ def set_appearance(page: Page, theme: str, mode: str) -> None:
         page.locator("#closeSettings").click()
 
 
+def save_screenshot(page: Page, path: Path, **options: object) -> None:
+    path.write_bytes(page.screenshot(**options))
+
+
 def capture_gallery(page: Page) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     for theme, filename in (("chatgpt", "chatgpt"), ("claude", "claude"), ("github-copilot", "github-copilot")):
         for mode in ("light", "dark"):
             set_appearance(page, theme, mode)
             page.wait_for_timeout(100)
-            page.screenshot(path=str(OUT / f"{filename}-{mode}.png"), full_page=True, animations="disabled")
+            save_screenshot(page, OUT / f"{filename}-{mode}.png", full_page=True, animations="disabled")
+    set_appearance(page, "claude", "dark")
+    page.locator("#optionsButton").click()
+    page.locator("#optionsPopover").wait_for(state="visible")
+    save_screenshot(page, OUT / "claude-dark-options.png", full_page=True, animations="disabled")
+    page.keyboard.press("Escape")
+    page.locator("#modelPickerButton").click()
+    page.locator("#modelPopover").wait_for(state="visible")
+    save_screenshot(page, OUT / "claude-dark-model.png", full_page=True, animations="disabled")
+    page.keyboard.press("Escape")
     page.set_viewport_size({"width": 390, "height": 844})
     for theme, filename in (("claude", "claude"), ("github-copilot", "github-copilot")):
         set_appearance(page, theme, "dark")
-        page.screenshot(path=str(OUT / f"{filename}-dark-mobile.png"), full_page=True, animations="disabled")
+        save_screenshot(page, OUT / f"{filename}-dark-mobile.png", full_page=True, animations="disabled")
+    page.set_viewport_size({"width": 1440, "height": 1000})
     set_appearance(page, "chatgpt", "dark")
     page.locator("#settingsButton").click()
-    page.screenshot(path=str(OUT / "chatgpt-dark-settings.png"), full_page=True, animations="disabled")
+    save_screenshot(page, OUT / "chatgpt-dark-settings.png", full_page=True, animations="disabled")
     page.locator("#closeSettings").click()
 
 
@@ -287,6 +319,8 @@ def run_checks(page: Page, failures: list[str], scenario: str, theme_variant: di
         "/api/model/load", "/api/settings", "/api/chats", "/api/generation/stop"
     } and method in {"POST", "PATCH", "DELETE"}]
     check(not forbidden, "theme switches make no mutation API calls", failures)
+    if page.locator("#settingsPanel").evaluate("el => el.classList.contains('open')"):
+        page.locator("#closeSettings").click()
 
     # Model identity must come from the selected path, even with duplicate display names.
     selectors = page.locator("#quickModelSelect, #modelSelect")
@@ -295,13 +329,28 @@ def run_checks(page: Page, failures: list[str], scenario: str, theme_variant: di
         values = select.locator("option").evaluate_all("els => els.map(el => el.value)")
         check(MODEL_A in values and MODEL_B in values, "same-basename model fixtures have distinct path values", failures)
         if select.get_attribute("id") == "quickModelSelect":
-            loaded_label = page.locator("#quickLoadModel").inner_text().strip()
-            check(bool(loaded_label) and loaded_label.lower() not in {"load", "load model"} and "loading" not in loaded_label.lower(),
-                  "loaded model status is shown for the selected path", failures)
+            check(page.locator("#selectedModelState").inner_text().strip().lower() == "loaded",
+                  "loaded model state is shown for the selected path", failures)
+            check(not page.locator("#quickThinking").is_disabled()
+                  and page.locator("#thinkingState").inner_text().strip().lower() == "off",
+                  "supported Qwen3 fixture exposes Thinking Off", failures)
+            page.locator("#modelPickerButton").click()
+            check(page.locator("#modelPopover").is_visible(), "model selection popover opens", failures)
+            check(page.locator("#selectedModelPath").inner_text().strip() == MODEL_A,
+                  "model popover shows the selected path", failures)
+            page.keyboard.press("Escape")
+            page.locator("#optionsButton").click()
+            check(page.locator("#optionsPopover").is_visible(), "response Options popover opens", failures)
+            check(page.locator("#optionsPopover input, #optionsPopover select, #optionsPopover textarea").count() > 0,
+                  "response Options contains actual settings controls", failures)
+            page.keyboard.press("Escape")
+            page.locator("#modelPickerButton").click()
             select.select_option(MODEL_B)
-            page.wait_for_function("el => !el.disabled && !el.textContent.toLowerCase().includes('loading')", arg=page.locator("#quickLoadModel").element_handle(), timeout=10000)
-            other_label = page.locator("#quickLoadModel").inner_text().strip()
-            check(other_label != loaded_label, "same display basename at another path is not mistaken for the loaded model", failures)
+            check(page.locator("#selectedModelState").inner_text().strip().lower() != "loaded",
+                  "same display basename at another path is not mistaken for the loaded model", failures)
+            check(page.locator("#menuLoadModel").is_visible(), "an unloaded model exposes its Load action", failures)
+            select.select_option(MODEL_A)
+            page.keyboard.press("Escape")
 
     # Preference is restored by a reload with the same isolated browser context.
     set_appearance(page, "github-copilot", "light")
@@ -368,8 +417,20 @@ def run_checks(page: Page, failures: list[str], scenario: str, theme_variant: di
         page.wait_for_timeout(100)
     page.locator("#prompt").fill("A fixture prompt")
     before_generate = len(PreviewHandler.request_log)
-    page.locator("#sendButton").click()
+    before_generate_snapshots = len(PreviewHandler.request_snapshots)
+    with page.expect_response(
+        lambda response: response.request.method == "POST" and urlparse(response.url).path.endswith("/generate"),
+        timeout=10000,
+    ) as generation_response_info:
+        page.locator("#sendButton").click()
+    generation_response = generation_response_info.value
     page.locator("#stopButton").wait_for(state="visible", timeout=3000)
+    stream_requests = [snapshot for method, path, snapshot in PreviewHandler.request_snapshots[before_generate_snapshots:]
+                       if method == "POST" and path.endswith("/generate")]
+    snapshot_ok = (generation_response.status == 200 and bool(stream_requests) and bool(stream_requests[-1].get("request_id"))
+                   and stream_requests[-1].get("expected_model_path") == MODEL_A)
+    check(snapshot_ok,
+          "generation request snapshot retains request id and exact loaded model path", failures)
     set_appearance(page, "github-copilot", "light")
     check(page.locator("#stopButton").is_visible(), "in-flight generation remains active through theme switch", failures)
     check(page.locator("#prompt").input_value() == "", "sent prompt remains committed while streaming", failures)
@@ -411,8 +472,31 @@ def main() -> int:
             context.set_default_navigation_timeout(10000)
             page = context.new_page()
             browser_errors: list[str] = []
+            expected_stream_aborts = []
             page.on("pageerror", lambda error: browser_errors.append(str(error)))
-            page.on("console", lambda message: browser_errors.append(message.text) if message.type == "error" else None)
+            def record_console_error(message) -> None:
+                location = message.location or {}
+                expected_missing_logo = (theme_variant["value"] == "missing-logo" and message.type == "error"
+                                         and str(location.get("url", "")).endswith("/assets/themes/assets/missing-playwright-logo.svg")
+                                         and "404" in message.text)
+                if message.type == "error" and not expected_missing_logo:
+                    browser_errors.append(message.text)
+
+            page.on("console", record_console_error)
+            def record_request_failure(request) -> None:
+                expected_missing_logo = (theme_variant["value"] == "missing-logo"
+                                         and request.url.endswith("/assets/themes/assets/missing-playwright-logo.svg"))
+                expected_stream_abort = (request.failure == "net::ERR_ABORTED"
+                                         and urlparse(request.url).path in {
+                                             f"/api/chats/{CHAT_ID}/generate",
+                                             "/api/chats/sample-new-chat/generate",
+                                         })
+                if expected_stream_abort:
+                    expected_stream_aborts.append(request)
+                elif not expected_missing_logo:
+                    browser_errors.append(f"request failed: {request.url} ({request.failure})")
+
+            page.on("requestfailed", record_request_failure)
             # Interception is installed before navigation. Continue only to our local fixture server.
             def fixtures_only(route: Route) -> None:
                 request = route.request
@@ -443,6 +527,9 @@ def main() -> int:
             page.route("**/assets/themes/*.json", themed_config)
             page.goto(base_url, wait_until="domcontentloaded")
             run_checks(page, failures, args.scenario, theme_variant)
+            abort_responses = [request.response() for request in expected_stream_aborts]
+            check(len(expected_stream_aborts) <= 2 and all(response and response.status == 200 for response in abort_responses),
+                  "NDJSON closures have no unexpected request failures", failures)
             check(not browser_errors, "no browser console or uncaught page errors", failures)
             for error in browser_errors:
                 print("  browser error:", error)
@@ -465,7 +552,7 @@ def main() -> int:
                 OUT.mkdir(parents=True, exist_ok=True)
                 for theme, filename in (("chatgpt", "chatgpt"), ("claude", "claude"), ("github-copilot", "github-copilot")):
                     set_appearance(empty_page, theme, "dark")
-                    empty_page.screenshot(path=str(OUT / f"{filename}-dark-empty.png"), full_page=True, animations="disabled")
+                    save_screenshot(empty_page, OUT / f"{filename}-dark-empty.png", full_page=True, animations="disabled")
                 empty_context.close()
             browser.close()
     finally:

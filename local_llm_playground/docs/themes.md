@@ -145,13 +145,21 @@ $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path (Get-Location) 'local_llm_playground\.
 .\.venv\Scripts\python.exe local_llm_playground/scripts/check_themes.py --scenario empty
 ```
 
-The runner starts an isolated local preview serving only the frontend and in-memory API fixtures. It does not import FastAPI/llama.cpp, read your chats, load a model, or write application settings. Theme switching, preference persistence, draft/settings preservation, responsive layouts, and generation/stop behavior are checked against the same fixtures used for the screenshots. Failures return a nonzero exit status. Screenshots go to `docs/images/themes/`.
+The runner starts an isolated local preview serving the current frontend with in-memory API fixtures. It does not import FastAPI/llama.cpp, read your chats, load a model, or write application settings. Fixtures include a supported Qwen3 model, loaded runtime parameters, and stable message/request IDs. The checks exercise theme switching, preference persistence, draft/settings preservation, model states, grouped Options, responsive layouts, and generation/stop behavior. Failures return a nonzero exit status.
+
+`--screenshots` writes 14 captures to `docs/images/themes/`: six desktop light/dark theme views, three dark empty states, two mobile views, desktop appearance settings, and Claude's Options/model menus. Capture uses separate browser contexts from the interaction checks so test edits stay out of the gallery. The README embeds the six themes and composer menus.
 
 The browser binaries live in the ignored `.playwright-browsers/` directory. The runner uses that directory by default and respects an explicitly set `PLAYWRIGHT_BROWSERS_PATH`.
 
+If Microsoft Edge is already installed, use `--channel msedge` to run with that browser instead of downloading Chromium:
+
+```powershell
+.\.venv\Scripts\python.exe local_llm_playground/scripts/check_themes.py --channel msedge --screenshots
+```
+
 Screenshot conversations and token metrics are sample data, not model benchmark results. Inspect the captures after changing layout, typography, or color values; automated checks alone cannot establish visual similarity.
 
-Additional captures: [Claude on mobile](images/themes/claude-dark-mobile.png), [GitHub Copilot on mobile](images/themes/github-copilot-dark-mobile.png), and [appearance settings](images/themes/chatgpt-dark-settings.png).
+Additional captures: [grouped response options](images/themes/claude-dark-options.png), [model selection](images/themes/claude-dark-model.png), [Claude on mobile](images/themes/claude-dark-mobile.png), [GitHub Copilot on mobile](images/themes/github-copilot-dark-mobile.png), and [appearance settings](images/themes/chatgpt-dark-settings.png).
 
 ## Reference scope
 

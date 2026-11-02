@@ -75,20 +75,25 @@ python local_llm_playground/main.py
 - ♻️ Replaces only an older playground instance on port `8000`
 - 🛡️ Refuses to stop unrelated applications using that port
 
+Choose **ChatGPT**, **Claude**, or **GitHub Copilot** layouts in light or dark mode, with Local LLM Playground branding. Each theme has its own JSON/CSS configuration for names, wording, logos, colors, and placement.
+
+![Local LLM Playground in the Claude dark theme](local_llm_playground/docs/images/themes/claude-dark.png)
+
+*Playwright capture of the current frontend with sample conversation data; the displayed metrics are illustrative.*
+
 The interface provides:
 
-- 🤖 Model switching beside the prompt
-- 🌊 Streaming with Stop, Copy, Regenerate, and Continue
-- 💭 Timed, expandable model reasoning on every response
-- 💬 Searchable JSONL conversation history
-- 🧠 Optional system prompt and thinking control
-- 🌡️ Temperature and advanced sampling controls
-- 📊 Context, first-token latency, speed, and output metrics
-- 📱 Responsive layout with an always-visible prompt
+- 🤖 Explicit model selection and loading, with visible Thinking support
+- 🌊 Streaming with Stop, Copy, Retry, Regenerate in a new chat, and Continue
+- 💭 Collapsed reasoning when returned, plus expandable response details
+- 💬 Searchable JSONL history and per-chat drafts restored after refresh
+- ⚙️ Grouped response options, per-chat preferences, and explicit saved defaults
+- 📊 Context usage, first-token latency, speed, and token metrics
+- 📱 Responsive layouts, keyboard shortcuts, and an always-visible composer
+- ♾️ No fixed output-token limit; generation stops at EOS, context boundary, interruption, or error
+- 🧼 Direct local chat without agent tools, RAG, project context, or hidden prompts
 
-- ♾️ No fixed output-token limit
-- 🛑 Stops at model EOS, context boundary, interruption, or error
-- 🧼 No agent tools, RAG, project context, or hidden prompts
+See the [Playground README and six-theme gallery](local_llm_playground/README.md), [theme customization guide](local_llm_playground/docs/themes.md), and [chat behavior guide](local_llm_playground/docs/usability.md).
 
 ## 💡 Example prompts
 
