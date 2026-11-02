@@ -24,6 +24,7 @@ DATA = ROOT / "data"
 CHATS = DATA / "chats"
 LOGS = ROOT / "logs"
 CONFIG = DATA / "config.json"
+MODEL_CAPABILITIES = ROOT / "model_capabilities.json"
 for directory in (CHATS, LOGS):
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -36,6 +37,7 @@ logging.basicConfig(
               logging.StreamHandler()],
 )
 logger = logging.getLogger("playground")
+settings_lock = threading.Lock()
 
 DEFAULTS = {
     "model_path": "",
@@ -49,6 +51,7 @@ DEFAULTS = {
     "repeat_penalty": 1.0,
     "seed": -1,
     "thinking": False,
+    "system_prompt": "",
 }
 
 
@@ -57,13 +60,32 @@ def read_config() -> dict:
         loaded = json.loads(CONFIG.read_text(encoding="utf-8"))
     except Exception:
         loaded = {}
-    return {**DEFAULTS, **loaded}
+    return {**DEFAULTS, **(loaded if isinstance(loaded, dict) else {})}
 
 
 def write_config(values: dict) -> dict:
-    config = {**read_config(), **values}
-    CONFIG.write_text(json.dumps(config, indent=2), encoding="utf-8")
-    return config
+    with settings_lock:
+        config = {**read_config(), **values}
+        temporary = CONFIG.with_name(f".{CONFIG.name}.{uuid.uuid4().hex}.tmp")
+        try:
+            temporary.write_text(json.dumps(config, indent=2), encoding="utf-8")
+            temporary.replace(CONFIG)
+        finally:
+            temporary.unlink(missing_ok=True)
+        return config
+
+
+def thinking_support(model_path: str) -> str:
+    """Explicit support for this app's /think and /no_think soft switch."""
+    try:
+        entries = json.loads(MODEL_CAPABILITIES.read_text(encoding="utf-8"))
+        if not isinstance(entries, dict):
+            return "unknown"
+        name = Path(model_path.replace("\\", "/")).name.casefold()
+        value = next((value for key, value in entries.items() if key.casefold() == name), "unknown")
+        return value if isinstance(value, str) and value in {"supported", "unsupported", "unknown"} else "unknown"
+    except (OSError, ValueError):
+        return "unknown"
 
 
 def chat_path(chat_id: str) -> Path:
@@ -97,6 +119,7 @@ def chat_view(chat_id: str) -> dict:
     settings = {}
     messages = []
     generation_request = None
+    branch_of = None
     created_at = events[0].get("time", "") if events else ""
     for index, event in enumerate(events):
         kind = event.get("type")
@@ -104,6 +127,8 @@ def chat_view(chat_id: str) -> dict:
             title = event.get("title", title)
         elif kind == "settings":
             settings.update(event.get("values", {}))
+        elif kind == "branched":
+            branch_of = {"chat_id": event["chat_id"], "message_id": event["message_id"]}
         elif kind == "user":
             generation_request = {
                 key: value for key, value in settings.items()
@@ -113,9 +138,9 @@ def chat_view(chat_id: str) -> dict:
                 "message": event.get("content", ""),
                 "request_id": event.get("request_id") or f"legacy-{index}",
             })
-            messages.append({**event, "request": generation_request})
+            messages.append({**event, "id": generation_request["request_id"], "request": generation_request})
         elif kind == "assistant":
-            messages.append({**event, "request": generation_request})
+            messages.append({**event, "id": event.get("message_id") or f"legacy-{index}", "request": generation_request})
     return {
         "id": chat_id,
         "title": title,
@@ -123,6 +148,7 @@ def chat_view(chat_id: str) -> dict:
         "updated_at": events[-1].get("time", created_at) if events else created_at,
         "settings": settings,
         "messages": messages,
+        "branch_of": branch_of,
     }
 
 
@@ -133,15 +159,16 @@ class ModelRuntime:
         self.model_path = ""
         self.status = "not_loaded"
         self.error = ""
+        self.loaded_settings = {}
         self.cancel = threading.Event()
         self.generation_lock = threading.Lock()
 
-    def load(self, settings: dict) -> None:
-        if self.generation_lock.locked():
-            raise HTTPException(409, "Stop generation before changing model")
+    def load(self, settings: dict, remember: bool = False) -> dict:
         path = Path(str(settings["model_path"])).expanduser().resolve()
         if not path.is_file() or path.suffix.lower() != ".gguf":
             raise HTTPException(400, "Select a valid GGUF model")
+        if not self.generation_lock.acquire(blocking=False):
+            raise HTTPException(409, "Stop generation before changing model")
         self.status = "loading"
         self.error = ""
         started = time.perf_counter()
@@ -156,14 +183,30 @@ class ModelRuntime:
                 verbose=False,
             )
             self.model_path = str(path)
+            self.loaded_settings = {key: settings[key] for key in ("context_size", "gpu_layers", "threads")}
+            self.loaded_settings["model_path"] = str(path)
             self.status = "ready"
+            remembered = True
+            if remember:
+                try:
+                    write_config(self.loaded_settings)
+                except OSError:
+                    logger.exception("Model loaded but loading settings could not be remembered")
+                    remembered = False
             logger.info("Model loaded in %.2fs: %s", time.perf_counter() - started, path)
+            return {"status": "ready", "model_path": self.model_path, "error": "",
+                    "thinking_support": thinking_support(self.model_path),
+                    "loaded_settings": dict(self.loaded_settings), "load_settings_saved": remembered}
         except Exception as error:
             self.llm = None
+            self.model_path = ""
+            self.loaded_settings = {}
             self.status = "error"
             self.error = str(error)
             logger.exception("Model load failed")
             raise HTTPException(500, str(error)) from error
+        finally:
+            self.generation_lock.release()
 
 
 runtime = ModelRuntime()
@@ -178,19 +221,7 @@ class LoadRequest(BaseModel):
     threads: int = Field(DEFAULTS["threads"], ge=1, le=256)
 
 
-class ChatCreate(BaseModel):
-    system_prompt: str = ""
-    thinking: bool = False
-    temperature: float = Field(0.0, ge=0.0, le=2.0)
-
-
-class ChatUpdate(BaseModel):
-    title: str = Field(min_length=1, max_length=100)
-
-
-class GenerateRequest(BaseModel):
-    message: str = Field(min_length=1)
-    request_id: str | None = Field(None, min_length=1, max_length=80, pattern=r"^[\w-]+$")
+class ResponseSettings(BaseModel):
     system_prompt: str = ""
     thinking: bool = False
     temperature: float = Field(0.0, ge=0.0, le=2.0)
@@ -199,6 +230,40 @@ class GenerateRequest(BaseModel):
     min_p: float = Field(0.05, ge=0.0, le=1.0)
     repeat_penalty: float = Field(1.0, ge=0.0, le=2.0)
     seed: int = -1
+
+
+class ChatCreate(ResponseSettings):
+    pass
+
+
+class ChatUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=100)
+
+
+class BranchRequest(BaseModel):
+    message_id: str = Field(min_length=1, max_length=100)
+
+
+class SettingsUpdate(BaseModel):
+    model_config = {"extra": "forbid"}
+    model_path: str | None = None
+    context_size: int | None = Field(None, ge=256, le=131072)
+    gpu_layers: int | None = Field(None, ge=-1, le=1000)
+    threads: int | None = Field(None, ge=1, le=256)
+    system_prompt: str | None = None
+    thinking: bool | None = None
+    temperature: float | None = Field(None, ge=0.0, le=2.0)
+    top_p: float | None = Field(None, ge=0.0, le=1.0)
+    top_k: int | None = Field(None, ge=0, le=1000)
+    min_p: float | None = Field(None, ge=0.0, le=1.0)
+    repeat_penalty: float | None = Field(None, ge=0.0, le=2.0)
+    seed: int | None = None
+
+
+class GenerateRequest(ResponseSettings):
+    message: str = Field(min_length=1)
+    request_id: str | None = Field(None, min_length=1, max_length=80, pattern=r"^[\w-]+$")
+    expected_model_path: str | None = Field(None, min_length=1)
 
 
 def event(data: dict) -> str:
@@ -212,9 +277,12 @@ def index() -> FileResponse:
 
 @app.get("/api/status")
 def status() -> dict:
+    model_path = runtime.model_path if runtime.llm is not None else ""
     return {
-        "status": "generating" if runtime.generation_lock.locked() else runtime.status,
-        "model_path": runtime.model_path,
+        "status": runtime.status if runtime.status == "loading" else "generating" if runtime.generation_lock.locked() else runtime.status,
+        "model_path": model_path,
+        "thinking_support": thinking_support(model_path) if model_path else "unknown",
+        "loaded_settings": runtime.loaded_settings if model_path else {},
         "error": runtime.error,
     }
 
@@ -224,7 +292,8 @@ def models() -> list[dict]:
     return [{
         "path": str(path.resolve()),
         "name": path.name,
-        "size": path.stat().st_size
+        "size": path.stat().st_size,
+        "thinking_support": thinking_support(str(path)),
     } for path in sorted((PROJECT_ROOT / "models").glob("*.gguf"))]
 
 
@@ -234,17 +303,14 @@ def get_settings() -> dict:
 
 
 @app.patch("/api/settings")
-def save_settings(values: dict) -> dict:
-    allowed = set(DEFAULTS)
-    return write_config({key: value for key, value in values.items() if key in allowed})
+def save_settings(values: SettingsUpdate) -> dict:
+    return write_config(values.model_dump(exclude_unset=True, exclude_none=True))
 
 
 @app.post("/api/model/load")
 def load_model(request: LoadRequest) -> dict:
     values = request.model_dump()
-    runtime.load(values)
-    write_config(values)
-    return {"status": runtime.status, "model_path": runtime.model_path}
+    return runtime.load(values, remember=True)
 
 
 @app.get("/api/chats")
@@ -263,13 +329,44 @@ def list_chats() -> list[dict]:
 def create_chat(request: ChatCreate) -> dict:
     chat_id = str(uuid.uuid4())
     append_event(chat_id, {"type": "created", "title": "New chat"})
-    append_event(chat_id, {"type": "settings", "values": request.model_dump()})
+    defaults = {key: value for key, value in read_config().items() if key in ResponseSettings.model_fields}
+    values = ResponseSettings(**{**defaults, **request.model_dump(exclude_unset=True)}).model_dump()
+    append_event(chat_id, {"type": "settings", "values": values})
     return chat_view(chat_id)
 
 
 @app.get("/api/chats/{chat_id}")
 def get_chat(chat_id: str) -> dict:
     return chat_view(chat_id)
+
+
+@app.post("/api/chats/{chat_id}/branch")
+def branch_chat(chat_id: str, request: BranchRequest) -> dict:
+    source = chat_view(chat_id)
+    target = next((index for index, item in enumerate(source["messages"])
+                   if item["id"] == request.message_id and item["type"] == "assistant"), None)
+    if target is None:
+        raise HTTPException(404, "Response not found")
+    if source["messages"][target].get("status", "complete") != "complete":
+        raise HTTPException(409, "Use Retry for a failed or stopped response")
+    user_index = next((index for index in range(target - 1, -1, -1)
+                       if source["messages"][index]["type"] == "user"), None)
+    if user_index is None:
+        raise HTTPException(409, "The response has no source prompt")
+    branch_id = str(uuid.uuid4())
+    append_event(branch_id, {"type": "created", "title": f"{source['title'][:85]} · Alternative"})
+    append_event(branch_id, {"type": "branched", "chat_id": chat_id, "message_id": request.message_id})
+    for item in source["messages"][:user_index + 1]:
+        if item["type"] == "user":
+            values = {key: value for key, value in item["request"].items() if key in ResponseSettings.model_fields}
+            append_event(branch_id, {"type": "settings", "values": values})
+        copied = {key: value for key, value in item.items() if key not in {"id", "request", "time"}}
+        if item["type"] == "user":
+            copied["request_id"] = item["request"]["request_id"]
+        else:
+            copied["message_id"] = item["id"]
+        append_event(branch_id, copied)
+    return chat_view(branch_id)
 
 
 @app.patch("/api/chats/{chat_id}")
@@ -304,6 +401,9 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
     runtime.cancel.clear()
     completed = None
     try:
+        if (request.expected_model_path is not None
+                and Path(request.expected_model_path).expanduser().resolve() != Path(runtime.model_path).resolve()):
+            raise HTTPException(409, "The loaded model changed. Select and load the model you want, then try again.")
         chat = chat_view(chat_id)
         saved = chat["messages"]
         target = next((index for index, item in enumerate(saved)
@@ -315,7 +415,7 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
             if saved[target]["content"] != request.message.strip():
                 raise HTTPException(409, "This request ID belongs to a different prompt")
             # Retry the original response settings, even after reopening the chat.
-            request = GenerateRequest(**saved[target]["request"])
+            request = GenerateRequest(**{**saved[target]["request"], "expected_model_path": request.expected_model_path})
             completed = next((item for item in reversed(saved[target + 1:])
                               if item.get("status", "complete") == "complete"), None)
 
@@ -335,15 +435,20 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
                         {"role": "assistant", "content": item.get("content", "")},
                     ])
                     pending_user = None
-            directive = "/think" if request.thinking else "/no_think"
+            support = thinking_support(runtime.model_path)
+            thinking_enabled = support == "supported" and request.thinking
+            effective_message = visible_message
+            if support == "supported":
+                directive = "/think" if thinking_enabled else "/no_think"
+                effective_message += f"\n\n{directive}"
             messages = []
             if request.system_prompt.strip():
                 messages.append({"role": "system", "content": request.system_prompt.strip()})
             system_count = len(messages)
             messages.extend(history)
-            messages.append({"role": "user", "content": f"{visible_message}\n\n{directive}"})
+            messages.append({"role": "user", "content": effective_message})
 
-            context_size = int(read_config()["context_size"])
+            context_size = int(runtime.loaded_settings.get("context_size") or read_config()["context_size"])
             trimmed_messages = 0
             while len(messages) > system_count + 1:
                 estimated = len(runtime.llm.tokenize(json.dumps(messages).encode("utf-8")))
@@ -352,7 +457,7 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
                 del messages[system_count:system_count + 2]
                 trimmed_messages += 2
 
-            settings = request.model_dump(exclude={"message", "request_id"})
+            settings = request.model_dump(exclude={"message", "request_id", "expected_model_path"})
             settings["model"] = runtime.model_path
             append_event(chat_id, {"type": "settings", "values": settings})
             if target is None:
@@ -370,7 +475,7 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
         runtime.generation_lock.release()
 
         def replay() -> Iterator[str]:
-            yield event({"type": "start"})
+            yield event({"type": "start", "message_id": completed["id"]})
             yield event({"type": "token", "text": completed.get("content", "")})
             yield event({"type": "done", "metrics": completed.get("metrics")})
 
@@ -424,7 +529,8 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
                 "context_size": context_size,
                 "context_used": prompt_tokens + completion_tokens,
                 "temperature": request.temperature,
-                "thinking": request.thinking,
+                "thinking": thinking_enabled,
+                "thinking_support": support,
                 "model": Path(runtime.model_path).name,
             }
             append_event(
@@ -434,6 +540,7 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
                     "content": response,
                     "status": "interrupted" if stopped else "complete",
                     "request_id": request_id,
+                    "message_id": message_id,
                     "metrics": metrics,
                 },
             )
@@ -443,6 +550,7 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
             append_event(chat_id, {
                 "type": "assistant", "content": response, "status": "interrupted",
                 "request_id": request_id,
+                "message_id": message_id,
             })
             raise
         except Exception as error:
@@ -452,6 +560,7 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
                 "content": response,
                 "status": "error",
                 "request_id": request_id,
+                "message_id": message_id,
                 "error": str(error)
             })
             terminal = {"type": "error", "message": str(error)}

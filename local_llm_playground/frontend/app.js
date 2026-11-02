@@ -2,7 +2,7 @@ import { initThemes, text, refreshThemeContent } from "./theme.js";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
-  "sidebar sidebarClose chatList chatSearch newChat statusDot statusText activeModel modelMeta messages welcome prompt sendButton stopButton composerStatus contextBar contextLabel settingsButton settingsPanel closeSettings overlay toast menuButton modelSelect quickModelSelect quickLoadModel customModel contextSize gpuLayers threads loadModel systemPrompt systemSummary systemPreset thinking quickThinking thinkingState temperature temperatureNumber topP topK minP repeatPenalty seed resetSettings optionsButton optionsPopover composerSettingsSlot modelPickerButton modelPopover modelPickerLabel modelReady selectedModelPath modelSettingsButton contextButton contextPopover contextSummary contextWarning"
+  "sidebar sidebarClose chatList chatSearch newChat statusDot statusText activeModel modelMeta messages welcome prompt sendButton stopButton composerStatus contextBar contextLabel settingsButton settingsPanel closeSettings overlay toast menuButton modelSelect quickModelSelect quickLoadModel customModel chooseDetectedModel contextSize gpuLayers threads loadModel systemPrompt systemSummary systemPreset thinking quickThinking thinkingState thinkingControl thinkingHelp thinkingSupportHelp temperature temperatureNumber topP topK minP repeatPenalty seed resetSettings saveResponseDefaults responseSettingsStatus responseSettingsError responseScope modelReloadNotice modelMenuReloadNotice optionsButton optionsPopover composerSettingsSlot modelPickerButton modelPopover modelPickerLabel modelReady selectedModelPath selectedModelState loadedModelInfo modelThinkingSupport menuLoadModel modelMenuError modelLoadError modelSettingsButton contextButton contextPopover contextSummary contextWarning"
     .split(" ").map((id) => [id, $(id)])
 );
 
@@ -15,6 +15,17 @@ let conversationChars = 0;
 let generationTimer = null;
 let loadedModelPath = "";
 let loadingModel = false;
+let runtimeStatus = "not_loaded";
+let runtimeRefreshTimer = null;
+let availableModels = [];
+let loadedThinkingSupport = "unknown";
+let loadedModelSettings = {};
+let thinkingPreference = false;
+let responseDefaults = { ...defaults, system_prompt: "", thinking: false };
+let responseSettingsBaseline = "";
+let responseSettingsTimer = null;
+let responseRevision = 0;
+let composingPrompt = false;
 let lastStatus = { status: "not_loaded", detail: "" };
 let settingsReturnFocus = null;
 let sidebarExpanded = true;
@@ -23,6 +34,7 @@ let lastContext = null;
 const composerPopovers = [[ui.optionsPopover, ui.optionsButton], [ui.modelPopover, ui.modelPickerButton], [ui.contextPopover, ui.contextButton]];
 const DRAFT_PREFIX = "playground.draft.v1:";
 const ACTIVE_CHAT_KEY = "playground.activeChat.v1";
+const RESPONSE_PREFIX = "playground.responseSettings.v1:";
 const draftCache = new Map();
 const browserStateErrors = new Map();
 let draftSaveTimer = null;
@@ -31,6 +43,82 @@ let promptRevision = 0;
 let chatNavigation = 0;
 
 function draftKey(id = activeChat) { return DRAFT_PREFIX + (id || "new"); }
+function responseKey(id = activeChat) { return RESPONSE_PREFIX + (id || "new"); }
+function responseInputIds() { return ["temperatureNumber", "topP", "topK", "minP", "repeatPenalty", "seed"]; }
+
+function serializeResponseSettings() {
+  const values = generationValues();
+  if (!validateResponseSettings()) values._inputs = Object.fromEntries(responseInputIds().map(id => [id, ui[id].value]));
+  return JSON.stringify(values);
+}
+
+function validateResponseSettings(report = false) {
+  const fields = responseInputIds().map(id => ui[id]);
+  const invalid = fields.find(field => !field.checkValidity());
+  fields.forEach(field => field.setAttribute("aria-invalid", String(!field.checkValidity())));
+  if (report && invalid) {
+    ui.responseSettingsError.hidden = false;
+    ui.responseSettingsError.textContent = text("invalidResponseSettings");
+    if (ui.settingsPanel.hidden && !ui.optionsPopover.matches(":popover-open")) ui.optionsPopover.showPopover();
+    if ([ui.topP, ui.topK, ui.minP, ui.repeatPenalty, ui.seed].includes(invalid)) $("advancedOptions").open = true;
+    invalid.focus(); invalid.reportValidity();
+  }
+  if (!invalid) ui.responseSettingsError.hidden = true;
+  return !invalid;
+}
+
+function showResponseStatus(key) {
+  if (ui.responseSettingsStatus.dataset.text !== key) {
+    ui.responseSettingsStatus.dataset.text = key;
+    ui.responseSettingsStatus.textContent = text(key);
+  }
+  ui.responseSettingsStatus.classList.toggle("danger", key === "defaultsSaveFailed");
+}
+
+function saveResponseSettings() {
+  clearTimeout(responseSettingsTimer); responseSettingsTimer = null;
+  const value = serializeResponseSettings();
+  if (value !== responseSettingsBaseline || browserStateErrors.get(responseKey()) === "write") {
+    writeBrowserState(responseKey(), value);
+    responseSettingsBaseline = value;
+  }
+}
+
+function responseSettingsChanged() {
+  responseRevision++;
+  updateLabels();
+  showResponseStatus("responseScopeHelp");
+  clearTimeout(responseSettingsTimer);
+  responseSettingsTimer = setTimeout(saveResponseSettings, 250);
+  validateResponseSettings();
+}
+
+function restoreResponseSettings(settings = responseDefaults) {
+  let saved = null;
+  try { saved = JSON.parse(readBrowserState(responseKey())); } catch (_) {}
+  const base = { ...(activeChat ? { ...defaults, system_prompt: "", thinking: false } : responseDefaults), ...settings };
+  applySettings({ ...base, ...(saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {}) });
+  if (saved?._inputs) for (const id of responseInputIds()) if (typeof saved._inputs[id] === "string") ui[id].value = saved._inputs[id];
+  responseSettingsBaseline = serializeResponseSettings();
+  showResponseStatus("responseScopeHelp");
+}
+
+function saveWorkspaceState() { saveDraft(); saveResponseSettings(); }
+
+async function saveResponseDefaults() {
+  if (!validateResponseSettings(true) || ui.saveResponseDefaults.disabled) return;
+  const values = generationValues();
+  const revision = responseRevision;
+  ui.saveResponseDefaults.disabled = true;
+  showResponseStatus("savingDefaults");
+  try {
+    await api("/api/settings", { method: "PATCH", body: JSON.stringify(values) });
+    responseDefaults = { ...values };
+    saveResponseSettings();
+    showResponseStatus(responseRevision === revision ? "defaultsSaved" : "defaultsSavedEarlier");
+  } catch (_) { showResponseStatus("defaultsSaveFailed"); }
+  finally { ui.saveResponseDefaults.disabled = false; }
+}
 
 function readBrowserState(key) {
   if (browserStateErrors.get(key) === "write") return draftCache.get(key);
@@ -80,21 +168,26 @@ function restoreDraft() {
 }
 
 function activateChat(id, transferDraft = false) {
-  saveDraft();
+  saveWorkspaceState();
   const previousKey = draftKey();
+  const previousResponseKey = responseKey();
+  const responseSnapshot = serializeResponseSettings();
   const value = ui.prompt.value;
   activeChat = id;
   if (transferDraft && writeBrowserState(draftKey(), value || null)) writeBrowserState(previousKey, null);
+  if (transferDraft && responseSnapshot && writeBrowserState(responseKey(), responseSnapshot)) writeBrowserState(previousResponseKey, null);
   writeBrowserState(ACTIVE_CHAT_KEY, id || "new");
   restoreDraft();
+  updateLabels();
 }
 
 function initDrafts() {
   const selected = readBrowserState(ACTIVE_CHAT_KEY);
   activeChat = selected && selected !== "new" ? selected : null;
   restoreDraft();
-  window.addEventListener("pagehide", saveDraft);
-  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveDraft(); });
+  restoreResponseSettings();
+  window.addEventListener("pagehide", saveWorkspaceState);
+  document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveWorkspaceState(); });
 }
 
 function closeComposerPopovers() {
@@ -121,7 +214,7 @@ function positionComposerPopovers() {
 
 function initComposerPopovers() {
   // Reuse the live Settings sections; comments mark their original positions.
-  const groups = ["conversationOptions", "generationOptions", "advancedOptions"].map(id => {
+  const groups = ["conversationOptions", "generationOptions", "advancedOptions", "responsePreferences"].map(id => {
     const section = $(id);
     const home = document.createComment(id);
     section.before(home);
@@ -157,17 +250,87 @@ function readableModelName(path) {
     .replace(/-(\d+(?:\.\d+)?B)(?=-|$)/ig, " · $1");
 }
 
+function selectedModelPath() { return ui.customModel.value.trim() || ui.quickModelSelect.value; }
+
+function selectedThinkingSupport() {
+  const support = runtimeModelMatchesSelection() ? loadedThinkingSupport
+    : availableModels.find(model => model.path === selectedModelPath())?.thinking_support;
+  return ["supported", "unsupported"].includes(support) ? support : "unknown";
+}
+
+function updateThinkingControls() {
+  const support = selectedThinkingSupport();
+  const selected = Boolean(selectedModelPath());
+  const supported = selected && support === "supported";
+  const helpKey = !selected ? "thinkingNoModel" : support === "supported" ? "thinkingHelp"
+    : support === "unsupported" ? "thinkingUnsupportedHelp" : "thinkingUnknownHelp";
+  const help = text(helpKey);
+  ui.thinking.checked = ui.quickThinking.checked = supported && thinkingPreference;
+  ui.thinking.disabled = ui.quickThinking.disabled = !supported || loadingModel || runtimeStatus === "loading";
+  ui.thinkingState.textContent = text(!selected ? "thinkingUnavailable"
+    : support === "unknown" ? "thinkingUnknown" : support === "unsupported" ? "thinkingUnavailable"
+    : thinkingPreference ? "thinkingOn" : "thinkingOff");
+  ui.thinkingHelp.textContent = ui.thinkingSupportHelp.textContent = help;
+  ui.thinkingControl.title = ui.quickThinking.title = ui.thinking.title = help;
+  ui.thinkingControl.dataset.support = supported ? "supported" : support;
+  ui.modelThinkingSupport.textContent = text(`thinkingSupport_${support}`);
+}
+
+function showModelError(message = "") {
+  for (const node of [ui.modelMenuError, ui.modelLoadError]) {
+    node.textContent = message; node.hidden = !message;
+  }
+}
+
+function modelSettingsPending() {
+  return Boolean(loadedModelPath) && (!runtimeModelMatchesSelection()
+    || ["context_size", "gpu_layers", "threads"].some((key, index) => loadedModelSettings[key] !== undefined
+      && Number([ui.contextSize, ui.gpuLayers, ui.threads][index].value) !== Number(loadedModelSettings[key])));
+}
+
 function updateModelPicker() {
-  const path = ui.customModel.value.trim() || ui.quickModelSelect.value;
+  const path = selectedModelPath();
   const matched = runtimeModelMatchesSelection();
+  const pending = modelSettingsPending();
+  const isLoading = loadingModel || runtimeStatus === "loading";
+  const busy = isLoading || generating || runtimeStatus === "generating";
+  const state = isLoading ? "loading" : matched ? "loaded" : path ? "selectedNotLoaded" : "not_loaded";
   ui.modelPickerLabel.textContent = path ? readableModelName(path) : text("selectModel");
-  ui.modelPickerButton.setAttribute("aria-label", text("modelPickerDescription", { model: ui.modelPickerLabel.textContent, state: text(loadingModel ? "loading" : matched ? "loaded" : "not_loaded") }));
+  ui.modelPickerButton.setAttribute("aria-label", text("modelPickerDescription", { model: ui.modelPickerLabel.textContent, state: text(state) }));
   ui.modelPickerButton.title = path || text("selectModel");
   ui.selectedModelPath.textContent = path;
-  ui.modelReady.hidden = !matched || loadingModel;
-  ui.modelPickerButton.disabled = loadingModel || generating;
-  ui.quickLoadModel.hidden = matched && !loadingModel;
-  ui.quickLoadModel.textContent = text(loadingModel ? "loading" : "load");
+  ui.quickModelSelect.hidden = Boolean(ui.customModel.value.trim());
+  ui.chooseDetectedModel.hidden = !ui.quickModelSelect.hidden;
+  ui.selectedModelState.textContent = text(state);
+  ui.selectedModelState.dataset.state = state;
+  ui.loadedModelInfo.textContent = loadedModelPath ? text("currentlyLoaded", { model: readableModelName(loadedModelPath) }) : text("noModel");
+  ui.loadedModelInfo.title = loadedModelPath;
+  ui.loadedModelInfo.hidden = matched;
+  ui.modelReady.hidden = !matched || isLoading;
+  ui.modelPickerButton.disabled = busy;
+  ui.modelSelect.disabled = ui.quickModelSelect.disabled = ui.customModel.disabled = busy;
+  ui.quickLoadModel.hidden = !path || (matched && !isLoading && !pending);
+  ui.quickLoadModel.textContent = text(isLoading ? "loading" : matched && pending ? "reload" : "load");
+  ui.menuLoadModel.hidden = matched && !isLoading && !pending;
+  ui.menuLoadModel.textContent = text(isLoading ? "loading" : matched && pending ? "reloadModel" : "loadSelectedModel");
+  ui.loadModel.textContent = text(matched && pending ? "reloadModel" : "loadModel");
+  for (const notice of [ui.modelReloadNotice, ui.modelMenuReloadNotice]) {
+    notice.hidden = !pending;
+    notice.textContent = text("modelReloadHelp");
+  }
+  ui.quickLoadModel.disabled = ui.menuLoadModel.disabled = ui.loadModel.disabled = busy || !path;
+  ui.sendButton.disabled = busy || runtimeStatus !== "ready" || !matched;
+  const sendHelp = busy ? text(isLoading ? "loading" : "generating") : !path ? text("selectModel") : !matched ? text("loadSelectedFirst")
+    : text("sendWithModel", { model: readableModelName(loadedModelPath) });
+  ui.sendButton.title = sendHelp;
+  ui.sendButton.setAttribute("aria-label", sendHelp);
+  const detail = lastStatus.detail;
+  const label = typeof detail === "object" ? text(detail.key, detail.values) : detail || text(lastStatus.status);
+  const needsLoad = !busy && !matched && ["ready", "not_loaded"].includes(lastStatus.status);
+  ui.composerStatus.textContent = needsLoad ? path ? text("loadSelectedFirst") : text("selectModel")
+    : !busy && pending && lastStatus.status === "ready" ? text("readyReloadPending") : label;
+  ui.composerStatus.dataset.status = needsLoad ? "not_loaded" : lastStatus.status;
+  updateThinkingControls();
 }
 
 function resetMessages() {
@@ -186,10 +349,16 @@ async function api(url, options = {}) {
   const response = await fetch(url, { cache: "no-store", headers: { "Content-Type": "application/json" }, ...options });
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
-    try { message = (await response.json()).detail || message; } catch (_) {}
+    try { message = errorDetail((await response.json()).detail, message); } catch (_) {}
     throw new Error(message);
   }
   return response.json();
+}
+
+function errorDetail(detail, fallback) {
+  if (typeof detail === "string") return detail;
+  if (Array.isArray(detail)) return detail.map(item => `${item.loc?.at(-1) || "setting"}: ${item.msg}`).join("; ");
+  return fallback;
 }
 
 function escapeHtml(value) {
@@ -237,7 +406,7 @@ function attachCopyButtons(container) {
   });
 }
 
-function messageElement(role, content = "", metrics = null, status = "complete", sourcePrompt = "", request = null, error = "") {
+function messageElement(role, content = "", metrics = null, status = "complete", sourcePrompt = "", request = null, error = "", messageId = "") {
   document.body.dataset.chatState = "active";
   const wrapper = document.createElement("article");
   wrapper.className = `message ${role}`;
@@ -246,13 +415,16 @@ function messageElement(role, content = "", metrics = null, status = "complete",
     wrapper.firstElementChild.textContent = content;
   } else {
     wrapper.generationRequest = request;
-    wrapper.innerHTML = `<div class="assistant-head"><img class="assistant-icon" data-brand-logo alt=""><span data-text="assistantName"></span></div><div class="thinking-slot"></div><div class="content"></div><div class="response-notice" hidden></div><div class="metrics"></div><div class="message-actions"><button class="copy-response"><span data-icon="copy"></span><span data-text="copy"></span></button><button class="regenerate"><span data-icon="regenerate"></span><span data-text="regenerate"></span></button><button class="continue-response"><span data-icon="continue"></span><span data-text="continue"></span></button></div>`;
+    wrapper.messageId = messageId;
+    wrapper.innerHTML = `<div class="assistant-head"><img class="assistant-icon" data-brand-logo alt=""><span data-text="assistantName"></span></div><div class="thinking-slot"><details class="thinking-box" hidden><summary></summary><div class="thinking-content"></div></details></div><div class="response-progress" role="status" hidden></div><div class="content"></div><div class="response-notice" hidden></div><details class="response-details" hidden><summary data-text="responseDetails"></summary><div class="metrics"></div></details><div class="message-actions"><button class="copy-response"><span data-icon="copy"></span><span data-text="copy"></span></button><button class="regenerate"><span data-icon="regenerate"></span><span data-text="regenerate"></span></button><button class="continue-response"><span data-icon="continue"></span><span data-text="continue"></span></button></div>`;
     wrapper.querySelector(".copy-response").onclick = async () => { await navigator.clipboard.writeText(wrapper.dataset.raw || ""); showToast(text("copiedResponse")); };
     wrapper.querySelector(".regenerate").onclick = () => {
+      if (wrapper.querySelector(".regenerate").disabled) return;
       const retry = ["error", "interrupted"].includes(wrapper.dataset.status);
-      return send(sourcePrompt || lastUserMessage, retry ? wrapper.generationRequest : null);
+      if (retry) return send(sourcePrompt || lastUserMessage, wrapper.generationRequest);
+      return send(wrapper.generationRequest.message, wrapper.generationRequest, { chatId: activeChat, messageId: wrapper.messageId });
     };
-    wrapper.querySelector(".continue-response").onclick = () => send("Continue.");
+    wrapper.querySelector(".continue-response").onclick = () => { if (!wrapper.querySelector(".continue-response").disabled) return send("Continue."); };
     updateAssistant(wrapper, content, metrics, status, 0, error);
     refreshThemeContent(wrapper);
   }
@@ -264,14 +436,18 @@ function messageElement(role, content = "", metrics = null, status = "complete",
 
 function updateResponseActions() {
   const latest = [...ui.messages.querySelectorAll(".message")].at(-1);
+  const busy = generating || loadingModel || ["loading", "generating"].includes(runtimeStatus);
+  ui.newChat.disabled = generating;
+  ui.chatList.querySelectorAll(".delete-chat").forEach(button => { button.disabled = generating; });
   ui.messages.querySelectorAll(".assistant").forEach(element => {
     const retry = ["error", "interrupted"].includes(element.dataset.status);
     const available = element === latest && Boolean(element.generationRequest);
     const button = element.querySelector(".regenerate");
-    button.disabled = generating || (retry && !available);
-    button.title = retry ? text(available ? "retryHelp" : "retryLatestOnly") : "";
+    button.disabled = busy || (retry ? !available : !element.messageId || !element.generationRequest);
+    button.title = retry ? text(available ? "retryHelp" : "retryLatestOnly") : text(element.messageId ? "regenerateHelp" : "regenerateReopen");
     element.querySelector(".continue-response").hidden = retry;
-    element.querySelector(".continue-response").disabled = generating;
+    element.querySelector(".continue-response").disabled = busy || element !== latest || element.dataset.status !== "complete";
+    element.querySelector(".continue-response").title = text("continueLatest");
   });
 }
 
@@ -280,14 +456,18 @@ function updateAssistant(element, raw, metrics = null, status = "complete", live
   element.dataset.raw = raw;
   element.dataset.status = status;
   const parts = splitThinking(raw);
-  const thinkingSlot = element.querySelector(".thinking-slot");
   const duration = metrics?.total_seconds ?? liveSeconds;
   element.dataset.duration = workedFor(duration);
   const summary = text(status === "streaming" ? "working" : "worked", { duration: element.dataset.duration });
-  const reasoningKey = status === "streaming" ? "waitingReasoning" : "noReasoning";
-  const previous = thinkingSlot.querySelector("details");
-  const expanded = previous ? previous.open : status === "streaming" && Boolean(parts.thinking);
-  thinkingSlot.innerHTML = `<details class="thinking-box"${expanded ? " open" : ""}><summary>${escapeHtml(summary)}</summary><div class="thinking-content">${parts.thinking.trim() ? markdown(parts.thinking.trim()) : `<p data-text="${reasoningKey}">${escapeHtml(text(reasoningKey))}</p>`}</div></details>`;
+  element.querySelector(".thinking-box").hidden = !parts.thinking.trim();
+  element.querySelector(".thinking-box summary").textContent = summary;
+  const thinkingContent = element.querySelector(".thinking-content");
+  if (status === "streaming") thinkingContent.textContent = parts.thinking.trim();
+  else thinkingContent.innerHTML = markdown(parts.thinking.trim());
+  const progress = element.querySelector(".response-progress");
+  progress.hidden = status !== "streaming";
+  const progressLabel = text(element.dataset.started ? "generating" : "preparing");
+  if (progress.textContent !== progressLabel) progress.textContent = progressLabel;
   const content = element.querySelector(".content");
   if (status === "streaming") content.textContent = parts.answer;
   else {
@@ -300,27 +480,31 @@ function updateAssistant(element, raw, metrics = null, status = "complete", live
   notice.setAttribute("role", status === "error" ? "alert" : "status");
   notice.innerHTML = failed ? `<strong data-text="${status === "error" ? "responseFailed" : "responseStopped"}">${escapeHtml(text(status === "error" ? "responseFailed" : "responseStopped"))}</strong><p data-text="responseKept">${escapeHtml(text("responseKept"))}</p>${error ? `<details><summary data-text="errorDetails">${escapeHtml(text("errorDetails"))}</summary><p>${escapeHtml(error)}</p></details>` : ""}` : "";
   const metricsBox = element.querySelector(".metrics");
+  element.querySelector(".response-details").hidden = !metrics;
   if (metrics) {
     const values = [
-      `${metrics.first_token_seconds}s first token`, `${metrics.tokens_per_second} tok/s`,
-      `${metrics.prompt_tokens} prompt`, `${metrics.completion_tokens} output`,
-      `temp ${Number(metrics.temperature).toFixed(2)}`, metrics.thinking ? "thinking on" : "thinking off"
+      text("metricFirstToken", { value: metrics.first_token_seconds }), text("metricSpeed", { value: metrics.tokens_per_second }),
+      text("metricPrompt", { value: metrics.prompt_tokens }), text("metricOutput", { value: metrics.completion_tokens }),
+      text("temperature", { value: Number(metrics.temperature) }), text("thinkingMetric", {
+        state: text(metrics.thinking_support === "unknown" ? "thinkingUnknown"
+          : metrics.thinking_support === "unsupported" ? "thinkingUnavailable" : metrics.thinking ? "thinkingOn" : "thinkingOff") })
     ];
+    if (metrics.model) values.push(text("responseModel", { model: readableModelName(metrics.model) }));
     metricsBox.innerHTML = values.map((value) => `<span>${escapeHtml(value)}</span>`).join("");
   }
   element.querySelector(".message-actions")?.classList.toggle("hidden", status === "streaming");
   const retryLabel = element.querySelector(".regenerate [data-text]");
-  retryLabel.dataset.text = status === "error" || status === "interrupted" ? "retry" : "regenerate";
+  retryLabel.dataset.text = status === "error" || status === "interrupted" ? "retry" : "regenerateBranch";
   retryLabel.textContent = text(retryLabel.dataset.text);
   if (statusChanged) updateResponseActions();
 }
 
-function scrollDown() {
+function scrollDown(force = false) {
   const nearBottom = ui.messages.scrollHeight - ui.messages.scrollTop - ui.messages.clientHeight < 180;
-  if (nearBottom) requestAnimationFrame(() => ui.messages.scrollTop = ui.messages.scrollHeight);
+  if (force || nearBottom) requestAnimationFrame(() => ui.messages.scrollTop = ui.messages.scrollHeight);
 }
 
-function updateContext(used = Math.ceil(conversationChars / 4), limit = Number(ui.contextSize.value) || 4096, exact = false) {
+function updateContext(used = Math.ceil(conversationChars / 4), limit = Number(loadedModelSettings.context_size) || Number(ui.contextSize.value) || 4096, exact = false) {
   lastContext = { used, limit, exact };
   const percent = Math.min(100, Math.round((used / limit) * 100));
   ui.contextBar.style.width = `${percent}%`;
@@ -345,9 +529,6 @@ function setStatus(status, detail = "") {
   const label = typeof detail === "object" ? text(detail.key, detail.values) : detail || text(status);
   ui.statusText.textContent = label;
   ui.statusDot.className = `status-dot ${status === "ready" ? "ready" : status === "loading" || status === "generating" ? "busy" : status === "error" ? "error" : ""}`;
-  ui.composerStatus.textContent = label;
-  ui.composerStatus.dataset.status = status;
-  ui.sendButton.disabled = status !== "ready" || generating;
   updateModelPicker();
 }
 
@@ -388,8 +569,8 @@ function setSidebar(open) {
 function generationValues() {
   return {
     system_prompt: ui.systemPrompt.value,
-    thinking: ui.thinking.checked,
-    temperature: Number(ui.temperature.value),
+    thinking: thinkingPreference,
+    temperature: Number(ui.temperatureNumber.value),
     top_p: Number(ui.topP.value), top_k: Number(ui.topK.value), min_p: Number(ui.minP.value),
     repeat_penalty: Number(ui.repeatPenalty.value), seed: Number(ui.seed.value)
   };
@@ -397,7 +578,8 @@ function generationValues() {
 
 function applySettings(settings) {
   ui.systemPrompt.value = settings.system_prompt || "";
-  ui.thinking.checked = Boolean(settings.thinking);
+  ui.systemPreset.value = [...ui.systemPreset.options].some(option => option.value === ui.systemPrompt.value) ? ui.systemPrompt.value : "custom";
+  thinkingPreference = Boolean(settings.thinking);
   ui.temperature.value = settings.temperature ?? 0;
   ui.temperatureNumber.value = settings.temperature ?? 0;
   ui.topP.value = settings.top_p ?? .95; ui.topK.value = settings.top_k ?? 40;
@@ -407,22 +589,26 @@ function applySettings(settings) {
 }
 
 function updateLabels() {
-  // Settings remains the single value read by generationValues() and newChat().
-  ui.quickThinking.checked = ui.thinking.checked;
-  ui.thinkingState.textContent = text(ui.thinking.checked ? "thinkingOn" : "thinkingOff");
-  ui.quickThinking.title = text("thinkingHelp");
+  updateThinkingControls();
   const prompt = ui.systemPrompt.value.trim();
   ui.systemSummary.textContent = text("optionsCustom");
   ui.systemSummary.hidden = !prompt;
   ui.optionsButton.title = text("optionsHelp");
+  ui.responseScope.dataset.text = activeChat ? "responseScopeCurrent" : "responseScopeNew";
+  ui.responseScope.textContent = text(ui.responseScope.dataset.text);
 }
 
 async function loadInitial() {
+  saveWorkspaceState();
   const navigation = chatNavigation;
+  const initialResponseRevision = responseRevision;
+  const initialPromptRevision = promptRevision;
+  const preserveNewComposition = activeChat === null && (Boolean(ui.prompt.value) || readBrowserState(responseKey()) !== null);
   try {
     const [models, settings, status, chats] = await Promise.all([
       api("/api/models"), api("/api/settings"), api("/api/status"), api("/api/chats")
     ]);
+    availableModels = models;
     const modelOptions = models.length
       ? models.map((model) => `<option value="${escapeHtml(model.path)}">${escapeHtml(model.name)} · ${(model.size / 1073741824).toFixed(2)} GB</option>`).join("")
       : `<option value="">${escapeHtml(text("noModels"))}</option>`;
@@ -432,17 +618,20 @@ async function loadInitial() {
     else if (settings.model_path) ui.customModel.value = settings.model_path;
     ui.quickModelSelect.value = ui.modelSelect.value;
     ui.contextSize.value = settings.context_size; ui.gpuLayers.value = settings.gpu_layers; ui.threads.value = settings.threads;
-    applySettings(settings);
+    responseDefaults = { ...responseDefaults, ...Object.fromEntries(Object.keys(generationValues())
+      .filter(key => Object.hasOwn(settings, key)).map(key => [key, settings[key]])) };
+    if (responseRevision === initialResponseRevision) restoreResponseSettings(responseDefaults);
     updateContext();
     updateModelStatus(status, settings);
     allChats = chats;
     renderChatList();
-    if (navigation === chatNavigation) {
+    if (navigation === chatNavigation && !preserveNewComposition && !(activeChat === null
+        && (promptRevision !== initialPromptRevision || responseRevision !== initialResponseRevision))) {
       const selected = readBrowserState(ACTIVE_CHAT_KEY);
       const initialChat = chats.find(chat => chat.id === selected) || (selected === "new" ? null : chats[0]);
       if (initialChat) await openChat(initialChat.id);
-      else activateChat(null);
-    }
+      else { activateChat(null); restoreResponseSettings(); }
+    } else if (activeChat === null) writeBrowserState(ACTIVE_CHAT_KEY, "new");
     if (
       status.status === "not_loaded"
       && settings.model_path
@@ -452,12 +641,38 @@ async function loadInitial() {
 }
 
 function updateModelStatus(status, settings = {}) {
-  loadedModelPath = status.model_path || "";
+  clearTimeout(runtimeRefreshTimer); runtimeRefreshTimer = null;
+  runtimeStatus = status.status;
+  const previousPath = loadedModelPath;
+  const previousContext = loadedModelSettings.context_size;
+  loadedModelPath = ["error", "not_loaded"].includes(status.status) ? "" : status.model_path || "";
+  if (status.loaded_settings && typeof status.loaded_settings === "object") loadedModelSettings = { ...status.loaded_settings };
+  else if (settings.model_path === loadedModelPath) loadedModelSettings = { ...settings };
+  else if (previousPath !== loadedModelPath) loadedModelSettings = {};
+  if (!loadedModelPath) loadedModelSettings = {};
+  if (loadedModelSettings.context_size && Number(previousContext) !== Number(loadedModelSettings.context_size)) updateContext();
+  loadedThinkingSupport = status.thinking_support || "unknown";
   setStatus(status.status, status.error || "");
-  if (status.model_path) {
-    ui.activeModel.textContent = status.model_path.split(/[\\/]/).pop();
-    const size = ui.quickModelSelect.selectedOptions[0]?.textContent.split(" · ")[1] || "custom path";
-    ui.modelMeta.textContent = `${size} · ${settings.context_size || ui.contextSize.value} context · ${ui.gpuLayers.value} GPU layers`;
+  if (loadedModelPath) {
+    ui.activeModel.textContent = loadedModelPath.split(/[\\/]/).pop();
+    const model = availableModels.find(model => model.path === loadedModelPath);
+    const size = model ? `${(model.size / 1073741824).toFixed(2)} GB` : text("custom");
+    ui.modelMeta.textContent = text("loadedModelMeta", { size, context: loadedModelSettings.context_size || ui.contextSize.value,
+      gpu: loadedModelSettings.gpu_layers ?? ui.gpuLayers.value });
+  } else { ui.activeModel.textContent = text("noModel"); ui.modelMeta.textContent = text("selectModel"); }
+  if (!generating && !loadingModel && ["loading", "generating"].includes(runtimeStatus)) {
+    runtimeRefreshTimer = setTimeout(refreshRuntimeStatus, 1000);
+  }
+  updateResponseActions();
+}
+
+async function refreshRuntimeStatus() {
+  if (generating || loadingModel) return;
+  try {
+    const status = await api("/api/status");
+    if (!generating && !loadingModel) updateModelStatus(status);
+  } catch (_) {
+    if (!generating && !loadingModel) updateModelStatus({ status: "error", error: text("connectionLost") });
   }
 }
 
@@ -488,15 +703,19 @@ function renderChatList() {
     };
     row.querySelector(".delete-chat").onclick = async (event) => {
       event.stopPropagation();
+      if (generating) return;
       if (!confirm(text("deleteConfirm", { title: chat.title }))) return;
       await api(`/api/chats/${chat.id}`, { method: "DELETE" });
       if (activeChat === chat.id) {
         clearTimeout(draftSaveTimer); draftSaveTimer = null;
+        clearTimeout(responseSettingsTimer); responseSettingsTimer = null;
         writeBrowserState(draftKey(chat.id), null);
+        writeBrowserState(responseKey(chat.id), null);
         activeChat = null; ui.prompt.value = ""; draftBaseline = "";
+        responseSettingsBaseline = serializeResponseSettings();
         writeBrowserState(ACTIVE_CHAT_KEY, "new");
         resetMessages(); await newChat();
-      } else writeBrowserState(draftKey(chat.id), null);
+      } else { writeBrowserState(draftKey(chat.id), null); writeBrowserState(responseKey(chat.id), null); }
       await refreshChats();
     };
     ui.chatList.appendChild(row);
@@ -508,7 +727,7 @@ async function newChat() {
   chatNavigation++;
   closeComposerPopovers();
   // An unsent new chat has its own draft; create its server record on Send.
-  activateChat(null); resetMessages(); lastUserMessage = ""; conversationChars = ui.systemPrompt.value.length;
+  activateChat(null); restoreResponseSettings(); resetMessages(); lastUserMessage = ""; conversationChars = ui.systemPrompt.value.length;
   updateContext();
   renderChatList(); if (mobile.matches) setSidebar(false); ui.prompt.focus();
 }
@@ -517,66 +736,92 @@ async function openChat(id) {
   if (generating) return;
   const navigation = ++chatNavigation;
   closeComposerPopovers();
-  saveDraft();
+  saveWorkspaceState();
   const chat = await api(`/api/chats/${id}`);
   if (navigation !== chatNavigation || generating) return;
+  displayChat(chat, id);
+  await refreshChats();
+  if (mobile.matches) setSidebar(false);
+}
+
+function displayChat(chat, id = chat.id) {
   activateChat(id); resetMessages(); lastUserMessage = "";
-  applySettings({ ...defaults, ...chat.settings });
+  restoreResponseSettings(chat.settings);
   conversationChars = ui.systemPrompt.value.length;
+  if (chat.branch_of) {
+    contextNotice(text("regenerateNotice"));
+    ui.messages.lastElementChild.dataset.text = "regenerateNotice";
+    ui.messages.lastElementChild.classList.add("branch-notice");
+  }
   let sourcePrompt = "";
   chat.messages.forEach((message) => {
     if (message.type === "user") { sourcePrompt = message.content; lastUserMessage = message.content; }
-    messageElement(message.type, message.content, message.metrics, message.status, sourcePrompt, message.request, message.error);
+    messageElement(message.type, message.content, message.metrics, message.status, sourcePrompt, message.request, message.error, message.id);
     conversationChars += message.content.length;
   });
   const lastMetrics = [...chat.messages].reverse().find((message) => message.metrics)?.metrics;
   if (lastMetrics) updateContext(lastMetrics.context_used, lastMetrics.context_size, true);
   else updateContext();
-  await refreshChats();
-  if (mobile.matches) setSidebar(false);
+  scrollDown(true);
 }
 
 async function loadModel() {
-  const modelPath = ui.customModel.value.trim() || ui.modelSelect.value;
+  if (loadingModel || generating || ["loading", "generating"].includes(runtimeStatus)) return;
+  const modelPath = selectedModelPath();
   if (!modelPath) return setStatus("error", text("selectGGUF"));
+  const invalid = [ui.contextSize, ui.gpuLayers, ui.threads].find(field => !field.checkValidity());
+  if (invalid) { openSettings(true); invalid.focus(); invalid.reportValidity(); return; }
+  showModelError();
+  closeComposerPopovers();
   loadingModel = true;
+  clearTimeout(runtimeRefreshTimer); runtimeRefreshTimer = null;
   let seconds = 0;
-  setStatus("loading", { key: "loadingStatus", values: { seconds } }); ui.loadModel.disabled = true; ui.quickModelSelect.disabled = true; ui.quickLoadModel.disabled = true;
-  ui.quickLoadModel.textContent = text("loading");
+  let loaded = false;
+  setStatus("loading", { key: "loadingStatus", values: { seconds } });
   const loadingTimer = setInterval(() => setStatus("loading", { key: "loadingStatus", values: { seconds: ++seconds } }), 1000);
   try {
     const loadValues = { model_path: modelPath, context_size: Number(ui.contextSize.value), gpu_layers: Number(ui.gpuLayers.value), threads: Number(ui.threads.value) };
-    await api("/api/model/load", { method: "POST", body: JSON.stringify(loadValues) });
-    await api("/api/settings", { method: "PATCH", body: JSON.stringify({ ...loadValues, ...generationValues() }) });
-    if ([...ui.quickModelSelect.options].some((option) => option.value === modelPath)) ui.quickModelSelect.value = modelPath;
-    updateModelStatus(await api("/api/status"), loadValues); openSettings(false);
-    if (ui.customModel.value.trim()) ui.customModel.value = loadedModelPath;
-    const label = [...ui.quickModelSelect.options].find((option) => option.value === modelPath)?.textContent || modelPath.split(/[\\/]/).pop();
-    showToast(text("modelReady", { model: label }));
-  } catch (error) { setStatus("error", error.message); }
+    const status = await api("/api/model/load", { method: "POST", body: JSON.stringify(loadValues) });
+    loaded = true;
+    if (ui.customModel.value.trim()) ui.customModel.value = status.model_path;
+    else { ui.quickModelSelect.value = status.model_path; ui.modelSelect.value = status.model_path; }
+    updateModelStatus(status, loadValues);
+    openSettings(false);
+    showToast(text(status.load_settings_saved === false ? "modelLoadSettingsUnsaved" : "modelReady", { model: readableModelName(status.model_path) }));
+  } catch (error) {
+    showModelError(error.message);
+    setStatus("error", error.message);
+    showToast(text("modelLoadFailed"));
+  }
   finally {
     clearInterval(loadingTimer);
     loadingModel = false;
-    ui.loadModel.disabled = false; ui.quickModelSelect.disabled = false; ui.quickLoadModel.disabled = false;
+    try { updateModelStatus(await api("/api/status")); }
+    catch (_) {
+      if (!loaded) updateModelStatus({ status: "error", error: text("connectionLost") });
+    }
     updateModelPicker();
   }
 }
 
 function runtimeModelMatchesSelection() {
-  return Boolean(loadedModelPath) && loadedModelPath === (ui.customModel.value.trim() || ui.quickModelSelect.value);
+  return Boolean(loadedModelPath) && loadedModelPath === selectedModelPath();
 }
 
-async function send(message, retryRequest = null) {
+async function send(message, retryRequest = null, branchTarget = null) {
   const fromComposer = message === undefined;
   message ??= ui.prompt.value.trim();
   if (!message || generating) return;
+  if (!retryRequest && !validateResponseSettings(true)) return;
   const submittedDraft = ui.prompt.value;
   let submittedRevision = promptRevision;
-  const request = retryRequest || { message, ...generationValues(), request_id: crypto.randomUUID() };
+  const request = { ...(retryRequest || { message, ...generationValues(), request_id: crypto.randomUUID() }),
+    expected_model_path: selectedModelPath() || null };
   // Reserve the UI before the first await so rapid clicks cannot submit twice.
   generating = true;
+  clearTimeout(runtimeRefreshTimer); runtimeRefreshTimer = null;
   chatNavigation++;
-  saveDraft();
+  saveWorkspaceState();
   closeComposerPopovers();
   ui.quickModelSelect.disabled = true; ui.quickLoadModel.disabled = true; ui.loadModel.disabled = true;
   ui.sendButton.classList.add("hidden"); ui.stopButton.classList.remove("hidden"); ui.stopButton.disabled = true;
@@ -586,10 +831,16 @@ async function send(message, retryRequest = null) {
   setStatus("generating", { key: "preparing" });
   try {
     const status = await api("/api/status");
+    updateModelStatus(status);
     if (!["ready", "stopped"].includes(status.status)) {
       if (status.status === "generating") showToast(text("generationBusy"));
       else openSettings(true);
       return;
+    }
+    if (!runtimeModelMatchesSelection()) { showToast(text("loadSelectedFirst")); return; }
+    if (branchTarget) {
+      const branch = await api(`/api/chats/${branchTarget.chatId}/branch`, { method: "POST", body: JSON.stringify({ message_id: branchTarget.messageId }) });
+      displayChat(branch);
     }
     if (!activeChat) {
       const chat = await api("/api/chats", { method: "POST", body: JSON.stringify(request) });
@@ -605,6 +856,7 @@ async function send(message, retryRequest = null) {
       conversationChars += request.message.length; updateContext();
     }
     assistant = messageElement("assistant", "", null, "streaming", request.message, request);
+    scrollDown(true);
     generationTimer = setInterval(() => {
       elapsedSeconds += 1;
       setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
@@ -615,8 +867,8 @@ async function send(message, retryRequest = null) {
     });
     if (!response.ok) {
       let detail = response.statusText;
-      try { detail = (await response.json()).detail || detail; } catch (_) {}
-      throw new Error(typeof detail === "string" ? detail : text("responseRequestFailed"));
+      try { detail = errorDetail((await response.json()).detail, detail); } catch (_) {}
+      throw new Error(detail || text("responseRequestFailed"));
     }
     if (!response.body) throw new Error(text("streamInterrupted"));
     if (fromComposer && ui.prompt.value === submittedDraft && promptRevision === submittedRevision) {
@@ -628,9 +880,17 @@ async function send(message, retryRequest = null) {
     const consume = line => {
       if (!line.trim() || terminal) return;
       const item = JSON.parse(line);
-      if (item.type === "start") setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
+      if (item.type === "start") {
+        assistant.messageId = item.message_id || assistant.messageId;
+        assistant.dataset.started = "true";
+        setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
+        updateAssistant(assistant, raw, null, "streaming", elapsedSeconds);
+      }
       else if (item.type === "context_trimmed") contextNotice(item.message);
-      else if (item.type === "token") { raw += item.text; updateAssistant(assistant, raw, null, "streaming", elapsedSeconds); scrollDown(); }
+      else if (item.type === "token") {
+        const follow = ui.messages.scrollHeight - ui.messages.scrollTop - ui.messages.clientHeight < 180;
+        raw += item.text; updateAssistant(assistant, raw, null, "streaming", elapsedSeconds); scrollDown(follow);
+      }
       else if (item.type === "done" || item.type === "stopped") {
         terminal = true;
         clearInterval(generationTimer);
@@ -654,7 +914,7 @@ async function send(message, retryRequest = null) {
   } catch (error) {
     failed = true;
     if (assistant) updateAssistant(assistant, raw, null, "error", elapsedSeconds, error.message);
-    else showToast(text("requestFailed"));
+    else showToast(text(branchTarget ? "regenerateFailed" : "requestFailed"));
   } finally {
     clearInterval(generationTimer); generationTimer = null; conversationChars += raw.length;
     generating = false;
@@ -697,28 +957,47 @@ ui.menuButton.onclick = () => setSidebar(mobile.matches ? !ui.sidebar.classList.
 ui.sidebarClose.onclick = () => setSidebar(false);
 mobile.addEventListener("change", () => setSidebar(mobile.matches ? false : sidebarExpanded));
 ui.newChat.onclick = newChat; ui.loadModel.onclick = loadModel; ui.sendButton.onclick = () => send(); ui.stopButton.onclick = stop;
-ui.prompt.oninput = promptInput; ui.prompt.onkeydown = (event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); send(); } };
-ui.temperature.oninput = () => { ui.temperatureNumber.value = ui.temperature.value; updateLabels(); };
-ui.temperatureNumber.oninput = () => { ui.temperature.value = Math.max(0, Math.min(2, Number(ui.temperatureNumber.value))); updateLabels(); };
-ui.thinking.onchange = updateLabels;
-ui.quickThinking.onchange = () => { ui.thinking.checked = ui.quickThinking.checked; updateLabels(); };
-ui.systemPrompt.oninput = () => { ui.systemPreset.value = "custom"; updateLabels(); };
-ui.systemPreset.onchange = () => { if (ui.systemPreset.value !== "custom") ui.systemPrompt.value = ui.systemPreset.value; updateLabels(); };
-ui.resetSettings.onclick = () => applySettings(defaults);
-ui.modelSelect.onchange = () => { ui.customModel.value = ""; ui.quickModelSelect.value = ui.modelSelect.value; updateModelPicker(); };
-ui.customModel.oninput = updateModelPicker;
-ui.quickLoadModel.onclick = loadModel;
+ui.prompt.oninput = promptInput;
+ui.prompt.oncompositionstart = () => { composingPrompt = true; };
+ui.prompt.oncompositionend = () => { composingPrompt = false; };
+ui.prompt.onkeydown = event => {
+  if (event.defaultPrevented || event.isComposing || composingPrompt || event.keyCode === 229 || event.repeat) return;
+  if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault(); return send();
+  }
+};
+ui.temperature.oninput = () => { ui.temperatureNumber.value = ui.temperature.value; responseSettingsChanged(); };
+ui.temperatureNumber.oninput = () => { ui.temperature.value = Math.max(0, Math.min(2, Number(ui.temperatureNumber.value))); responseSettingsChanged(); };
+ui.thinking.onchange = () => { if (!ui.thinking.disabled) { thinkingPreference = ui.thinking.checked; responseSettingsChanged(); } else updateLabels(); };
+ui.quickThinking.onchange = () => { if (!ui.quickThinking.disabled) { thinkingPreference = ui.quickThinking.checked; responseSettingsChanged(); } else updateLabels(); };
+ui.systemPrompt.oninput = () => { ui.systemPreset.value = "custom"; responseSettingsChanged(); };
+ui.systemPreset.onchange = () => { if (ui.systemPreset.value !== "custom") ui.systemPrompt.value = ui.systemPreset.value; responseSettingsChanged(); };
+for (const field of [ui.topP, ui.topK, ui.minP, ui.repeatPenalty, ui.seed]) field.oninput = responseSettingsChanged;
+for (const field of [ui.contextSize, ui.gpuLayers, ui.threads]) field.oninput = updateModelPicker;
+ui.resetSettings.onclick = () => { applySettings(responseDefaults); responseSettingsChanged(); saveResponseSettings(); };
+ui.saveResponseDefaults.onclick = saveResponseDefaults;
+ui.modelSelect.onchange = () => { ui.customModel.value = ""; ui.quickModelSelect.value = ui.modelSelect.value; showModelError(); updateModelPicker(); };
+ui.customModel.oninput = () => { showModelError(); updateModelPicker(); };
+ui.chooseDetectedModel.onclick = () => { ui.customModel.value = ""; showModelError(); updateModelPicker(); ui.quickModelSelect.focus(); };
+ui.quickLoadModel.onclick = ui.menuLoadModel.onclick = loadModel;
 ui.chatSearch.oninput = renderChatList;
-ui.quickModelSelect.onchange = async () => {
-  if (generating || !ui.quickModelSelect.value) return;
+ui.quickModelSelect.onchange = () => {
+  if (generating || loadingModel) return;
   ui.modelSelect.value = ui.quickModelSelect.value;
   ui.customModel.value = "";
-  closeComposerPopovers();
-  await loadModel();
+  showModelError(); updateModelPicker();
 };
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") { if (!ui.settingsPanel.hidden) openSettings(false); else if (mobile.matches) setSidebar(false); }
-  if (event.ctrlKey && event.key.toLowerCase() === "c" && generating) stop();
+  if (event.defaultPrevented || event.isComposing || composingPrompt || event.keyCode === 229) return;
+  if (event.key === "Escape") {
+    if (composerPopovers.some(([popover]) => popover.matches(":popover-open"))) return;
+    if (!ui.settingsPanel.hidden) { event.preventDefault(); openSettings(false); }
+    else if (mobile.matches && ui.sidebar.classList.contains("open")) { event.preventDefault(); setSidebar(false); }
+  }
+  if ((event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey && !event.repeat
+      && event.key.toLowerCase() === "x" && generating && !ui.stopButton.disabled) {
+    event.preventDefault(); stop();
+  }
   const panel = !ui.settingsPanel.hidden ? ui.settingsPanel : mobile.matches && ui.sidebar.classList.contains("open") ? ui.sidebar : null;
   if (event.key === "Tab" && panel) {
     const controls = [...panel.querySelectorAll('button, input, select, textarea, summary')].filter(node => !node.disabled && node.getClientRects().length);

@@ -8,15 +8,21 @@ Open **Settings → Appearance** to choose **ChatGPT**, **Claude**, or **GitHub 
 
 Customize each theme's JSON/CSS pair in [`frontend/themes/`](frontend/themes/). See the [customization guide](docs/themes.md) for changing names, logos, wording, colors, fonts, buttons, and supported component positions. These are local recreations of the browser chat styles; they do not add the products' cloud services or agent features.
 
-The composer groups system instructions, temperature, and advanced sampling under **Options**. **Thinking On/Off** stays visible beside it and synchronized with Settings; it applies to the next response on compatible models. The model control shows a shorter name, with the full path in its menu, and the compact context percentage opens detailed usage.
+The composer groups system instructions, temperature, and advanced sampling under **Options**. **Thinking** stays visible beside it and synchronized with Settings: supported models show **On/Off**, while unsupported or unconfigured models show **Unavailable** or **Unknown**. The model control shows a shorter name, with the full path in its menu, and the compact context percentage opens detailed usage.
+
+Choose a model, then press **Load**. Selection and loading are separate; Send becomes available when the selected model is loaded. Model menus identify both the selected and loaded models, and load failures retain useful error details. Thinking compatibility is configured by filename in [`model_capabilities.json`](model_capabilities.json); see the [model state and capability guide](docs/model-capabilities.md). Unconfigured models receive no Thinking directives, and your preference is kept for supported models.
 
 Failed and stopped responses keep their partial text, with a clear status and a Copy action. **Retry** is available for the latest response and reuses its original prompt and response settings with the loaded model, without adding the user message again. Earlier attempts remain visible. If the server already finished an answer while the connection was lost, Retry recovers the saved answer instead of generating it again. Retry remains available after reopening a chat.
 
 Unsent drafts save locally in this browser for each chat, including an unfinished **New chat**. Switching chats or refreshing restores the text and last-opened chat. New chats get a server record when first sent. A draft clears after the server accepts its send request; edits made while Send is pending, plus drafts present during Retry, Regenerate, or Continue, stay intact. If browser storage is unavailable or full, drafts remain available in the open tab and a warning asks you to copy the text before refreshing.
 
+**Regenerate in new chat** creates an alternative from the selected answer's original prompt and settings, preserving the original conversation. **Continue** applies to the latest completed answer. Reasoning is shown when returned, and reasoning/performance details start collapsed. **Enter** sends, **Shift+Enter** inserts a line break, and **Ctrl/Cmd+Shift+X** stops; copying retains normal behavior and IME composition never submits early.
+
+Response preferences are kept per chat. **Save as defaults** applies them to future new chats; **Use saved defaults** copies defaults into the current chat. Model changes show a pending Reload state, and responses keep using loaded settings until reload. See the [chat behavior and settings guide](docs/usability.md) for details and a manual review checklist.
+
 ### Screenshots
 
-These Playwright screenshots use deterministic sample conversations and metrics, not a live inference benchmark. They predate the grouped composer controls.
+These Playwright screenshots use deterministic sample conversations and metrics, not a live inference benchmark. They predate the grouped composer, model states, and current response controls.
 
 | Theme | Light | Dark |
 | --- | --- | --- |
@@ -49,7 +55,7 @@ python local_llm_playground/main.py
 - 🌐 Opens `http://127.0.0.1:8000`
 - 🔎 Finds `.gguf` files in the root `models/` folder
 - ⚡ Loads the last valid selected model automatically
-- 🔄 Switches models beside the prompt without clearing the chat
+- 🔄 Select and load models beside the prompt without clearing the chat or draft
 - ♻️ Replaces an older playground instance on port `8000`
 - 🛡️ Never stops an unrelated application using that port
 
@@ -57,8 +63,8 @@ python local_llm_playground/main.py
 
 - 🤖 Model selector beside the prompt
 - 🌊 Streaming responses with **Stop**
-- 💭 Expandable **Worked for…** reasoning on every assistant response
-- 📋 Copy, Regenerate, and Continue actions
+- 💭 Collapsed reasoning when returned, plus expandable response details
+- 📋 Copy, Retry, Regenerate in a new chat, and Continue actions
 - 💬 Searchable, date-grouped recent chats
 - 🧠 Editable system prompt and thinking mode
 - 🌡️ Temperature and advanced sampling controls
@@ -74,10 +80,10 @@ python local_llm_playground/main.py
 - 🤖 Models: `../models/*.gguf`
 - 💬 JSONL chats: `data/chats/`
 - ⚙️ Settings: `data/config.json`
-- ✍️ Unsent drafts and last-opened chat: this browser's local storage
+- ✍️ Unsent drafts, response preferences, and last-opened chat: this browser's local storage
 - 📝 Logs: `logs/`
 
-- 💭 Compatible models receive `/think` or `/no_think`
+- 💭 Models explicitly configured as supported receive `/think` or `/no_think`
 - 🙈 The thinking directive is not shown in saved user messages
 
 ## 🧰 Models not appearing?
@@ -86,7 +92,7 @@ python local_llm_playground/main.py
 - 📦 Confirm files end in `.gguf`
 - 📁 Keep models in the repository's root `models/` folder
 
-## Recovery and draft checks
+## Behavior checks
 
 From the repository root, run the backend and frontend recovery checks without a browser or a real model:
 
@@ -95,4 +101,4 @@ From the repository root, run the backend and frontend recovery checks without a
 node --test local_llm_playground/tests/recovery.test.cjs
 ```
 
-The checks use isolated temporary chats and a fake model, plus simulated DOM, storage, and network surfaces for the chat controller. They cover partial failures, interrupted streams, Retry settings, repeated submissions, saved-answer recovery, per-chat drafts, refresh, storage failures, and edits made during pending requests. Review the resulting UI manually in each theme and color mode.
+The checks use isolated temporary chats and a fake model, plus simulated DOM, storage, and network surfaces for the chat controller. They cover recovery, drafts, model states, keyboard behavior, Regenerate branches, response presentation, settings scope, validation, and pending reloads. Review the resulting UI manually in each theme and color mode; the [manual scenarios](docs/usability.md#verification) include the complete chat journey.
