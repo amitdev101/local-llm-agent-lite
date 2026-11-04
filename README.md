@@ -1,6 +1,6 @@
 # 🤖 MyLLM
 
-**Version 0.1.9**
+**Version 0.1.10**
 
 A fast, private coding agent optimized for running Qwen Coder GGUF models locally
 on Windows.
@@ -213,6 +213,25 @@ values afterward in Settings.
 - 💾 A large RAM prompt cache may reduce available memory on low-end computers
 
 ## 🕵️ Journey — clues newest first
+
+- **0.1.10 · The Playground Became Easier to Use** — New in 0.1.10:
+
+  - 🎨 **Three customizable themes:** ChatGPT, Claude, and GitHub Copilot layouts,
+    each with light, dark, and Follow system appearance.
+  - 💭 **Thinking at a glance:** an always-visible control changes color when On
+    and shows model compatibility, alongside grouped response options.
+  - ⬇️ **Get models from Settings:** browse public Hugging Face repositories and
+    download complete single-file GGUFs with progress, pause/resume, cancellation,
+    and verification. Choose **Load model** explicitly when the file is ready.
+  - 📊 **Stored token usage:** heatmaps across all chats and individual responses,
+    with input, output, and total counts that survive restarts and chat deletion.
+  - 📚 **Reusable prompts and settings:** saved response profiles, prompt templates,
+    starter prompts, and an expanded composer.
+  - 💬 **Keep your place:** restored per-chat drafts, edited prompt branches,
+    browsing other chats during generation, and reading and send preferences.
+
+  See the [Playground README and screenshots](local_llm_playground/README.md) and
+  [model download guide](local_llm_playground/docs/model-downloads.md).
 
 - **0.1.9 · The Playground Opened** — Direct local-model testing gained a responsive
   browser chat, automatic GGUF discovery and loading, JSONL conversation history,
