@@ -10,6 +10,11 @@ let modePreference = "dark";
 const systemAppearance = matchMedia("(prefers-color-scheme: dark)");
 
 const defaults = {
+  cancelModelLoad: "Cancel load", unloadModel: "Unload model", unloading: "Unloading…",
+  modelUnloaded: "Model unloaded. Your chat and draft are still here.", modelLoadCancelled: "Model loading cancelled. Your chat and draft are still here.",
+  cancelModelLoadHelp: "Stop loading and release the model's memory. Your chat and draft stay available.",
+  unloadModelHelp: "Release the loaded model's memory. Load it again when you want to send a message.",
+  unloadAfterResponse: "Stop the response before unloading the model.", modelUnloadFailed: "Couldn't unload the model. Check its status and try again.",
   getModels: "Get models", downloads: "Model downloads", getFirstModel: "Get your first model", refreshModels: "Refresh installed models", modelsRefreshed: "Installed model list refreshed.",
   downloadHelp: "Browse public Hugging Face repositories for complete, single-file GGUF models. File size is disk space, not required RAM. Downloads continue when this panel closes.",
   modelRepository: "Hugging Face repository or URL", browseFiles: "Browse files", checkingModels: "Checking available model files…", filesAtRevision: "{repo} · revision {revision}",

@@ -40,6 +40,8 @@ Customize names, logos, wording, colors, fonts, buttons, and supported component
 
 The model menu separates selection from loading, shows the full path and loaded state, and retains load errors. **Send** becomes available when the selected model is loaded. The compact **Context** percentage opens detailed usage.
 
+While a model is loading, **Cancel load** appears beside the model selector and in **Settings → Model loading**. It stops the model worker and releases its memory without waiting for loading to finish. Once ready, **Unload model** releases the model's memory. Stop an active response before unloading. Chats, drafts, response preferences, downloaded files, and the saved model selection remain available; choose **Load** to use the model again. Refreshing the browser keeps it unloaded for the current server session; restarting the server retains the usual automatic loading behavior.
+
 | Response options | Model selection |
 | --- | --- |
 | ![Grouped response options in the Claude dark theme](docs/images/themes/claude-dark-options.png) | ![Selected model, loaded state, and Thinking support in the Claude dark theme](docs/images/themes/claude-dark-model.png) |

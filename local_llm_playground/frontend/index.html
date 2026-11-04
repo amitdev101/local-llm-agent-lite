@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Local LLM Playground</title>
   <link rel="icon" type="image/svg+xml" href="/assets/themes/assets/fallback.svg">
-  <link rel="stylesheet" href="/assets/styles.css?v=14">
+  <link rel="stylesheet" href="/assets/styles.css?v=15">
   <link rel="stylesheet" href="/assets/themes/chatgpt.css">
   <link rel="stylesheet" href="/assets/themes/claude.css">
   <link rel="stylesheet" href="/assets/themes/github-copilot.css">
@@ -70,6 +70,7 @@
               <div id="modelPicker" class="model-picker">
                 <button id="modelPickerButton" class="composer-action model-picker-button" popovertarget="modelPopover" aria-expanded="false" aria-label="Select model" data-label="model"><span id="modelReady" class="model-ready-dot" aria-hidden="true" hidden></span><span id="modelPickerLabel">Select model</span><span data-icon="chevronDown"></span></button>
                 <button class="quick-load" id="quickLoadModel">Load</button>
+                <button class="quick-load model-release" id="quickUnloadModel" hidden>Cancel load</button>
               </div>
               <button class="stop-button hidden" id="stopButton" aria-label="Stop response" data-title="stopShortcut" aria-keyshortcuts="Control+Shift+X Meta+Shift+X"><span data-icon="stop"></span></button>
               <button class="send-button" id="sendButton" aria-label="Send" data-title="send"><span data-icon="send"></span></button>
@@ -96,6 +97,7 @@
           <p id="modelThinkingSupport" class="setting-help"></p>
           <p id="modelMenuReloadNotice" class="setting-help" role="status" hidden></p>
           <button id="menuLoadModel" class="primary-button full" data-text="loadSelectedModel">Load selected model</button>
+          <button id="menuUnloadModel" class="secondary-button full model-release" hidden>Unload model</button>
           <p id="modelMenuError" class="model-load-error" role="alert" hidden></p>
           <button id="modelSettingsButton" class="text-button" data-text="modelSettings">Model loading settings</button>
         </div>
@@ -137,6 +139,8 @@
           <label><span data-text="threads">Threads</span><input id="threads" type="number" min="1" max="256" value="4" required></label>
         </div>
         <button class="primary-button full" id="loadModel">Load model</button>
+        <button class="secondary-button full model-release" id="unloadModel" hidden>Unload model</button>
+        <p id="modelReleaseHelp" class="setting-help" role="status" hidden></p>
         <p id="modelReloadNotice" class="setting-help" role="status" hidden></p>
         <p id="modelLoadError" class="model-load-error" role="alert" hidden></p>
       </section>
@@ -186,6 +190,6 @@
     <div class="overlay" id="overlay"></div>
     <div class="toast" id="toast" role="status"></div>
   </div>
-  <script type="module" src="/assets/app.js?v=16"></script>
+  <script type="module" src="/assets/app.js?v=17"></script>
 </body>
 </html>

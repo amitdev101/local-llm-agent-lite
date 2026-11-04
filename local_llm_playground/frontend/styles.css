@@ -70,6 +70,8 @@ input, select, textarea { accent-color: var(--accent); }
 .primary-button { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
 .primary-button:hover { filter: brightness(.94); }
 .full { width: 100%; margin-top: 12px; }
+.model-release { white-space: nowrap; flex-shrink: 0; }
+.model-release:not(:disabled):hover { border-color: var(--danger); color: var(--danger); }
 .chat-stage { display: flex; flex-direction: column; flex: 1; min-height: 0; position: relative; }
 .messages { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 24px 24px 36px; }
 .welcome { max-width: var(--chat-max-width); margin: 10vh auto 0; text-align: center; }

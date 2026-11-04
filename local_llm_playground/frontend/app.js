@@ -3,7 +3,7 @@ import { initEnhancements } from "./enhancements.js";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
-  "sidebar sidebarClose chatList chatSearch newChat statusDot statusText activeModel modelMeta messages welcome prompt sendButton stopButton composerStatus contextBar contextLabel settingsButton settingsPanel closeSettings overlay toast menuButton modelSelect quickModelSelect quickLoadModel customModel chooseDetectedModel contextSize gpuLayers threads loadModel systemPrompt systemSummary systemPreset thinking quickThinking thinkingState thinkingControl thinkingHelp thinkingSupportHelp temperature temperatureNumber topP topK minP repeatPenalty seed resetSettings saveResponseDefaults responseSettingsStatus responseSettingsError responseScope modelReloadNotice modelMenuReloadNotice optionsButton optionsPopover composerSettingsSlot modelPickerButton modelPopover modelPickerLabel modelReady selectedModelPath selectedModelState loadedModelInfo modelThinkingSupport menuLoadModel modelMenuError modelLoadError modelSettingsButton contextButton contextPopover contextSummary contextWarning"
+  "sidebar sidebarClose chatList chatSearch newChat statusDot statusText activeModel modelMeta messages welcome prompt sendButton stopButton composerStatus contextBar contextLabel settingsButton settingsPanel closeSettings overlay toast menuButton modelSelect quickModelSelect quickLoadModel customModel chooseDetectedModel contextSize gpuLayers threads loadModel systemPrompt systemSummary systemPreset thinking quickThinking thinkingState thinkingControl thinkingHelp thinkingSupportHelp temperature temperatureNumber topP topK minP repeatPenalty seed resetSettings saveResponseDefaults responseSettingsStatus responseSettingsError responseScope modelReloadNotice modelMenuReloadNotice optionsButton optionsPopover composerSettingsSlot modelPickerButton modelPopover modelPickerLabel modelReady selectedModelPath selectedModelState loadedModelInfo modelThinkingSupport menuLoadModel modelMenuError modelLoadError quickUnloadModel menuUnloadModel unloadModel modelReleaseHelp modelSettingsButton contextButton contextPopover contextSummary contextWarning"
     .split(" ").map((id) => [id, $(id)])
 );
 
@@ -17,7 +17,11 @@ let allChats = [];
 let conversationChars = 0;
 let generationTimer = null;
 let loadedModelPath = "";
+let canUnloadModel = false;
 let loadingModel = false;
+let unloadingModel = false;
+let modelOperation = 0;
+let loadRequestId = null;
 let runtimeStatus = "not_loaded";
 let runtimeRefreshTimer = null;
 let availableModels = [];
@@ -272,7 +276,7 @@ function updateThinkingControls() {
     : support === "unsupported" ? "thinkingUnsupportedHelp" : "thinkingUnknownHelp";
   const help = text(helpKey);
   ui.thinking.checked = ui.quickThinking.checked = supported && thinkingPreference;
-  ui.thinking.disabled = ui.quickThinking.disabled = !supported || loadingModel || runtimeStatus === "loading";
+  ui.thinking.disabled = ui.quickThinking.disabled = !supported || loadingModel || unloadingModel || ["loading", "unloading"].includes(runtimeStatus);
   ui.thinkingState.textContent = text(!selected ? "thinkingUnavailable"
     : support === "unknown" ? "thinkingUnknown" : support === "unsupported" ? "thinkingUnavailable"
     : thinkingPreference ? "thinkingOn" : "thinkingOff");
@@ -299,8 +303,9 @@ function updateModelPicker() {
   const matched = runtimeModelMatchesSelection();
   const pending = modelSettingsPending();
   const isLoading = loadingModel || runtimeStatus === "loading";
-  const busy = isLoading || generating || runtimeStatus === "generating";
-  const state = isLoading ? "loading" : matched ? "loaded" : path ? "selectedNotLoaded" : "not_loaded";
+  const isUnloading = unloadingModel || runtimeStatus === "unloading";
+  const busy = isLoading || isUnloading || generating || runtimeStatus === "generating";
+  const state = isUnloading ? "unloading" : isLoading ? "loading" : matched ? "loaded" : path ? "selectedNotLoaded" : "not_loaded";
   ui.modelPickerLabel.textContent = path ? readableModelName(path) : text("selectModel");
   ui.modelPickerButton.setAttribute("aria-label", text("modelPickerDescription", { model: ui.modelPickerLabel.textContent, state: text(state) }));
   ui.modelPickerButton.title = path || text("selectModel");
@@ -312,12 +317,22 @@ function updateModelPicker() {
   ui.loadedModelInfo.textContent = loadedModelPath ? text("currentlyLoaded", { model: readableModelName(loadedModelPath) }) : text("noModel");
   ui.loadedModelInfo.title = loadedModelPath;
   ui.loadedModelInfo.hidden = matched;
-  ui.modelReady.hidden = !matched || isLoading;
+  ui.modelReady.hidden = !matched || isLoading || isUnloading;
   ui.modelPickerButton.disabled = busy;
+  const canRelease = isLoading || isUnloading || canUnloadModel || Boolean(loadedModelPath);
+  const releaseLabel = text(isUnloading ? "unloading" : isLoading ? "cancelModelLoad" : "unloadModel");
+  const releaseHelp = text(generating || runtimeStatus === "generating" ? "unloadAfterResponse" : isLoading ? "cancelModelLoadHelp" : "unloadModelHelp");
+  for (const button of [ui.quickUnloadModel, ui.menuUnloadModel, ui.unloadModel]) {
+    button.hidden = !canRelease; button.textContent = releaseLabel;
+    button.disabled = isUnloading || generating || runtimeStatus === "generating";
+    button.title = releaseHelp; button.setAttribute("aria-label", releaseLabel);
+  }
+  ui.modelReleaseHelp.hidden = !canRelease; ui.modelReleaseHelp.textContent = isUnloading ? text("unloading") : releaseHelp;
   ui.modelSelect.disabled = ui.quickModelSelect.disabled = ui.customModel.disabled = busy;
-  ui.quickLoadModel.hidden = !path || (matched && !isLoading && !pending);
+  ui.quickLoadModel.hidden = isLoading || isUnloading || !path || (matched && !pending);
   ui.quickLoadModel.textContent = text(isLoading ? "loading" : matched && pending ? "reload" : "load");
-  ui.menuLoadModel.hidden = matched && !isLoading && !pending;
+  ui.menuLoadModel.hidden = isLoading || isUnloading || (matched && !pending);
+  ui.loadModel.hidden = isLoading || isUnloading;
   ui.menuLoadModel.textContent = text(isLoading ? "loading" : matched && pending ? "reloadModel" : "loadSelectedModel");
   ui.loadModel.textContent = text(matched && pending ? "reloadModel" : "loadModel");
   for (const notice of [ui.modelReloadNotice, ui.modelMenuReloadNotice]) {
@@ -326,7 +341,7 @@ function updateModelPicker() {
   }
   ui.quickLoadModel.disabled = ui.menuLoadModel.disabled = ui.loadModel.disabled = busy || !path;
   ui.sendButton.disabled = busy || runtimeStatus !== "ready" || !matched;
-  const sendHelp = busy ? text(isLoading ? "loading" : "generating") : !path ? text("selectModel") : !matched ? text("loadSelectedFirst")
+  const sendHelp = busy ? text(isUnloading ? "unloading" : isLoading ? "loading" : "generating") : !path ? text("selectModel") : !matched ? text("loadSelectedFirst")
     : text("sendWithModel", { model: readableModelName(loadedModelPath) });
   ui.sendButton.title = sendHelp;
   ui.sendButton.setAttribute("aria-label", sendHelp);
@@ -447,7 +462,7 @@ function messageElement(role, content = "", metrics = null, status = "complete",
 
 function updateResponseActions() {
   const latest = [...ui.messages.querySelectorAll(".message")].at(-1);
-  const busy = generating || loadingModel || ["loading", "generating"].includes(runtimeStatus);
+  const busy = generating || loadingModel || ["loading", "unloading", "generating"].includes(runtimeStatus);
   ui.newChat.disabled = generating && !generationSession?.assistant;
   ui.chatList.querySelectorAll(".delete-chat").forEach(button => { button.disabled = generating && button.dataset.chatId === generationSession?.chatId; });
   ui.messages.querySelectorAll(".assistant").forEach(element => {
@@ -549,7 +564,7 @@ function setStatus(status, detail = "") {
   lastStatus = { status, detail };
   const label = typeof detail === "object" ? text(detail.key, detail.values) : detail || text(status);
   ui.statusText.textContent = label;
-  ui.statusDot.className = `status-dot ${status === "ready" ? "ready" : status === "loading" || status === "generating" ? "busy" : status === "error" ? "error" : ""}`;
+  ui.statusDot.className = `status-dot ${status === "ready" ? "ready" : ["loading", "unloading", "generating"].includes(status) ? "busy" : status === "error" ? "error" : ""}`;
   updateModelPicker();
 }
 
@@ -650,6 +665,7 @@ async function loadInitial() {
     } else if (activeChat === null) writeBrowserState(ACTIVE_CHAT_KEY, "new");
     if (
       status.status === "not_loaded"
+      && !status.auto_load_suppressed
       && settings.model_path
       && models.some((model) => model.path === settings.model_path)
     ) await loadModel();
@@ -667,7 +683,7 @@ async function refreshModels(preferred = null) {
   const models = await api("/api/models");
   const current = selectedModelPath();
   populateModels(models);
-  const target = preferred && !generating && !loadingModel && !["loading", "generating"].includes(runtimeStatus) ? preferred : current;
+  const target = preferred && !generating && !loadingModel && !unloadingModel && !["loading", "unloading", "generating"].includes(runtimeStatus) ? preferred : current;
   if (models.some(model => model.path === target)) {
     ui.customModel.value = ""; ui.modelSelect.value = ui.quickModelSelect.value = target;
   } else {
@@ -680,9 +696,10 @@ async function refreshModels(preferred = null) {
 function updateModelStatus(status, settings = {}) {
   clearTimeout(runtimeRefreshTimer); runtimeRefreshTimer = null;
   runtimeStatus = status.status;
+  canUnloadModel = status.can_unload ?? Boolean(status.model_path);
   const previousPath = loadedModelPath;
   const previousContext = loadedModelSettings.context_size;
-  loadedModelPath = ["error", "not_loaded"].includes(status.status) ? "" : status.model_path || "";
+  loadedModelPath = ["error", "not_loaded", "loading", "unloading"].includes(status.status) ? "" : status.model_path || "";
   if (status.loaded_settings && typeof status.loaded_settings === "object") loadedModelSettings = { ...status.loaded_settings };
   else if (settings.model_path === loadedModelPath) loadedModelSettings = { ...settings };
   else if (previousPath !== loadedModelPath) loadedModelSettings = {};
@@ -697,19 +714,20 @@ function updateModelStatus(status, settings = {}) {
     ui.modelMeta.textContent = text("loadedModelMeta", { size, context: loadedModelSettings.context_size || ui.contextSize.value,
       gpu: loadedModelSettings.gpu_layers ?? ui.gpuLayers.value });
   } else { ui.activeModel.textContent = text("noModel"); ui.modelMeta.textContent = text("selectModel"); }
-  if (!generating && !loadingModel && ["loading", "generating"].includes(runtimeStatus)) {
+  if (!generating && !loadingModel && !unloadingModel && ["loading", "unloading", "generating"].includes(runtimeStatus)) {
     runtimeRefreshTimer = setTimeout(refreshRuntimeStatus, 1000);
   }
   updateResponseActions();
 }
 
 async function refreshRuntimeStatus() {
-  if (generating || loadingModel) return;
+  if (generating || loadingModel || unloadingModel) return;
+  const operation = modelOperation;
   try {
     const status = await api("/api/status");
-    if (!generating && !loadingModel) updateModelStatus(status);
+    if (operation === modelOperation && !generating && !loadingModel && !unloadingModel) updateModelStatus(status);
   } catch (_) {
-    if (!generating && !loadingModel) updateModelStatus({ status: "error", error: text("connectionLost") });
+    if (operation === modelOperation && !generating && !loadingModel && !unloadingModel) updateModelStatus({ status: "error", error: text("connectionLost") });
   }
 }
 
@@ -819,41 +837,82 @@ function displayChat(chat, id = chat.id) {
 }
 
 async function loadModel() {
-  if (loadingModel || generating || ["loading", "generating"].includes(runtimeStatus)) return;
+  if (loadingModel || unloadingModel || generating || ["loading", "unloading", "generating"].includes(runtimeStatus)) return;
   const modelPath = selectedModelPath();
   if (!modelPath) return setStatus("error", text("selectGGUF"));
   const invalid = [ui.contextSize, ui.gpuLayers, ui.threads].find(field => !field.checkValidity());
   if (invalid) { openSettings(true); invalid.focus(); invalid.reportValidity(); return; }
   showModelError();
   closeComposerPopovers();
+  const operation = ++modelOperation;
+  loadRequestId = crypto.randomUUID();
   loadingModel = true;
   clearTimeout(runtimeRefreshTimer); runtimeRefreshTimer = null;
   let seconds = 0;
   let loaded = false;
   setStatus("loading", { key: "loadingStatus", values: { seconds } });
-  const loadingTimer = setInterval(() => setStatus("loading", { key: "loadingStatus", values: { seconds: ++seconds } }), 1000);
+  const loadingTimer = setInterval(() => {
+    if (operation === modelOperation) setStatus("loading", { key: "loadingStatus", values: { seconds: ++seconds } });
+  }, 1000);
   try {
-    const loadValues = { model_path: modelPath, context_size: Number(ui.contextSize.value), gpu_layers: Number(ui.gpuLayers.value), threads: Number(ui.threads.value) };
+    const loadValues = { model_path: modelPath, context_size: Number(ui.contextSize.value), gpu_layers: Number(ui.gpuLayers.value), threads: Number(ui.threads.value), load_id: loadRequestId };
     const status = await api("/api/model/load", { method: "POST", body: JSON.stringify(loadValues) });
+    if (operation !== modelOperation) return;
+    loadingModel = false;
+    loadRequestId = null;
+    updateModelStatus(status, loadValues);
+    if (status.load_cancelled || status.status !== "ready") return;
     loaded = true;
     if (ui.customModel.value.trim()) ui.customModel.value = status.model_path;
     else { ui.quickModelSelect.value = status.model_path; ui.modelSelect.value = status.model_path; }
-    updateModelStatus(status, loadValues);
     openSettings(false);
     showToast(text(status.load_settings_saved === false ? "modelLoadSettingsUnsaved" : "modelReady", { model: readableModelName(status.model_path) }));
   } catch (error) {
+    if (operation !== modelOperation) return;
     showModelError(error.message);
     setStatus("error", error.message);
     showToast(text("modelLoadFailed"));
-  }
-  finally {
+  } finally {
     clearInterval(loadingTimer);
-    loadingModel = false;
-    try { updateModelStatus(await api("/api/status")); }
-    catch (_) {
-      if (!loaded) updateModelStatus({ status: "error", error: text("connectionLost") });
+    if (operation === modelOperation) {
+      loadingModel = false; loadRequestId = null;
+      try {
+        const status = await api("/api/status");
+        if (operation === modelOperation) updateModelStatus(status);
+      } catch (_) {
+        if (operation === modelOperation && !loaded) updateModelStatus({ status: "error", error: text("connectionLost") });
+      }
+      updateModelPicker();
     }
-    updateModelPicker();
+  }
+}
+
+async function unloadModel() {
+  if (unloadingModel || generating || runtimeStatus === "generating") return;
+  const wasLoading = loadingModel || runtimeStatus === "loading";
+  if (!wasLoading && !loadedModelPath && !canUnloadModel) return;
+  const requestId = loadRequestId;
+  const operation = ++modelOperation;
+  loadingModel = false; loadRequestId = null; unloadingModel = true;
+  clearTimeout(runtimeRefreshTimer); runtimeRefreshTimer = null;
+  runtimeStatus = "unloading";
+  showModelError(); setStatus("unloading");
+  try {
+    const status = await api("/api/model/unload", { method: "POST", body: JSON.stringify({ load_id: requestId }) });
+    if (operation !== modelOperation) return;
+    unloadingModel = false;
+    updateModelStatus(status);
+    if (status.status === "not_loaded") showToast(text(wasLoading ? "modelLoadCancelled" : "modelUnloaded"));
+  } catch (error) {
+    unloadingModel = false;
+    showModelError(error.message);
+    try { updateModelStatus(await api("/api/status")); }
+    catch (_) { updateModelStatus({ status: "error", error: text("connectionLost") }); }
+    showToast(text("modelUnloadFailed"));
+  } finally {
+    unloadingModel = false; updateModelPicker();
+    // The load/unload button can become hidden when the operation finishes.
+    if (document.activeElement?.hidden) ui.modelPickerButton.focus({ preventScroll: true });
   }
 }
 
@@ -1049,9 +1108,10 @@ ui.modelSelect.onchange = () => { ui.customModel.value = ""; ui.quickModelSelect
 ui.customModel.oninput = () => { showModelError(); updateModelPicker(); };
 ui.chooseDetectedModel.onclick = () => { ui.customModel.value = ""; showModelError(); updateModelPicker(); ui.quickModelSelect.focus(); };
 ui.quickLoadModel.onclick = ui.menuLoadModel.onclick = loadModel;
+ui.quickUnloadModel.onclick = ui.menuUnloadModel.onclick = ui.unloadModel.onclick = unloadModel;
 ui.chatSearch.oninput = renderChatList;
 ui.quickModelSelect.onchange = () => {
-  if (generating || loadingModel) return;
+  if (generating || loadingModel || unloadingModel) return;
   ui.modelSelect.value = ui.quickModelSelect.value;
   ui.customModel.value = "";
   showModelError(); updateModelPicker();
@@ -1093,7 +1153,7 @@ initDrafts();
 await initThemes();
 enhancements = initEnhancements({ api, text, refreshThemeContent, notify: showToast, resize: resizePrompt, send: () => send(),
   getState: () => ({ chatId: activeChat, draft: ui.prompt.value, settings: generationValues(), generating,
-    modelBusy: loadingModel || ["loading", "generating"].includes(runtimeStatus), hasModels: Boolean(availableModels.length || selectedModelPath()) }),
+    modelBusy: loadingModel || unloadingModel || ["loading", "unloading", "generating"].includes(runtimeStatus), hasModels: Boolean(availableModels.length || selectedModelPath()) }),
   refreshModels,
   loadDownloaded: async path => { if (await refreshModels(path)) await loadModel(); },
   closePanels: () => { openSettings(false); closeComposerPopovers(); },

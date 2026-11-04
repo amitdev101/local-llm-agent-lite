@@ -7,6 +7,8 @@ import threading
 import time
 import uuid
 
+from collections import deque
+from contextlib import asynccontextmanager, closing
 from datetime import datetime
 from pathlib import Path
 from typing import Iterator
@@ -14,7 +16,7 @@ from typing import Iterator
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from llama_cpp import Llama
+from model_worker import ProcessModel as Llama
 from pydantic import BaseModel, Field
 from token_usage import TokenUsageStore
 from model_downloads import DownloadError, ModelDownloads, repository_id
@@ -167,55 +169,165 @@ class ModelRuntime:
         self.active_chat_id = None
         self.cancel = threading.Event()
         self.generation_lock = threading.Lock()
+        self.lifecycle_lock = threading.RLock()
+        self.load_id = None
+        self.load_cancel = None
+        self.load_done = None
+        self.cancelled_loads = deque(maxlen=128)
+        self.auto_load_suppressed = False
+
+    @staticmethod
+    def close_model(model):
+        if model is not None and callable(getattr(model, "close", None)):
+            model.close()
+
+    def snapshot(self) -> dict:
+        with self.lifecycle_lock:
+            model_path = self.model_path if self.llm is not None and self.status == "ready" else ""
+            state = self.status
+            if state == "ready" and not getattr(self.llm, "alive", True):
+                state = self.status = "error"
+                self.error = "The model worker stopped. Load the model again to continue."
+                model_path = ""
+            return {"status": "generating" if state == "ready" and self.generation_lock.locked() else state,
+                    "model_path": model_path, "thinking_support": thinking_support(model_path) if model_path else "unknown",
+                    "loaded_settings": dict(self.loaded_settings) if model_path else {}, "error": self.error,
+                    "auto_load_suppressed": self.auto_load_suppressed,
+                    "can_unload": self.llm is not None or self.load_cancel is not None}
 
     def load(self, settings: dict, remember: bool = False) -> dict:
         path = Path(str(settings["model_path"])).expanduser().resolve()
         if not path.is_file() or path.suffix.lower() != ".gguf":
             raise HTTPException(400, "Select a valid GGUF model")
-        if not self.generation_lock.acquire(blocking=False):
-            raise HTTPException(409, "Stop generation before changing model")
-        self.status = "loading"
-        self.error = ""
+        identifier = settings.get("load_id") or str(uuid.uuid4())
+        with self.lifecycle_lock:
+            if identifier in self.cancelled_loads:
+                return {**self.snapshot(), "load_cancelled": True}
+            if self.status == "unloading" or not self.generation_lock.acquire(blocking=False):
+                raise HTTPException(409, "Wait for the current model operation or stop generation before changing model")
+            cancelled = self.load_cancel = threading.Event()
+            done = self.load_done = threading.Event()
+            self.load_id = identifier
+            self.status = "loading"
+            self.error = ""
         started = time.perf_counter()
+        candidate = None
         try:
-            self.llm = Llama(
-                model_path=str(path),
-                n_ctx=int(settings["context_size"]),
-                n_gpu_layers=int(settings["gpu_layers"]),
-                n_threads=int(settings["threads"]),
-                n_threads_batch=int(settings["threads"]),
-                use_mmap=True,
-                verbose=False,
-            )
-            self.model_path = str(path)
-            self.loaded_settings = {key: settings[key] for key in ("context_size", "gpu_layers", "threads")}
-            self.loaded_settings["model_path"] = str(path)
-            self.status = "ready"
-            remembered = True
-            if remember:
-                try:
-                    write_config(self.loaded_settings)
-                except OSError:
-                    logger.exception("Model loaded but loading settings could not be remembered")
-                    remembered = False
-            logger.info("Model loaded in %.2fs: %s", time.perf_counter() - started, path)
-            return {"status": "ready", "model_path": self.model_path, "error": "",
-                    "thinking_support": thinking_support(self.model_path),
-                    "loaded_settings": dict(self.loaded_settings), "load_settings_saved": remembered}
+            with self.lifecycle_lock:
+                if cancelled.is_set():
+                    return {**self.snapshot(), "load_cancelled": True}
+                self.close_model(self.llm)
+                self.llm = None
+                self.model_path = ""
+                self.loaded_settings = {}
+                candidate = self.llm = Llama(
+                    model_path=str(path),
+                    n_ctx=int(settings["context_size"]),
+                    n_gpu_layers=int(settings["gpu_layers"]),
+                    n_threads=int(settings["threads"]),
+                    n_threads_batch=int(settings["threads"]),
+                    use_mmap=True,
+                    verbose=False,
+                )
+            if callable(getattr(candidate, "wait_ready", None)):
+                candidate.wait_ready()
+            with self.lifecycle_lock:
+                if cancelled.is_set():
+                    return {**self.snapshot(), "load_cancelled": True}
+                self.model_path = str(path)
+                self.loaded_settings = {key: settings[key] for key in ("context_size", "gpu_layers", "threads")}
+                self.loaded_settings["model_path"] = str(path)
+                self.status = "ready"
+                self.auto_load_suppressed = False
+                remembered = True
+                if remember:
+                    try:
+                        write_config(self.loaded_settings)
+                    except OSError:
+                        logger.exception("Model loaded but loading settings could not be remembered")
+                        remembered = False
+                logger.info("Model loaded in %.2fs: %s", time.perf_counter() - started, path)
+                return {**self.snapshot(), "status": "ready", "load_settings_saved": remembered}
         except Exception as error:
-            self.llm = None
-            self.model_path = ""
-            self.loaded_settings = {}
-            self.status = "error"
-            self.error = str(error)
+            try:
+                self.close_model(candidate)
+            except Exception as cleanup_error:
+                logger.exception("Model worker cleanup failed")
+                error = cleanup_error
+            with self.lifecycle_lock:
+                if self.llm is candidate and not getattr(candidate, "alive", False):
+                    self.llm = None
+                self.model_path = ""
+                self.loaded_settings = {}
+                if cancelled.is_set() and self.llm is None:
+                    return {**self.snapshot(), "load_cancelled": True}
+                self.status = "error"
+                self.error = str(error)
             logger.exception("Model load failed")
             raise HTTPException(500, str(error)) from error
         finally:
-            self.generation_lock.release()
+            with self.lifecycle_lock:
+                self.load_cancel = self.load_done = None
+                self.generation_lock.release()
+                done.set()
+                if cancelled.is_set() and self.status == "unloading" and self.llm is None:
+                    self.status = "not_loaded"
+
+    def unload(self, load_id=None) -> dict:
+        with self.lifecycle_lock:
+            if load_id:
+                # Remember early cancellation even if its Load request hasn't arrived.
+                self.cancelled_loads.append(load_id)
+                if self.load_id is not None and self.load_id != load_id:
+                    raise HTTPException(409, "Another model operation replaced this request. Refresh its status before unloading.")
+            if self.status == "unloading":
+                return self.snapshot()
+            loading = self.load_cancel is not None
+            acquired = False
+            if not loading:
+                acquired = self.generation_lock.acquire(blocking=False)
+                if not acquired:
+                    raise HTTPException(409, "Stop the response before unloading the model")
+            self.status = "unloading"
+            self.error = ""
+            self.auto_load_suppressed = True
+            if loading:
+                self.load_cancel.set()
+            done, model = self.load_done, self.llm
+        try:
+            self.close_model(model)
+            if done is not None:
+                done.wait(timeout=5)
+            with self.lifecycle_lock:
+                self.llm = None
+                self.model_path = ""
+                self.loaded_settings = {}
+                self.load_id = None
+                if done is None or done.is_set():
+                    self.status = "not_loaded"
+                return self.snapshot()
+        except Exception as error:
+            with self.lifecycle_lock:
+                self.status = "error"
+                self.error = str(error)
+            raise HTTPException(500, str(error)) from error
+        finally:
+            if acquired:
+                self.generation_lock.release()
 
 
 runtime = ModelRuntime()
-app = FastAPI(title="Local LLM Playground")
+
+
+@asynccontextmanager
+async def lifespan(app):
+    try:
+        yield
+    finally:
+        runtime.close_model(runtime.llm)
+
+
+app = FastAPI(title="Local LLM Playground", lifespan=lifespan)
 app.mount("/assets", StaticFiles(directory=FRONTEND), name="assets")
 
 
@@ -224,6 +336,11 @@ class LoadRequest(BaseModel):
     context_size: int = Field(4096, ge=256, le=131072)
     gpu_layers: int = Field(0, ge=-1, le=1000)
     threads: int = Field(DEFAULTS["threads"], ge=1, le=256)
+    load_id: str | None = Field(None, min_length=1, max_length=80, pattern=r"^[\w-]+$")
+
+
+class UnloadRequest(BaseModel):
+    load_id: str | None = Field(None, min_length=1, max_length=80, pattern=r"^[\w-]+$")
 
 
 class ResponseSettings(BaseModel):
@@ -294,14 +411,7 @@ def index() -> FileResponse:
 
 @app.get("/api/status")
 def status() -> dict:
-    model_path = runtime.model_path if runtime.llm is not None else ""
-    return {
-        "status": runtime.status if runtime.status == "loading" else "generating" if runtime.generation_lock.locked() else runtime.status,
-        "model_path": model_path,
-        "thinking_support": thinking_support(model_path) if model_path else "unknown",
-        "loaded_settings": runtime.loaded_settings if model_path else {},
-        "error": runtime.error,
-    }
+    return runtime.snapshot()
 
 
 @app.get("/api/models")
@@ -383,6 +493,11 @@ def save_settings(values: SettingsUpdate) -> dict:
 def load_model(request: LoadRequest) -> dict:
     values = request.model_dump()
     return runtime.load(values, remember=True)
+
+
+@app.post("/api/model/unload")
+def unload_model(request: UnloadRequest | None = None) -> dict:
+    return runtime.unload(request.load_id if request else None)
 
 
 @app.get("/api/chats")
@@ -488,6 +603,8 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
     runtime.cancel.clear()
     completed = None
     try:
+        if runtime.llm is None or runtime.status != "ready":
+            raise HTTPException(409, "Load a model before sending")
         if (request.expected_model_path is not None
                 and Path(request.expected_model_path).expanduser().resolve() != Path(runtime.model_path).resolve()):
             raise HTTPException(409, "The loaded model changed. Select and load the model you want, then try again.")
@@ -621,16 +738,17 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
                 "seed": request.seed,
                 "stream": True,
             }
-            for chunk in runtime.llm.create_chat_completion(**kwargs):
-                if runtime.cancel.is_set():
-                    break
-                text = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                if not text:
-                    continue
-                if first_token is None:
-                    first_token = time.perf_counter()
-                response += text
-                yield event({"type": "token", "text": text})
+            with closing(runtime.llm.create_chat_completion(**kwargs)) as chunks:
+                for chunk in chunks:
+                    if runtime.cancel.is_set():
+                        break
+                    text = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                    if not text:
+                        continue
+                    if first_token is None:
+                        first_token = time.perf_counter()
+                    response += text
+                    yield event({"type": "token", "text": text})
 
             stopped = runtime.cancel.is_set()
             persist("interrupted" if stopped else "complete")
