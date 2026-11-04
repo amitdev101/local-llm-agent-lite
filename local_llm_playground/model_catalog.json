@@ -1,0 +1,4 @@
+[
+  {"name": "Qwen3 1.7B", "repo_id": "Qwen/Qwen3-1.7B-GGUF", "description": "Official Qwen GGUF repository. The Q8_0 file matches a bundled Thinking profile."},
+  {"name": "Qwen3 4B", "repo_id": "Qwen/Qwen3-4B-GGUF", "description": "Official Qwen GGUF repository with several quantization choices. Q4_K_M matches a bundled Thinking profile."}
+]

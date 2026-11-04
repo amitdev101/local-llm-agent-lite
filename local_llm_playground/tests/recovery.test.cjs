@@ -9,7 +9,7 @@ const { test } = require("node:test");
 const frontend = join(__dirname, "../frontend");
 const html = readFileSync(join(frontend, "index.html"), "utf8");
 const app = readFileSync(join(frontend, "app.js"), "utf8").replace(/\r/g, "")
-  .replace(/^import .*;\n/, "")
+  .replace(/^import .*;\n/gm, "")
   .replace(/\ninitComposerPopovers\(\);[\s\S]*$/, "");
 const theme = readFileSync(join(frontend, "theme.js"), "utf8");
 const words = vm.runInNewContext(theme.slice(theme.indexOf("const defaults ="), theme.indexOf("const defaultIcons")) + "defaults");
@@ -141,7 +141,7 @@ function setup(options = {}) {
     applySettings(responseDefaults); responseSettingsBaseline = JSON.stringify(generationValues());
     updateModelStatus(${JSON.stringify(serverStatus)});
     globalThis.controller = { send, stop, openChat, newChat, initDrafts, loadInitial, saveDraft, updateAssistant, loadModel, updateModelStatus, generationValues,
-      saveResponseDefaults, saveResponseSettings, updateContext,
+      saveResponseDefaults, saveResponseSettings, updateContext, refreshModels,
       state: () => ({ generating, generationTimer, activeChat, loadedModelPath, loadingModel, thinkingPreference, responseDefaults, loadedModelSettings }),
       notify: handler => { showToast = handler; } };`, context);
   context.controller.notify(message => toasts.push(message));
@@ -1055,4 +1055,98 @@ test("precise numeric preferences reach generation without being rounded by the 
   const request = f.requests.find(item => item.url.endsWith("/generate"));
   assert.equal(request.body.temperature, 0.613);
   assert.equal(request.body.top_p, 0.923);
+});
+
+test("browsing another chat keeps its draft and context separate from the streaming answer", async () => {
+  let output;
+  const f = setup({ generate: () => new Response(new ReadableStream({ start(controller) { output = controller; } })),
+    getChat: id => Response.json({ id, settings: {}, messages: [] }) });
+  const sending = f.send(); await until(() => Boolean(output));
+  const answer = assistants(f)[0];
+  output.enqueue(new TextEncoder().encode(token("First part")));
+  await until(() => answer.dataset.raw === "First part");
+  await f.openChat("chat-b");
+  assert.equal(f.state().activeChat, "chat-b");
+  assert.equal(f.ui.runningResponse.hidden, false);
+  typeDraft(f, "Draft for B");
+  const contextLabel = f.ui.contextSummary.textContent;
+  output.enqueue(new TextEncoder().encode(token(" and last part") + JSON.stringify({ type: "done", metrics: { context_used: 999, context_size: 4096 } }) + "\n"));
+  output.close(); await sending;
+  assert.equal(f.ui.prompt.value, "Draft for B");
+  assert.equal(f.ui.contextSummary.textContent, contextLabel);
+  assert.equal(assistants(f).length, 0);
+  assert.equal(f.ui.runningResponse.hidden, true);
+  await f.openChat("chat-1");
+  assert.equal(assistants(f)[0], answer);
+  assert.equal(answer.dataset.raw, "First part and last part");
+  assert.equal(answer.dataset.status, "complete");
+});
+
+test("accepted sends clear only the source draft after navigating during request acceptance", async () => {
+  for (const editBeforeLeaving of [false, true]) {
+    let accept;
+    const f = setup({ generate: () => new Promise(resolve => { accept = resolve; }),
+      getChat: id => Response.json({ id, settings: {}, messages: [] }) });
+    const sending = f.send(); await until(() => Boolean(accept));
+    if (editBeforeLeaving) typeDraft(f, "New source draft");
+    await f.openChat("chat-b"); typeDraft(f, "Draft B");
+    accept(stream([token("Finished"), done()])); await sending;
+    assert.equal(f.ui.prompt.value, "Draft B");
+    assert.equal(f.storage.get(draftKey("chat-1")), editBeforeLeaving ? "New source draft" : undefined);
+  }
+});
+
+test("a new composition can be opened and the live response revisited without another generation", async () => {
+  let output;
+  const f = setup({ generate: () => new Response(new ReadableStream({ start(controller) { output = controller; } })),
+    getChat: id => Response.json({ id, settings: {}, messages: [] }) });
+  const sending = f.send(); await until(() => Boolean(output));
+  const answer = assistants(f)[0];
+  await f.newChat(); typeDraft(f, "Next question");
+  await f.send();
+  assert.equal(f.requests.filter(request => request.url.endsWith("/generate")).length, 1);
+  await f.openChat("chat-1");
+  assert.equal(assistants(f)[0], answer);
+  output.enqueue(new TextEncoder().encode(token("Finished") + done())); output.close(); await sending;
+  await f.newChat(); assert.equal(f.ui.prompt.value, "Next question");
+});
+
+test("edited prompts use the branch's new request identity while preserving the current draft", async () => {
+  const request = { request_id: "source", message: "Original", temperature: 0.8, system_prompt: "Original instructions" };
+  const f = setup({ branchChat: body => {
+    assert.equal(body.message, "Edited");
+    return Response.json({ id: "edited-branch", settings: {}, messages: [{ type: "user", content: "Edited", request: { ...request, request_id: "edited", message: "Edited" } }] });
+  } });
+  await f.send("Edited", request, { chatId: "chat-1", messageId: "answer-1", editedMessage: "Edited" });
+  const sent = f.requests.find(value => value.url.endsWith("/generate"));
+  assert.equal(sent.url, "/api/chats/edited-branch/generate");
+  assert.equal(sent.body.message, "Edited"); assert.equal(sent.body.request_id, "edited");
+  assert.equal(sent.body.temperature, 0.8);
+  assert.equal(f.storage.get(draftKey("chat-1")), "Original prompt");
+});
+
+test("refreshing installed models preserves the draft and response preferences without loading", async () => {
+  const models = [{ path: "/models/test.gguf", name: "test.gguf", size: 100, thinking_support: "supported" }];
+  const f = setup({ models });
+  typeDraft(f, "Keep this draft");
+  const before = JSON.stringify(f.generationValues());
+  models.push({ path: "/models/downloaded.gguf", name: "downloaded.gguf", size: 200, thinking_support: "unknown" });
+  assert.equal(await f.refreshModels("/models/downloaded.gguf"), true);
+  assert.equal(f.ui.quickModelSelect.value, "/models/downloaded.gguf");
+  assert.equal(f.ui.sendButton.disabled, true);
+  assert.equal(f.ui.prompt.value, "Keep this draft");
+  assert.equal(JSON.stringify(f.generationValues()), before);
+  assert.equal(f.requests.some(request => request.url === "/api/model/load" || request.url === "/api/settings"), false);
+  assert.equal(f.state().activeChat, "chat-1");
+});
+
+test("refresh does not change the selected model while a response runs", async () => {
+  let output;
+  const models = [{ path: "/models/test.gguf", name: "test.gguf", size: 100, thinking_support: "supported" },
+    { path: "/models/other.gguf", name: "other.gguf", size: 200, thinking_support: "unknown" }];
+  const f = setup({ models, generate: () => new Response(new ReadableStream({ start(controller) { output = controller; } })) });
+  const sending = f.send(); await until(() => Boolean(output));
+  assert.equal(await f.refreshModels("/models/other.gguf"), false);
+  assert.equal(f.ui.quickModelSelect.value, "/models/test.gguf");
+  output.enqueue(new TextEncoder().encode(done())); output.close(); await sending;
 });

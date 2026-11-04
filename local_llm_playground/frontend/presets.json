@@ -1,0 +1,12 @@
+{
+  "profiles": [
+    {"id": "general", "name": "General", "description": "Everyday questions and explanations.", "settings": {"system_prompt": "You are a helpful assistant.", "thinking": false, "temperature": 0.3, "top_p": 0.95, "top_k": 40, "min_p": 0.05, "repeat_penalty": 1, "seed": -1}},
+    {"id": "coding", "name": "Coding", "description": "Clear code, explicit assumptions, and concise explanations.", "settings": {"system_prompt": "You are a concise, expert programming assistant. Explain assumptions and provide readable code.", "thinking": false, "temperature": 0.15, "top_p": 0.95, "top_k": 40, "min_p": 0.05, "repeat_penalty": 1, "seed": -1}},
+    {"id": "writing", "name": "Writing", "description": "Explore wording and ideas with more response variation.", "settings": {"system_prompt": "Help with writing in clear, natural language. Respect the requested audience and tone.", "thinking": false, "temperature": 0.7, "top_p": 0.95, "top_k": 40, "min_p": 0.05, "repeat_penalty": 1, "seed": -1}}
+  ],
+  "prompts": [
+    {"id": "explain", "name": "Explain a concept", "content": "Explain the following concept in simple terms, then give a practical example:\n\n"},
+    {"id": "code", "name": "Review some code", "content": "Review this code for correctness and readability. Explain the most important improvements:\n\n"},
+    {"id": "write", "name": "Improve my writing", "content": "Improve the clarity of the following text while preserving its meaning and tone:\n\n"}
+  ]
+}

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Local LLM Playground</title>
   <link rel="icon" type="image/svg+xml" href="/assets/themes/assets/fallback.svg">
-  <link rel="stylesheet" href="/assets/styles.css?v=12">
+  <link rel="stylesheet" href="/assets/styles.css?v=14">
   <link rel="stylesheet" href="/assets/themes/chatgpt.css">
   <link rel="stylesheet" href="/assets/themes/claude.css">
   <link rel="stylesheet" href="/assets/themes/github-copilot.css">
@@ -18,6 +18,8 @@
       <input class="chat-search" id="chatSearch" type="search" placeholder="Search chats…" aria-label="Search chats">
       <div class="sidebar-label" data-text="recentChats">Recent chats</div>
       <nav id="chatList" class="chat-list"></nav>
+      <button id="downloadsSidebar" class="secondary-button sidebar-tool"><span data-text="downloads">Model downloads</span><small id="downloadIndicator" class="download-indicator" role="status"></small></button>
+      <button id="usageSidebar" class="secondary-button sidebar-tool" data-text="tokenUsage">Token usage</button>
       <div class="sidebar-footer"><span class="status-dot" id="statusDot"></span><div><strong data-text="localRuntime">Local runtime</strong><span id="statusText" role="status">Not loaded</span></div><span class="local-badge" data-text="localBadge">GGUF</span></div>
     </aside>
 
@@ -33,12 +35,16 @@
         <button class="secondary-button settings-button" id="settingsButton"><span data-icon="settings"></span><span data-text="settings">Settings</span></button>
       </header>
 
+      <div id="runningResponse" class="running-response" role="status" hidden><span id="runningResponseLabel"></span><button id="returnToResponse" class="text-button" data-text="returnResponse">View response</button></div>
+
       <div class="chat-stage">
       <section class="messages" id="messages">
         <div class="welcome" id="welcome">
           <img class="welcome-mark" data-brand-logo src="/assets/themes/assets/fallback.svg" alt="">
           <h1 data-text="welcomeTitle">What are you working on?</h1>
           <p data-text="welcomeSubtitle">Chat directly with your local model.</p>
+          <div id="starterPrompts" class="starter-prompts" aria-label="Starter prompts"></div>
+          <button id="getFirstModel" class="primary-button" data-text="getFirstModel" hidden>Get your first model</button>
         </div>
       </section>
 
@@ -46,10 +52,12 @@
         <div class="composer-box">
           <div class="composer">
             <textarea id="prompt" rows="1" placeholder="Message your local model…" aria-label="Message" data-label="messageLabel"></textarea>
+            <button id="expandComposer" class="icon-button expand-composer" data-title="expandComposer" aria-label="Expand composer"><span data-icon="expand"></span></button>
           </div>
           <div class="composer-toolbar" id="composerToolbar">
             <div class="composer-tools">
               <button id="optionsButton" class="composer-action" popovertarget="optionsPopover" aria-expanded="false"><span data-icon="options"></span><span data-text="options">Options</span><span id="systemSummary" class="options-state" hidden>· Custom</span></button>
+              <button id="libraryButton" class="composer-action" data-title="library"><span data-icon="library"></span><span data-text="library">Library</span></button>
               <label class="thinking-control" id="thinkingControl">
                 <input id="quickThinking" type="checkbox" role="switch" aria-label="Thinking mode" data-label="thinkingMode" aria-describedby="thinkingHelp" disabled>
                 <span data-icon="thinking" aria-hidden="true"></span>
@@ -76,7 +84,6 @@
         <div class="composer-popover" id="optionsPopover" popover="auto" role="dialog" aria-labelledby="optionsTitle">
           <h2 id="optionsTitle" data-text="responseOptions">Response options</h2>
           <div id="composerSettingsSlot"></div>
-          <p class="setting-help" data-text="responseScopeHelp">Changes apply to the next response in this chat.</p>
         </div>
         <div class="composer-popover" id="modelPopover" popover="auto" role="dialog" aria-labelledby="modelPopoverTitle">
           <h2 id="modelPopoverTitle" data-text="modelSelection">Select a model</h2>
@@ -97,6 +104,7 @@
           <p id="contextLabel">Context 0%</p>
           <div class="context-track"><span id="contextBar"></span></div>
           <p class="setting-help" id="contextWarning" data-text="contextWarning" hidden>Older turns may be trimmed as the context fills up.</p>
+          <button id="chatUsageButton" class="secondary-button full" data-text="chatTokenUsage">Token usage for this chat</button>
         </div>
         <p class="composer-footnote" data-text="footnote">Local models can make mistakes. Check important information.</p>
       </section>
@@ -110,7 +118,7 @@
         <div class="section-title" data-text="appearance">Appearance</div>
         <div class="grid-two">
           <label><span data-text="theme">Theme</span><select id="themeSelect"><option value="chatgpt">ChatGPT</option></select></label>
-          <label><span data-text="colorMode">Color mode</span><select id="colorModeSelect"><option value="light" data-text="light">Light</option><option value="dark" data-text="dark" selected>Dark</option></select></label>
+          <label><span data-text="colorMode">Color mode</span><select id="colorModeSelect"><option value="light" data-text="light">Light</option><option value="dark" data-text="dark" selected>Dark</option><option value="system" data-text="systemAppearance">Follow system</option></select></label>
         </div>
         <p class="setting-help" data-text="appearanceHelp">Appearance stays in this browser. Your model and chats stay the same.</p>
         <p class="theme-error" id="themeError" role="status" hidden></p>
@@ -120,6 +128,7 @@
         <div class="section-title"><span data-text="modelLoading">Model loading</span><span class="reload-badge" data-text="requiresReload">Requires reload</span></div>
         <label for="modelSelect" data-text="detectedModel">Detected model</label>
         <select id="modelSelect"></select>
+        <div class="settings-actions model-library-actions"><button id="getModelsButton" class="secondary-button" data-text="getModels">Get models</button><button id="refreshModelsButton" class="secondary-button" data-text="refreshModels">Refresh installed models</button></div>
         <label for="customModel" data-text="customModel">Custom GGUF path</label>
         <input id="customModel" placeholder="D:\path\to\model.gguf" data-placeholder="customModelPlaceholder">
         <div class="grid-three">
@@ -143,6 +152,7 @@
         <div class="row-between"><div><strong data-text="thinkingMode">Thinking mode</strong><small id="thinkingSupportHelp">Select a model to check Thinking support.</small></div><label class="switch"><input id="thinking" type="checkbox" aria-label="Thinking mode" data-title="thinkingMode" aria-describedby="thinkingSupportHelp" disabled><span></span></label></div>
         <label class="range-label" for="temperatureNumber"><span data-text="temperatureTitle">Temperature</span><input id="temperatureNumber" type="number" min="0" max="2" step="any" value="0" required></label>
         <input id="temperature" type="range" aria-label="Temperature" data-title="temperatureTitle" min="0" max="2" step="0.05" value="0">
+        <p class="setting-help" data-text="temperatureHelp">Lower values usually give more focused responses; higher values add variation. This does not guarantee accuracy.</p>
       </section>
 
       <details class="setting-section" id="advancedOptions">
@@ -154,17 +164,28 @@
           <label><span data-text="repeatPenalty">Repeat penalty</span><input id="repeatPenalty" type="number" min="0" max="2" step="any" value="1" required></label>
           <label><span data-text="seed">Seed</span><input id="seed" type="number" value="-1" required></label>
         </div>
+        <p class="setting-help" data-text="samplingHelp">Top-p and min-p filter unlikely choices; top-k limits how many choices remain. Repeat penalty discourages repetition. Seed -1 allows a fresh random seed.</p>
+        <button id="resetSampling" class="text-button" data-text="resetSampling">Reset sampling to saved defaults</button>
       </details>
       <section class="setting-section" id="responsePreferences">
         <div class="settings-actions"><button class="secondary-button" id="resetSettings" data-text="useSavedDefaults">Use saved defaults</button><button class="secondary-button" id="saveResponseDefaults" data-text="saveDefaults">Save as defaults</button></div>
         <p id="responseSettingsStatus" class="setting-help" role="status" data-text="responseScopeHelp">Changes apply to the next response in this chat.</p>
         <p id="responseSettingsError" class="model-load-error" role="alert" hidden></p>
       </section>
+      <section class="setting-section" id="comfortSettings">
+        <div class="section-title" data-text="comfort">Reading and composing</div>
+        <div class="grid-two">
+          <label><span data-text="textSize">Text size</span><select id="readingSize"><option value="default" data-text="defaultSize">Theme default</option><option value="large" data-text="largeSize">Large</option><option value="larger" data-text="largerSize">Extra large</option></select></label>
+          <label><span data-text="spacing">Message spacing</span><select id="readingSpacing"><option value="default" data-text="defaultSize">Theme default</option><option value="comfortable" data-text="comfortable">Comfortable</option></select></label>
+        </div>
+        <label><span data-text="sendBehavior">Send shortcut</span><select id="sendBehavior"><option value="enter" data-text="enterSends">Enter sends · Shift+Enter adds a line</option><option value="modifier" data-text="modifierSends">Ctrl/Cmd+Enter sends · Enter adds a line</option></select></label>
+        <button id="usageButton" class="secondary-button full" data-text="tokenUsage">Token usage</button>
+      </section>
       <details class="keyboard-help"><summary data-text="keyboardShortcuts">Keyboard shortcuts</summary><dl><dt data-text="send">Send message</dt><dd><kbd>Enter</kbd></dd><dt data-text="newLine">New line</dt><dd><kbd>Shift + Enter</kbd></dd><dt data-text="stop">Stop response</dt><dd><kbd>Ctrl / Cmd + Shift + X</kbd></dd><dt data-text="closePanels">Close panels</dt><dd><kbd>Escape</kbd></dd></dl></details>
     </aside>
     <div class="overlay" id="overlay"></div>
     <div class="toast" id="toast" role="status"></div>
   </div>
-  <script type="module" src="/assets/app.js?v=14"></script>
+  <script type="module" src="/assets/app.js?v=16"></script>
 </body>
 </html>

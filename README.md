@@ -84,16 +84,22 @@ Choose **ChatGPT**, **Claude**, or **GitHub Copilot** layouts in light or dark m
 The interface provides:
 
 - 🤖 Explicit model selection and loading, with visible Thinking support
+- ⬇️ Download public GGUF models from Settings, with progress, pause/resume, and explicit loading
 - 🌊 Streaming with Stop, Copy, Retry, Regenerate in a new chat, and Continue
 - 💭 Collapsed reasoning when returned, plus expandable response details
 - 💬 Searchable JSONL history and per-chat drafts restored after refresh
 - ⚙️ Grouped response options, per-chat preferences, and explicit saved defaults
+- 📚 Saved profiles and prompt templates, starter prompts, an expanded editor, and Edit prompt branches
+- 📊 Stored token-usage heatmaps across chats and individual responses
+- 📖 Browse other chats during generation; choose reading size, spacing, and send shortcuts
 - 📊 Context usage, first-token latency, speed, and token metrics
 - 📱 Responsive layouts, keyboard shortcuts, and an always-visible composer
 - ♾️ No fixed output-token limit; generation stops at EOS, context boundary, interruption, or error
 - 🧼 Direct local chat without agent tools, RAG, project context, or hidden prompts
 
 See the [Playground README and six-theme gallery](local_llm_playground/README.md), [theme customization guide](local_llm_playground/docs/themes.md), and [chat behavior guide](local_llm_playground/docs/usability.md).
+
+Use **Settings → Model loading → Get models** to browse public Hugging Face repositories. See the [model download guide and screenshot](local_llm_playground/docs/model-downloads.md).
 
 ## 💡 Example prompts
 

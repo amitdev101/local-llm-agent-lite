@@ -1,4 +1,5 @@
 import { initThemes, text, refreshThemeContent } from "./theme.js";
+import { initEnhancements } from "./enhancements.js";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
@@ -9,6 +10,8 @@ const ui = Object.fromEntries(
 const defaults = { temperature: 0, top_p: .95, top_k: 40, min_p: .05, repeat_penalty: 1, seed: -1 };
 let activeChat = null;
 let generating = false;
+let generationSession = null;
+let enhancements = null;
 let lastUserMessage = "";
 let allChats = [];
 let conversationChars = 0;
@@ -156,6 +159,7 @@ function saveDraft() {
 
 function promptInput() {
   promptRevision++;
+  if (generating && generationSession?.chatId === activeChat) generationSession.draftEdited = true;
   resizePrompt();
   clearTimeout(draftSaveTimer);
   draftSaveTimer = setTimeout(saveDraft, 250);
@@ -179,6 +183,8 @@ function activateChat(id, transferDraft = false) {
   writeBrowserState(ACTIVE_CHAT_KEY, id || "new");
   restoreDraft();
   updateLabels();
+  updateRunningResponse();
+  enhancements?.update();
 }
 
 function initDrafts() {
@@ -417,6 +423,11 @@ function messageElement(role, content = "", metrics = null, status = "complete",
     wrapper.generationRequest = request;
     wrapper.messageId = messageId;
     wrapper.innerHTML = `<div class="assistant-head"><img class="assistant-icon" data-brand-logo alt=""><span data-text="assistantName"></span></div><div class="thinking-slot"><details class="thinking-box" hidden><summary></summary><div class="thinking-content"></div></details></div><div class="response-progress" role="status" hidden></div><div class="content"></div><div class="response-notice" hidden></div><details class="response-details" hidden><summary data-text="responseDetails"></summary><div class="metrics"></div></details><div class="message-actions"><button class="copy-response"><span data-icon="copy"></span><span data-text="copy"></span></button><button class="regenerate"><span data-icon="regenerate"></span><span data-text="regenerate"></span></button><button class="continue-response"><span data-icon="continue"></span><span data-text="continue"></span></button></div>`;
+    const edit = document.createElement("button"); edit.className = "edit-prompt"; edit.dataset.text = "editPrompt"; edit.textContent = text("editPrompt");
+    wrapper.querySelector(".message-actions").appendChild(edit);
+    edit.onclick = () => {
+      if (!edit.disabled && request) enhancements?.editPrompt({ chatId: activeChat, messageId: wrapper.messageId, message: request.message, request });
+    };
     wrapper.querySelector(".copy-response").onclick = async () => { await navigator.clipboard.writeText(wrapper.dataset.raw || ""); showToast(text("copiedResponse")); };
     wrapper.querySelector(".regenerate").onclick = () => {
       if (wrapper.querySelector(".regenerate").disabled) return;
@@ -437,8 +448,8 @@ function messageElement(role, content = "", metrics = null, status = "complete",
 function updateResponseActions() {
   const latest = [...ui.messages.querySelectorAll(".message")].at(-1);
   const busy = generating || loadingModel || ["loading", "generating"].includes(runtimeStatus);
-  ui.newChat.disabled = generating;
-  ui.chatList.querySelectorAll(".delete-chat").forEach(button => { button.disabled = generating; });
+  ui.newChat.disabled = generating && !generationSession?.assistant;
+  ui.chatList.querySelectorAll(".delete-chat").forEach(button => { button.disabled = generating && button.dataset.chatId === generationSession?.chatId; });
   ui.messages.querySelectorAll(".assistant").forEach(element => {
     const retry = ["error", "interrupted"].includes(element.dataset.status);
     const available = element === latest && Boolean(element.generationRequest);
@@ -448,10 +459,20 @@ function updateResponseActions() {
     element.querySelector(".continue-response").hidden = retry;
     element.querySelector(".continue-response").disabled = busy || element !== latest || element.dataset.status !== "complete";
     element.querySelector(".continue-response").title = text("continueLatest");
+    element.querySelector(".edit-prompt").disabled = busy || !element.messageId || !element.generationRequest || element.dataset.status !== "complete";
   });
+  updateRunningResponse();
+  enhancements?.update();
+}
+
+function updateRunningResponse() {
+  const banner = $("runningResponse");
+  banner.hidden = !generating || !generationSession?.chatId || generationSession.chatId === activeChat;
+  $("runningResponseLabel").textContent = text("runningElsewhere");
 }
 
 function updateAssistant(element, raw, metrics = null, status = "complete", liveSeconds = 0, error = "") {
+  element.responseMetrics = metrics;
   const statusChanged = element.dataset.status !== status;
   element.dataset.raw = raw;
   element.dataset.status = status;
@@ -608,12 +629,7 @@ async function loadInitial() {
     const [models, settings, status, chats] = await Promise.all([
       api("/api/models"), api("/api/settings"), api("/api/status"), api("/api/chats")
     ]);
-    availableModels = models;
-    const modelOptions = models.length
-      ? models.map((model) => `<option value="${escapeHtml(model.path)}">${escapeHtml(model.name)} · ${(model.size / 1073741824).toFixed(2)} GB</option>`).join("")
-      : `<option value="">${escapeHtml(text("noModels"))}</option>`;
-    ui.modelSelect.innerHTML = modelOptions;
-    ui.quickModelSelect.innerHTML = modelOptions;
+    populateModels(models);
     if (settings.model_path && models.some((model) => model.path === settings.model_path)) ui.modelSelect.value = settings.model_path;
     else if (settings.model_path) ui.customModel.value = settings.model_path;
     ui.quickModelSelect.value = ui.modelSelect.value;
@@ -640,6 +656,27 @@ async function loadInitial() {
   } catch (error) { setStatus("error", error.message); }
 }
 
+function populateModels(models) {
+  availableModels = models;
+  const options = models.length ? models.map(model => `<option value="${escapeHtml(model.path)}">${escapeHtml(model.name)} · ${(model.size / 1073741824).toFixed(2)} GiB</option>`).join("")
+    : `<option value="">${escapeHtml(text("noModels"))}</option>`;
+  ui.modelSelect.innerHTML = ui.quickModelSelect.innerHTML = options;
+}
+
+async function refreshModels(preferred = null) {
+  const models = await api("/api/models");
+  const current = selectedModelPath();
+  populateModels(models);
+  const target = preferred && !generating && !loadingModel && !["loading", "generating"].includes(runtimeStatus) ? preferred : current;
+  if (models.some(model => model.path === target)) {
+    ui.customModel.value = ""; ui.modelSelect.value = ui.quickModelSelect.value = target;
+  } else {
+    ui.customModel.value = target || ""; ui.modelSelect.value = ui.quickModelSelect.value = "";
+  }
+  updateModelPicker(); enhancements?.update();
+  return Boolean(preferred && target === preferred);
+}
+
 function updateModelStatus(status, settings = {}) {
   clearTimeout(runtimeRefreshTimer); runtimeRefreshTimer = null;
   runtimeStatus = status.status;
@@ -656,7 +693,7 @@ function updateModelStatus(status, settings = {}) {
   if (loadedModelPath) {
     ui.activeModel.textContent = loadedModelPath.split(/[\\/]/).pop();
     const model = availableModels.find(model => model.path === loadedModelPath);
-    const size = model ? `${(model.size / 1073741824).toFixed(2)} GB` : text("custom");
+    const size = model ? `${(model.size / 1073741824).toFixed(2)} GiB` : text("custom");
     ui.modelMeta.textContent = text("loadedModelMeta", { size, context: loadedModelSettings.context_size || ui.contextSize.value,
       gpu: loadedModelSettings.gpu_layers ?? ui.gpuLayers.value });
   } else { ui.activeModel.textContent = text("noModel"); ui.modelMeta.textContent = text("selectModel"); }
@@ -703,7 +740,7 @@ function renderChatList() {
     };
     row.querySelector(".delete-chat").onclick = async (event) => {
       event.stopPropagation();
-      if (generating) return;
+      if (generating && chat.id === generationSession?.chatId) return;
       if (!confirm(text("deleteConfirm", { title: chat.title }))) return;
       await api(`/api/chats/${chat.id}`, { method: "DELETE" });
       if (activeChat === chat.id) {
@@ -718,12 +755,14 @@ function renderChatList() {
       } else { writeBrowserState(draftKey(chat.id), null); writeBrowserState(responseKey(chat.id), null); }
       await refreshChats();
     };
+    row.querySelector(".delete-chat").dataset.chatId = chat.id;
+    row.querySelector(".delete-chat").disabled = generating && chat.id === generationSession?.chatId;
     ui.chatList.appendChild(row);
   });
 }
 
 async function newChat() {
-  if (generating) return;
+  if (generating && !generationSession?.assistant) return;
   chatNavigation++;
   closeComposerPopovers();
   // An unsent new chat has its own draft; create its server record on Send.
@@ -733,12 +772,12 @@ async function newChat() {
 }
 
 async function openChat(id) {
-  if (generating) return;
+  if (generating && !generationSession?.assistant) return;
   const navigation = ++chatNavigation;
   closeComposerPopovers();
   saveWorkspaceState();
   const chat = await api(`/api/chats/${id}`);
-  if (navigation !== chatNavigation || generating) return;
+  if (navigation !== chatNavigation) return;
   displayChat(chat, id);
   await refreshChats();
   if (mobile.matches) setSidebar(false);
@@ -759,10 +798,24 @@ function displayChat(chat, id = chat.id) {
     messageElement(message.type, message.content, message.metrics, message.status, sourcePrompt, message.request, message.error, message.id);
     conversationChars += message.content.length;
   });
-  const lastMetrics = [...chat.messages].reverse().find((message) => message.metrics)?.metrics;
+  if (generationSession?.chatId === id) generationSession.countedInView = chat.messages.some(message => message.id && message.id === generationSession.assistant?.messageId);
+  if (generationSession?.chatId === id && generationSession.assistant
+      && !chat.messages.some(message => message.id && message.id === generationSession.assistant.messageId)) {
+    if (!chat.messages.some(message => message.type === "user" && message.request?.request_id === generationSession.request.request_id)) {
+      messageElement("user", generationSession.request.message);
+      conversationChars += generationSession.request.message.length;
+    }
+    ui.messages.appendChild(generationSession.assistant);
+    refreshThemeContent(generationSession.assistant);
+    generationSession.assistant.querySelector(".thinking-box summary").textContent = text(generationSession.assistant.dataset.status === "streaming" ? "working" : "worked", { duration: generationSession.assistant.dataset.duration });
+    if (!generating) conversationChars += generationSession.assistant.dataset.raw.length;
+  }
+  const lastMetrics = (generationSession?.chatId === id ? generationSession.assistant?.responseMetrics : null)
+    || [...chat.messages].reverse().find((message) => message.metrics)?.metrics;
   if (lastMetrics) updateContext(lastMetrics.context_used, lastMetrics.context_size, true);
   else updateContext();
   scrollDown(true);
+  updateResponseActions();
 }
 
 async function loadModel() {
@@ -812,13 +865,15 @@ async function send(message, retryRequest = null, branchTarget = null) {
   const fromComposer = message === undefined;
   message ??= ui.prompt.value.trim();
   if (!message || generating) return;
+  enhancements?.finishCompose();
   if (!retryRequest && !validateResponseSettings(true)) return;
   const submittedDraft = ui.prompt.value;
   let submittedRevision = promptRevision;
-  const request = { ...(retryRequest || { message, ...generationValues(), request_id: crypto.randomUUID() }),
+  let request = { ...(retryRequest || { message, ...generationValues(), request_id: crypto.randomUUID() }),
     expected_model_path: selectedModelPath() || null };
   // Reserve the UI before the first await so rapid clicks cannot submit twice.
   generating = true;
+  const session = generationSession = { chatId: activeChat, assistant: null, request, draftEdited: false };
   clearTimeout(runtimeRefreshTimer); runtimeRefreshTimer = null;
   chatNavigation++;
   saveWorkspaceState();
@@ -839,8 +894,10 @@ async function send(message, retryRequest = null, branchTarget = null) {
     }
     if (!runtimeModelMatchesSelection()) { showToast(text("loadSelectedFirst")); return; }
     if (branchTarget) {
-      const branch = await api(`/api/chats/${branchTarget.chatId}/branch`, { method: "POST", body: JSON.stringify({ message_id: branchTarget.messageId }) });
+      const branch = await api(`/api/chats/${branchTarget.chatId}/branch`, { method: "POST", body: JSON.stringify({ message_id: branchTarget.messageId,
+        ...(branchTarget.editedMessage ? { message: branchTarget.editedMessage } : {}) }) });
       displayChat(branch);
+      if (branchTarget.editedMessage) request = { ...branch.messages.at(-1).request, expected_model_path: request.expected_model_path };
     }
     if (!activeChat) {
       const chat = await api("/api/chats", { method: "POST", body: JSON.stringify(request) });
@@ -856,13 +913,15 @@ async function send(message, retryRequest = null, branchTarget = null) {
       conversationChars += request.message.length; updateContext();
     }
     assistant = messageElement("assistant", "", null, "streaming", request.message, request);
+    session.chatId = activeChat; session.assistant = assistant; session.request = request;
+    updateResponseActions();
     scrollDown(true);
     generationTimer = setInterval(() => {
       elapsedSeconds += 1;
       setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
       updateAssistant(assistant, raw, null, "streaming", elapsedSeconds);
     }, 1000);
-    const response = await fetch(`/api/chats/${activeChat}/generate`, {
+    const response = await fetch(`/api/chats/${session.chatId}/generate`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request)
     });
     if (!response.ok) {
@@ -871,8 +930,12 @@ async function send(message, retryRequest = null, branchTarget = null) {
       throw new Error(detail || text("responseRequestFailed"));
     }
     if (!response.body) throw new Error(text("streamInterrupted"));
-    if (fromComposer && ui.prompt.value === submittedDraft && promptRevision === submittedRevision) {
-      ui.prompt.value = ""; resizePrompt(); saveDraft();
+    if (fromComposer && !session.draftEdited) {
+      if (activeChat === session.chatId && ui.prompt.value === submittedDraft && promptRevision === submittedRevision) {
+        ui.prompt.value = ""; resizePrompt(); saveDraft();
+      } else if (activeChat !== session.chatId && readBrowserState(draftKey(session.chatId)) === submittedDraft) {
+        writeBrowserState(draftKey(session.chatId), null);
+      }
     }
     ui.stopButton.disabled = false;
     const reader = response.body.getReader(); const decoder = new TextDecoder(); let pending = "";
@@ -886,16 +949,17 @@ async function send(message, retryRequest = null, branchTarget = null) {
         setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
         updateAssistant(assistant, raw, null, "streaming", elapsedSeconds);
       }
-      else if (item.type === "context_trimmed") contextNotice(item.message);
+      else if (item.type === "context_trimmed" && activeChat === session.chatId) contextNotice(item.message);
       else if (item.type === "token") {
         const follow = ui.messages.scrollHeight - ui.messages.scrollTop - ui.messages.clientHeight < 180;
-        raw += item.text; updateAssistant(assistant, raw, null, "streaming", elapsedSeconds); scrollDown(follow);
+        raw += item.text; updateAssistant(assistant, raw, null, "streaming", elapsedSeconds);
+        if (activeChat === session.chatId) scrollDown(follow);
       }
       else if (item.type === "done" || item.type === "stopped") {
         terminal = true;
         clearInterval(generationTimer);
         updateAssistant(assistant, raw, item.metrics, item.type === "stopped" ? "interrupted" : "complete", elapsedSeconds);
-        if (item.metrics) updateContext(item.metrics.context_used, item.metrics.context_size, true);
+        if (item.metrics && activeChat === session.chatId) updateContext(item.metrics.context_used, item.metrics.context_size, true);
       }
       else if (item.type === "error") throw new Error(item.message);
     };
@@ -916,7 +980,8 @@ async function send(message, retryRequest = null, branchTarget = null) {
     if (assistant) updateAssistant(assistant, raw, null, "error", elapsedSeconds, error.message);
     else showToast(text(branchTarget ? "regenerateFailed" : "requestFailed"));
   } finally {
-    clearInterval(generationTimer); generationTimer = null; conversationChars += raw.length;
+    clearInterval(generationTimer); generationTimer = null;
+    if (activeChat === session.chatId && !session.countedInView) conversationChars += raw.length;
     generating = false;
     ui.quickModelSelect.disabled = false; ui.quickLoadModel.disabled = false; ui.loadModel.disabled = false;
     ui.sendButton.classList.remove("hidden"); ui.stopButton.classList.add("hidden"); ui.stopButton.disabled = false;
@@ -949,7 +1014,10 @@ async function stop() {
     ui.stopButton.disabled = !generating;
   }
 }
-function resizePrompt() { ui.prompt.style.height = "auto"; ui.prompt.style.height = `${Math.min(ui.prompt.scrollHeight, 180)}px`; }
+function resizePrompt() {
+  ui.prompt.style.height = "auto";
+  ui.prompt.style.height = enhancements?.isExpanded() ? "" : `${Math.min(ui.prompt.scrollHeight, 180)}px`;
+}
 
 ui.settingsButton.onclick = () => openSettings(true); ui.closeSettings.onclick = () => openSettings(false); ui.overlay.onclick = () => { openSettings(false); if (mobile.matches) setSidebar(false); };
 ui.modelSettingsButton.onclick = () => { openSettings(true); ui.modelSelect.focus(); };
@@ -962,7 +1030,8 @@ ui.prompt.oncompositionstart = () => { composingPrompt = true; };
 ui.prompt.oncompositionend = () => { composingPrompt = false; };
 ui.prompt.onkeydown = event => {
   if (event.defaultPrevented || event.isComposing || composingPrompt || event.keyCode === 229 || event.repeat) return;
-  if (event.key === "Enter" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey) {
+  const modifier = enhancements?.isExpanded() || enhancements?.modifierSends();
+  if (event.key === "Enter" && !event.shiftKey && !event.altKey && (modifier ? (event.ctrlKey !== event.metaKey) : !event.ctrlKey && !event.metaKey)) {
     event.preventDefault(); return send();
   }
 };
@@ -1016,10 +1085,29 @@ document.addEventListener("themechange", () => {
   });
   updateResponseActions();
   resizePrompt();
+  enhancements?.themeChanged();
 });
 
 initComposerPopovers();
 initDrafts();
 await initThemes();
+enhancements = initEnhancements({ api, text, refreshThemeContent, notify: showToast, resize: resizePrompt, send: () => send(),
+  getState: () => ({ chatId: activeChat, draft: ui.prompt.value, settings: generationValues(), generating,
+    modelBusy: loadingModel || ["loading", "generating"].includes(runtimeStatus), hasModels: Boolean(availableModels.length || selectedModelPath()) }),
+  refreshModels,
+  loadDownloaded: async path => { if (await refreshModels(path)) await loadModel(); },
+  closePanels: () => { openSettings(false); closeComposerPopovers(); },
+  setDraft: value => { ui.prompt.value = value; promptInput(); saveDraft(); ui.prompt.focus(); },
+  applyProfile: values => { applySettings(values); responseSettingsChanged(); saveResponseSettings(); },
+  validSettings: () => validateResponseSettings(),
+  edit: (message, target) => send(message, target.request, { chatId: target.chatId, messageId: target.messageId, editedMessage: message }),
+  resetSampling: (parameter = null) => {
+    for (const [key, id] of [["temperature", "temperatureNumber"], ["top_p", "topP"], ["top_k", "topK"], ["min_p", "minP"], ["repeat_penalty", "repeatPenalty"], ["seed", "seed"]]) {
+      if (parameter === null ? key !== "temperature" : key === parameter) ui[id].value = responseDefaults[key];
+    }
+    ui.temperature.value = ui.temperatureNumber.value; responseSettingsChanged();
+  }
+});
+$("returnToResponse").onclick = () => { if (generationSession?.chatId) openChat(generationSession.chatId).catch(error => showToast(error.message)); };
 setSidebar(!mobile.matches);
 await loadInitial();

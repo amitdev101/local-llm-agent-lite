@@ -46,7 +46,8 @@ class RecoveryTests(unittest.TestCase):
         module = types.ModuleType("playground_recovery_test")
         module.__file__ = str(root / "backend.py")
         source = Path(__file__).resolve().parents[1] / "backend.py"
-        with patch.dict(sys.modules, {module.__name__: module,
+        with patch.object(sys, "path", [str(source.parent), *sys.path]), \
+                patch.dict(sys.modules, {module.__name__: module,
                                       "llama_cpp": types.SimpleNamespace(Llama=object)}), \
                 patch("logging.basicConfig"), \
                 patch("logging.FileHandler", return_value=logging.NullHandler()):
@@ -412,6 +413,75 @@ class RecoveryTests(unittest.TestCase):
         self.assertFalse(result["load_settings_saved"])
         self.assertFalse(self.backend.runtime.generation_lock.locked())
         self.assertEqual(self.backend.status()["model_path"], str(model.resolve()))
+
+    def test_usage_is_persisted_once_for_recovered_answers_and_survives_deletion(self):
+        metrics = self.generate()[-1]["metrics"]
+        self.assertTrue(metrics["token_counts_estimated"])
+        self.generate()
+        data = self.backend.token_usage()
+        self.assertEqual(data["totals"]["responses"], 1)
+        self.assertEqual(data["totals"]["prompt_tokens"], metrics["prompt_tokens"])
+        self.backend.delete_chat(self.chat_id)
+        self.assertEqual(self.backend.token_usage()["totals"], data["totals"])
+
+    def test_usage_includes_partial_failures_and_retries_as_separate_attempts(self):
+        self.backend.runtime.llm = FakeModel(("Partial",), "Failure")
+        self.generate()
+        self.backend.runtime.llm = FakeModel()
+        self.generate()
+        data = self.backend.token_usage(self.chat_id)
+        self.assertEqual(data["totals"]["responses"], 2)
+        self.assertEqual([row["status"] for row in data["records"]], ["error", "complete"])
+        self.assertGreater(data["records"][0]["completion_tokens"], 0)
+
+    def test_branch_usage_excludes_inherited_history(self):
+        self.generate()
+        self.generate({**self.request, "message": "Second", "request_id": "second"})
+        branch = self.backend.branch_chat(self.chat_id, self.backend.BranchRequest(message_id=self.messages()[-1]["id"]))
+        self.assertTrue(branch["messages"][1]["usage_inherited"])
+        self.assertEqual(self.backend.token_usage(branch["id"])["totals"]["responses"], 0)
+        self.chat_id = branch["id"]
+        self.generate(branch["messages"][-1]["request"])
+        self.assertEqual(self.backend.token_usage()["totals"]["responses"], 3)
+        self.assertEqual(self.backend.token_usage(self.chat_id)["totals"]["responses"], 1)
+
+    def test_edit_prompt_creates_a_branch_with_a_new_request_and_original_preferences(self):
+        self.generate()
+        target = self.messages()[-1]
+        before = self.backend.chat_path(self.chat_id).read_bytes()
+        branch = self.backend.branch_chat(self.chat_id, self.backend.BranchRequest(message_id=target["id"], message="  Edited prompt  "))
+        self.assertEqual(self.backend.chat_path(self.chat_id).read_bytes(), before)
+        user = branch["messages"][-1]
+        self.assertEqual(user["content"], "Edited prompt")
+        self.assertNotEqual(user["request"]["request_id"], target["request"]["request_id"])
+        self.assertEqual(user["request"]["temperature"], target["request"]["temperature"])
+        self.chat_id = branch["id"]
+        self.generate(user["request"])
+        self.assertEqual(len([item for item in self.messages() if item["type"] == "user"]), 1)
+        with self.assertRaises(self.backend.HTTPException):
+            self.backend.branch_chat(self.chat_id, self.backend.BranchRequest(message_id=self.messages()[-1]["id"], message="   "))
+
+    def test_disconnect_records_partial_usage_and_releases_generation(self):
+        with patch.object(self.backend, "StreamingResponse", side_effect=lambda content, **kw: content):
+            stream = self.backend.generate(self.chat_id, self.backend.GenerateRequest(**self.request))
+        next(stream); next(stream); stream.close()
+        self.assertEqual(self.backend.token_usage()["totals"]["responses"], 1)
+        self.assertEqual(self.backend.token_usage(self.chat_id)["records"][0]["status"], "interrupted")
+
+    def test_deletion_protects_the_running_chat_and_allows_other_chats(self):
+        other = self.backend.create_chat(self.backend.ChatCreate())["id"]
+        with patch.object(self.backend, "StreamingResponse", side_effect=lambda content, **kw: content):
+            stream = self.backend.generate(self.chat_id, self.backend.GenerateRequest(**self.request))
+        next(stream)
+        try:
+            with self.assertRaises(self.backend.HTTPException) as error:
+                self.backend.delete_chat(self.chat_id)
+            self.assertEqual(error.exception.status_code, 409)
+            self.backend.delete_chat(other)
+            self.assertTrue(self.backend.chat_path(self.chat_id).exists())
+        finally:
+            stream.close()
+        self.assertIsNone(self.backend.runtime.active_chat_id)
 
 
 if __name__ == "__main__":

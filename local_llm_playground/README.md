@@ -4,13 +4,21 @@ A lightweight browser chat for testing local GGUF models. Compare responses, adj
 
 ## 🚀 Run
 
-Install the repository's [Python dependencies](../README.md#-install), place `.gguf` files in the root `models/` folder, then run from the repository root:
+Install the repository's [Python dependencies](../README.md#-install), then run from the repository root:
 
 ```powershell
 python local_llm_playground/main.py
 ```
 
 The launcher opens `http://127.0.0.1:8000`, discovers models, and automatically loads the last valid selection. It replaces an older playground instance on that port and leaves unrelated applications running. To switch models, select one beside the prompt and press **Load**; your conversation and draft stay available.
+
+Add `.gguf` files to the root `models/` folder, or download them using **Settings → Model loading → Get models**.
+
+## Get models
+
+Browse an editable catalog or a public Hugging Face repository directly in Settings. Review GGUF file sizes, choose a filename, and download with progress, Pause, Resume, and Cancel. Downloads continue when the panel closes; interrupted downloads can resume after a server restart. Existing files are preserved, and completed files need an explicit **Load model** action.
+
+Supports public repositories without sign-in and complete single-file GGUF models. Edit [`model_catalog.json`](model_catalog.json) to change the suggestions. See the [download guide and screenshot](docs/model-downloads.md) for storage, verification, and recovery details.
 
 ## 🎨 Themes and screenshots
 
@@ -40,6 +48,20 @@ More views: [Claude on mobile](docs/images/themes/claude-dark-mobile.png), [GitH
 
 ## 💬 Chat behavior
 
+**Library** contains reusable response profiles and saved prompts. Start with General, Coding, or Writing, or save the current response settings as your own profile. Profiles apply to the next response in this chat and leave server defaults alone. Prompt templates fill the composer; when a draft exists, choose **Add to draft** or **Replace draft**. Three starter prompts also appear in an empty chat. Custom library items stay in this browser; built-in entries are editable in [`frontend/presets.json`](frontend/presets.json).
+
+Use the expand icon beside the prompt for a larger editor. It edits the same draft, with **Enter** for line breaks and **Ctrl/Cmd+Enter** to send. **Edit prompt** on a completed response creates a new alternative chat using the revised prompt and that turn's original response settings.
+
+You can browse other chats or compose a new draft while a response runs. A banner returns you to the running response; **Stop** still controls it. One response runs at a time. In **Settings → Reading and composing**, choose text size, spacing, and the compact composer's send shortcut. Appearance can also **Follow system**. Response settings have short explanations and individual Reset buttons.
+
+These captures use isolated sample chats and fake inference.
+
+| Saved profiles and prompts | Token usage |
+| --- | --- |
+| ![Profile library in the Claude theme](docs/images/usability/library.png) | ![Token usage by chat with input, output, and total intensity](docs/images/usability/token-usage.png) |
+
+See the [expanded composer](docs/images/usability/expanded-composer.png) and [chat tools guide](docs/usability.md#library-and-composing).
+
 - **Drafts:** unsent text and response preferences stay with each chat, including an unfinished New chat. Switching chats or refreshing restores them. If browser storage is unavailable, a warning asks you to keep the tab open or copy the text.
 - **Recovery:** failed or stopped responses retain partial text. **Retry** reuses the latest attempt's original prompt and settings without duplicating the user message. If the server already completed the answer, Retry recovers it. Earlier attempts remain available after reopening the chat.
 - **Alternatives:** **Regenerate in new chat** branches from the selected answer's original prompt and settings, preserving the original conversation. **Continue** adds a visible `Continue.` request after the latest completed answer. These actions preserve a separate composer draft.
@@ -66,31 +88,50 @@ More views: [Claude on mobile](docs/images/themes/claude-dark-mobile.png), [GitH
 
 IME composition waits until text is committed before sending. Ctrl+C / Cmd+C keep normal copying behavior. For exact action behavior and manual review scenarios, see the [chat behavior and settings guide](docs/usability.md).
 
+You can change the compact composer to **Ctrl/Cmd+Enter** in Settings; Enter then inserts a line break. The expanded editor always uses Ctrl/Cmd+Enter to send.
+
+## Token usage
+
+Open **Token usage** in the sidebar for totals across all chats, or use **Context → Token usage for this chat**. The heatmap table compares input, output, and total token counts by chat. Select a chat row for its response breakdown, or choose **This chat** for the conversation being viewed.
+
+Usage is stored locally in `data/token_usage.jsonl`, survives restarts, and remains in the overall totals after a chat is deleted. Existing chat metrics are imported when needed. Retries are separate attempts; replaying a saved answer and copying branch history add no new usage. Stopped and failed attempts contribute when counts are available. Counts are tokenizer estimates, and input includes conversation context sent again on each attempt. Older attempts without metrics cannot be reconstructed.
+
 ## 💾 Storage
 
 | Data | Location |
 | --- | --- |
 | Models | Repository root `models/*.gguf` |
+| Partial downloads | Repository root `models/.downloads/*.part` |
+| Download history | `local_llm_playground/data/downloads.json` |
 | JSONL conversations | `local_llm_playground/data/chats/` |
 | Saved defaults and model parameters | `local_llm_playground/data/config.json` |
+| Token usage ledger | `local_llm_playground/data/token_usage.jsonl` |
 | Drafts, unsent response preferences, appearance, last-opened chat | This browser's local storage |
+| Custom profiles, saved prompts, reading and send preferences | This browser's local storage |
 | Logs | `local_llm_playground/logs/` |
 
 Models explicitly configured as supported receive `/think` or `/no_think`; these directives are hidden from saved user messages. Unconfigured models receive no Thinking directive, and the On/Off preference is retained for supported models.
 
 ## 🧰 Troubleshooting
 
-If a model is missing, confirm its filename ends in `.gguf`, place it in the repository's root `models/` folder, and refresh with **Ctrl+F5**. You can also enter a custom GGUF path in Settings. A newly selected model needs **Load** before sending; context, GPU, or thread changes need **Reload**.
+If a model is missing, confirm its filename ends in `.gguf`, place it in the repository's root `models/` folder, and use **Settings → Model loading → Refresh installed models**. You can also download a model with **Get models** or enter a custom GGUF path in Settings. A newly selected model needs **Load** before sending; context, GPU, or thread changes need **Reload**.
 
 ## Verification and screenshot refresh
 
 From the repository root, run the controller and backend checks without a browser or a real model:
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s local_llm_playground/tests -p test_recovery.py
+.\.venv\Scripts\python.exe -m unittest discover -s local_llm_playground/tests -p "test_*.py"
 node --test local_llm_playground/tests/recovery.test.cjs
 ```
 
 These use temporary chats, a fake model, and simulated DOM, storage, and network surfaces. They cover recovery, drafts, model states, keyboard behavior, branches, response presentation, settings scope, validation, and pending reloads.
 
 To check the rendered themes and regenerate the gallery with Playwright, follow the [screenshot instructions](docs/themes.md#playwright-verification-and-screenshots). The preview serves the real frontend with in-memory fixtures and leaves your chats, models, and saved defaults untouched. Review the captures after layout changes and use the [manual scenarios](docs/usability.md#verification) for the complete chat journey.
+
+For end-to-end checks of the new chat tools with temporary data and fake inference:
+
+```powershell
+.\.venv\Scripts\python.exe local_llm_playground/scripts/check_usability.py --screenshots
+.\.venv\Scripts\python.exe local_llm_playground/scripts/check_downloads.py --screenshots
+```

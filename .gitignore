@@ -239,3 +239,7 @@ __marimo__/
 .streamlit/secrets.toml
 .playwright-browsers/*
 plans/*
+
+# Playground private state and unfinished model downloads
+/local_llm_playground/data/
+/models/.downloads/

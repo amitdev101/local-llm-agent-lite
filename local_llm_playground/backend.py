@@ -16,6 +16,8 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from llama_cpp import Llama
 from pydantic import BaseModel, Field
+from token_usage import TokenUsageStore
+from model_downloads import DownloadError, ModelDownloads, repository_id
 
 ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT.parent
@@ -38,6 +40,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("playground")
 settings_lock = threading.Lock()
+usage_store = TokenUsageStore(DATA / "token_usage.jsonl")
+downloads = ModelDownloads(PROJECT_ROOT / "models", DATA / "downloads.json")
 
 DEFAULTS = {
     "model_path": "",
@@ -160,6 +164,7 @@ class ModelRuntime:
         self.status = "not_loaded"
         self.error = ""
         self.loaded_settings = {}
+        self.active_chat_id = None
         self.cancel = threading.Event()
         self.generation_lock = threading.Lock()
 
@@ -242,6 +247,18 @@ class ChatUpdate(BaseModel):
 
 class BranchRequest(BaseModel):
     message_id: str = Field(min_length=1, max_length=100)
+    message: str | None = Field(None, min_length=1, max_length=100000)
+
+
+class DownloadRequest(BaseModel):
+    repo_id: str = Field(min_length=3, max_length=300)
+    filename: str = Field(min_length=1, max_length=500)
+    revision: str = Field("main", min_length=1, max_length=80)
+    save_name: str | None = Field(None, max_length=220)
+
+
+class DownloadControl(BaseModel):
+    action: str = Field(pattern=r"^(pause|resume|cancel)$")
 
 
 class SettingsUpdate(BaseModel):
@@ -302,6 +319,61 @@ def get_settings() -> dict:
     return read_config()
 
 
+def download_result(action, *args, **kwargs):
+    try:
+        return action(*args, **kwargs)
+    except DownloadError as error:
+        raise HTTPException(error.status, str(error)) from error
+    except OSError as error:
+        logger.exception("Model download storage failed")
+        raise HTTPException(500, "Could not save the download. Check folder permissions and free disk space.") from error
+
+
+@app.get("/api/model-catalog")
+def model_catalog() -> dict:
+    entries = []
+    try:
+        values = json.loads((ROOT / "model_catalog.json").read_text(encoding="utf-8"))
+        for item in values if isinstance(values, list) else []:
+            if isinstance(item, dict) and isinstance(item.get("name"), str):
+                entries.append({"name": item["name"], "repo_id": repository_id(item["repo_id"]),
+                                "description": str(item.get("description", ""))})
+    except (OSError, ValueError, KeyError, TypeError):
+        return {"entries": [], "error": "The suggested-model catalog could not be read. You can still enter a repository."}
+    return {"entries": entries, "error": None}
+
+
+@app.get("/api/model-repository")
+def model_repository(repo_id: str, revision: str = "main") -> dict:
+    result = download_result(downloads.inspect, repo_id, revision)
+    for file in result["files"]:
+        file["thinking_support"] = thinking_support(file["save_name"])
+        file["path"] = str((downloads.models_dir / file["save_name"]).resolve())
+    return result
+
+
+@app.get("/api/model-downloads")
+def model_downloads() -> dict:
+    return downloads.snapshot()
+
+
+@app.post("/api/model-downloads")
+def start_model_download(request: DownloadRequest) -> dict:
+    return download_result(downloads.start, request.repo_id, request.filename, request.revision, request.save_name)
+
+
+@app.post("/api/model-downloads/{identifier}")
+def control_model_download(identifier: str, request: DownloadControl) -> dict:
+    return download_result(downloads.control, identifier, request.action)
+
+
+@app.get("/api/usage")
+def token_usage(chat_id: str | None = None) -> dict:
+    if chat_id is not None:
+        chat_path(chat_id)
+    return usage_store.snapshot(CHATS, chat_id)
+
+
 @app.patch("/api/settings")
 def save_settings(values: SettingsUpdate) -> dict:
     return write_config(values.model_dump(exclude_unset=True, exclude_none=True))
@@ -342,6 +414,8 @@ def get_chat(chat_id: str) -> dict:
 
 @app.post("/api/chats/{chat_id}/branch")
 def branch_chat(chat_id: str, request: BranchRequest) -> dict:
+    if request.message is not None and not request.message.strip():
+        raise HTTPException(400, "Enter a message")
     source = chat_view(chat_id)
     target = next((index for index, item in enumerate(source["messages"])
                    if item["id"] == request.message_id and item["type"] == "assistant"), None)
@@ -356,15 +430,19 @@ def branch_chat(chat_id: str, request: BranchRequest) -> dict:
     branch_id = str(uuid.uuid4())
     append_event(branch_id, {"type": "created", "title": f"{source['title'][:85]} · Alternative"})
     append_event(branch_id, {"type": "branched", "chat_id": chat_id, "message_id": request.message_id})
-    for item in source["messages"][:user_index + 1]:
+    for index, item in enumerate(source["messages"][:user_index + 1]):
         if item["type"] == "user":
             values = {key: value for key, value in item["request"].items() if key in ResponseSettings.model_fields}
             append_event(branch_id, {"type": "settings", "values": values})
         copied = {key: value for key, value in item.items() if key not in {"id", "request", "time"}}
         if item["type"] == "user":
             copied["request_id"] = item["request"]["request_id"]
+            if index == user_index and request.message is not None:
+                copied["content"] = request.message.strip()
+                copied["request_id"] = str(uuid.uuid4())
         else:
             copied["message_id"] = item["id"]
+            copied["usage_inherited"] = True
         append_event(branch_id, copied)
     return chat_view(branch_id)
 
@@ -381,7 +459,15 @@ def delete_chat(chat_id: str) -> dict:
     path = chat_path(chat_id)
     if not path.exists():
         raise HTTPException(404, "Chat not found")
-    path.unlink()
+    acquired = runtime.generation_lock.acquire(blocking=False)
+    if not acquired and runtime.active_chat_id in {None, chat_id}:
+        raise HTTPException(409, "Stop this chat's response before deleting it")
+    try:
+        usage_store.snapshot(CHATS)
+        path.unlink()
+    finally:
+        if acquired:
+            runtime.generation_lock.release()
     return {"deleted": True}
 
 
@@ -397,6 +483,7 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
         raise HTTPException(409, "Load a model first")
     if not runtime.generation_lock.acquire(blocking=False):
         raise HTTPException(409, "A generation is already active")
+    runtime.active_chat_id = chat_id
 
     runtime.cancel.clear()
     completed = None
@@ -467,11 +554,13 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
                     append_event(chat_id, {"type": "renamed", "title": visible_message[:60]})
     except Exception:
         runtime.cancel.clear()
+        runtime.active_chat_id = None
         runtime.generation_lock.release()
         raise
 
     if completed is not None:
         # A lost connection may hide a successful answer. Replay it without inference.
+        runtime.active_chat_id = None
         runtime.generation_lock.release()
 
         def replay() -> Iterator[str]:
@@ -486,6 +575,34 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
         started = time.perf_counter()
         first_token = None
         message_id = str(uuid.uuid4())
+        metrics = None
+
+        def response_metrics():
+            elapsed = time.perf_counter() - started
+            prompt_tokens = len(runtime.llm.tokenize(json.dumps(messages).encode("utf-8")))
+            completion_tokens = len(runtime.llm.tokenize(response.encode("utf-8"))) if response else 0
+            return {"first_token_seconds": round((first_token or time.perf_counter()) - started, 3),
+                    "total_seconds": round(elapsed, 3), "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens, "token_counts_estimated": True,
+                    "tokens_per_second": round(completion_tokens / elapsed, 2) if elapsed else 0,
+                    "context_size": context_size, "context_used": prompt_tokens + completion_tokens,
+                    "temperature": request.temperature, "thinking": thinking_enabled,
+                    "thinking_support": support, "model": Path(runtime.model_path).name}
+
+        def persist(status, error=None):
+            nonlocal metrics
+            try:
+                metrics = response_metrics()
+            except Exception:
+                logger.exception("Token counts unavailable for response %s", message_id)
+            append_event(chat_id, {"type": "assistant", "content": response, "status": status,
+                                   "request_id": request_id, "message_id": message_id,
+                                   "metrics": metrics, **({"error": error} if error else {})})
+            try:
+                usage_store.record(chat_id, message_id, metrics, status)
+            except OSError:
+                # The saved chat metrics can rebuild the ledger on the next visit.
+                logger.exception("Could not update token usage ledger")
         try:
             yield event({"type": "start", "message_id": message_id})
             if trimmed_messages:
@@ -515,57 +632,20 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
                 response += text
                 yield event({"type": "token", "text": text})
 
-            elapsed = time.perf_counter() - started
             stopped = runtime.cancel.is_set()
-            prompt_tokens = len(runtime.llm.tokenize(json.dumps(messages).encode("utf-8")))
-            completion_tokens = len(runtime.llm.tokenize(
-                response.encode("utf-8"))) if response else 0
-            metrics = {
-                "first_token_seconds": round((first_token or time.perf_counter()) - started, 3),
-                "total_seconds": round(elapsed, 3),
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "tokens_per_second": round(completion_tokens / elapsed, 2) if elapsed else 0,
-                "context_size": context_size,
-                "context_used": prompt_tokens + completion_tokens,
-                "temperature": request.temperature,
-                "thinking": thinking_enabled,
-                "thinking_support": support,
-                "model": Path(runtime.model_path).name,
-            }
-            append_event(
-                chat_id,
-                {
-                    "type": "assistant",
-                    "content": response,
-                    "status": "interrupted" if stopped else "complete",
-                    "request_id": request_id,
-                    "message_id": message_id,
-                    "metrics": metrics,
-                },
-            )
+            persist("interrupted" if stopped else "complete")
             terminal = {"type": "stopped" if stopped else "done", "metrics": metrics}
-            logger.info("Generation %s in %.2fs", "stopped" if stopped else "completed", elapsed)
+            logger.info("Generation %s", "stopped" if stopped else "completed")
         except GeneratorExit:
-            append_event(chat_id, {
-                "type": "assistant", "content": response, "status": "interrupted",
-                "request_id": request_id,
-                "message_id": message_id,
-            })
+            persist("interrupted")
             raise
         except Exception as error:
             logger.exception("Generation failed")
-            append_event(chat_id, {
-                "type": "assistant",
-                "content": response,
-                "status": "error",
-                "request_id": request_id,
-                "message_id": message_id,
-                "error": str(error)
-            })
+            persist("error", str(error))
             terminal = {"type": "error", "message": str(error)}
         finally:
             runtime.cancel.clear()
+            runtime.active_chat_id = None
             runtime.generation_lock.release()
         # The UI can issue its next request as soon as it receives this record.
         yield event(terminal)

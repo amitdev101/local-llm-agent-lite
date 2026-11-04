@@ -6,8 +6,44 @@ const themes = new Map();
 let current = null;
 let appliedVars = [];
 let mode = "dark";
+let modePreference = "dark";
+const systemAppearance = matchMedia("(prefers-color-scheme: dark)");
 
 const defaults = {
+  getModels: "Get models", downloads: "Model downloads", getFirstModel: "Get your first model", refreshModels: "Refresh installed models", modelsRefreshed: "Installed model list refreshed.",
+  downloadHelp: "Browse public Hugging Face repositories for complete, single-file GGUF models. File size is disk space, not required RAM. Downloads continue when this panel closes.",
+  modelRepository: "Hugging Face repository or URL", browseFiles: "Browse files", checkingModels: "Checking available model files…", filesAtRevision: "{repo} · revision {revision}",
+  noModelFiles: "No complete single-file GGUFs were found. Split models and other formats are not listed.", modelCard: "Open model card", saveModelAs: "Save as",
+  downloadModel: "Download", useInstalledModel: "Load installed file", filenameExists: "This filename is already on disk. Choose another name to download another copy.",
+  renamedThinking: "A renamed file may need its Thinking support configured separately.", catalogUnavailable: "Suggested models could not be loaded. You can still enter a repository.",
+  pauseDownload: "Pause", resumeDownload: "Resume", cancelDownload: "Cancel download", noDownloads: "No downloads yet. Choose a model under Get models.",
+  downloadDestination: "Models folder: {path}", downloadConnectionLost: "Could not refresh download progress. Check that the playground server is running.", downloadProgress: "Downloading · {percent}%",
+  downloadState_downloading: "Downloading", downloadState_verifying: "Checking download…", downloadState_pausing: "Pausing…", downloadState_paused: "Paused",
+  downloadState_cancelling: "Cancelling…", downloadState_cancelled: "Cancelled", downloadState_error: "Download interrupted", downloadState_complete: "Ready to load",
+  library: "Library", expandComposer: "Expand composer", close: "Close", done: "Done", cancel: "Cancel",
+  responseProfiles: "Response profiles", savedPrompts: "Saved prompts", libraryHelp: "Profiles and prompts you save stay in this browser.",
+  saveProfile: "Save current response settings", savePrompt: "Save composer text", itemName: "Name", save: "Save",
+  useProfile: "Apply profile", usePrompt: "Use prompt", profileApplied: "Profile applied to the next response in this chat.",
+  profilePreview: "Profile settings", storageUnavailable: "Could not save the library or preferences. Keep this tab open and copy anything you need.",
+  libraryEmpty: "Nothing saved here yet.", loadingLibrary: "Loading library…", libraryUnavailable: "Starter presets could not be loaded. Your saved items are still available.",
+  emptyPrompt: "Write something in the composer before saving a prompt.", nameExists: "That name is already saved. Choose a different name.", librarySaved: "Saved in this browser.",
+  draftExists: "A draft is already here. Choose how to use this prompt.", replaceDraft: "Replace draft", appendDraft: "Add to draft",
+  editPrompt: "Edit prompt", editResend: "Edit and resend", editHelp: "Create an alternative chat with this edited prompt. The original conversation stays available.",
+  expandedHelp: "Enter adds a line. Ctrl/Cmd+Enter sends. Edits are saved with this chat's draft.",
+  comfort: "Reading and composing", textSize: "Text size", spacing: "Message spacing", defaultSize: "Theme default",
+  largeSize: "Large", largerSize: "Extra large", comfortable: "Comfortable", systemAppearance: "Follow system",
+  sendBehavior: "Send shortcut", enterSends: "Enter sends · Shift+Enter adds a line", modifierSends: "Ctrl/Cmd+Enter sends · Enter adds a line",
+  temperatureHelp: "Lower values usually give more focused responses; higher values add variation. This does not guarantee accuracy.",
+  samplingHelp: "Top-p and min-p filter unlikely choices; top-k limits how many choices remain. Repeat penalty discourages repetition. Seed -1 allows a fresh random seed.",
+  resetSampling: "Reset sampling to saved defaults", runningElsewhere: "A response is running in another chat.", returnResponse: "View response",
+  reset: "Reset", resetParameter: "Reset {name} to its saved default",
+  tokenUsage: "Token usage", chatTokenUsage: "Token usage for this chat", allChats: "All chats", thisChat: "This chat",
+  usageHelp: "Available tokenizer estimates include input context on each attempt. Stopped and failed attempts count when metrics are available; recovered answers and copied branch history count once. Usage remains after deleting a chat.",
+  inputTokens: "Input tokens", outputTokens: "Output tokens", totalTokens: "Total tokens", responses: "Responses",
+  noUsage: "No recorded token usage yet.", usageUnavailable: "Could not load token usage. Try again.", refresh: "Refresh", back: "All chats",
+  usageChat: "Chat / response", usageLess: "Less", usageMore: "More", responseNumber: "Response {number}", usageLoading: "Loading token usage…",
+  usageIntensity: "Color intensity compares token counts within this view. Select a chat to see its responses.",
+  usageIntensityChat: "Color intensity compares token counts within this chat.",
   newChat: "New chat", recentChats: "Recent chats", searchChats: "Search chats…",
   settings: "Settings", settingsTitle: "Settings", settingsHelp: "Appearance, model loading, and response preferences.",
   closeSettings: "Close settings", closeSidebar: "Close sidebar", toggleSidebar: "Toggle sidebar",
@@ -85,8 +121,8 @@ const defaults = {
   temperatureTitle: "Temperature", advancedGeneration: "Advanced generation", repeatPenalty: "Repeat penalty", seed: "Seed", resetDefaults: "Reset generation defaults",
   messageLabel: "Message", systemPreset: "System prompt preset", systemPlaceholder: "Optional—empty means no system prompt", customModelPlaceholder: "D:\\path\\to\\model.gguf"
 };
-const defaultIcons = { panel: "panel", newChat: "edit", settings: "settings", send: "arrow-up", stop: "stop", close: "close", copy: "copy", regenerate: "retry", continue: "arrow-right", thinking: "brain", options: "sliders", chevronDown: "chevron-down" };
-const iconIds = new Set(["panel", "edit", "plus", "settings", "arrow-up", "arrow-right", "stop", "close", "copy", "retry", "send", "brain", "sliders", "chevron-down"]);
+const defaultIcons = { panel: "panel", newChat: "edit", settings: "settings", send: "arrow-up", stop: "stop", close: "close", copy: "copy", regenerate: "retry", continue: "arrow-right", thinking: "brain", options: "sliders", chevronDown: "chevron-down", expand: "expand", library: "book" };
+const iconIds = new Set(["panel", "edit", "plus", "settings", "arrow-up", "arrow-right", "stop", "close", "copy", "retry", "send", "brain", "sliders", "chevron-down", "expand", "book"]);
 const colorVars = ["--bg", "--panel", "--panel-2", "--panel-3", "--text", "--muted", "--line", "--accent", "--on-accent", "--danger", "--warning", "--success", "--code-bg", "--overlay", "--focus"];
 const dimensionVars = ["--sidebar-width", "--chat-max-width", "--composer-radius", "--button-radius", "--send-radius", "--control-height", "--text-size", "--line-height", "--shadow", "--font-sans", "--font-conversation", "--font-mono"];
 const localAsset = (value) => typeof value === "string" && /^\/assets\/themes\/assets\/[\w./-]+\.svg$/.test(value) && !value.includes("..");
@@ -159,16 +195,17 @@ export function refreshThemeContent(container = document) {
   const load = document.getElementById("loadModel"); if (load) load.textContent = text("loadModel");
 }
 
-export function applyTheme(id, colorMode = mode) {
+export function applyTheme(id, colorMode = modePreference) {
   const config = themes.get(id);
-  if (!config || !["light", "dark"].includes(colorMode)) return false;
+  if (!config || !["light", "dark", "system"].includes(colorMode)) return false;
   const messages = document.getElementById("messages");
   const anchor = [...messages.querySelectorAll(".message")].find(node => node.getBoundingClientRect().bottom > messages.getBoundingClientRect().top);
   const anchorOffset = anchor ? anchor.getBoundingClientRect().top - messages.getBoundingClientRect().top : 0;
   const atBottom = messages.scrollHeight - messages.scrollTop - messages.clientHeight < 20;
   const focused = document.activeElement;
   const selection = focused?.tagName === "TEXTAREA" ? [focused.selectionStart, focused.selectionEnd] : null;
-  current = config; mode = colorMode;
+  current = config; modePreference = colorMode;
+  mode = colorMode === "system" ? (systemAppearance.matches ? "dark" : "light") : colorMode;
   for (const key of appliedVars) root.style.removeProperty(key);
   const variables = { ...config.vars, ...config.modes[mode] };
   for (const [key, value] of Object.entries(variables)) root.style.setProperty(key, value);
@@ -182,7 +219,7 @@ export function applyTheme(id, colorMode = mode) {
   const parent = document.getElementById(config.layout.modelPicker === "header" ? "headerModelSlot" : "composerModelSlot");
   if (picker.parentElement !== parent) parent.prepend(picker);
   document.getElementById("themeSelect").value = id;
-  document.getElementById("colorModeSelect").value = mode;
+  document.getElementById("colorModeSelect").value = modePreference;
   refreshThemeContent();
   document.dispatchEvent(new Event("themechange"));
   if (focused && focused !== document.body && !focused.closest("[inert]")) {
@@ -192,7 +229,7 @@ export function applyTheme(id, colorMode = mode) {
     if (atBottom) messages.scrollTop = messages.scrollHeight;
     else if (anchor?.isConnected) messages.scrollTop += anchor.getBoundingClientRect().top - messages.getBoundingClientRect().top - anchorOffset;
   });
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ theme: id, mode })); } catch (_) { /* Private browsing can disable storage. */ }
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ theme: id, mode: modePreference })); } catch (_) { /* Private browsing can disable storage. */ }
   return true;
 }
 
@@ -210,11 +247,12 @@ export async function initThemes() {
   const select = document.getElementById("themeSelect"); select.replaceChildren();
   for (const id of THEME_IDS) if (themes.has(id)) select.add(new Option(themes.get(id).displayName, id));
   if (!themes.size) { select.add(new Option("Default", "")); select.disabled = true; document.getElementById("colorModeSelect").disabled = true; }
-  applyTheme(themes.has(saved.theme) ? saved.theme : themes.has("chatgpt") ? "chatgpt" : select.value, saved.mode === "light" ? "light" : "dark");
+  applyTheme(themes.has(saved.theme) ? saved.theme : themes.has("chatgpt") ? "chatgpt" : select.value, ["light", "system"].includes(saved.mode) ? saved.mode : "dark");
   if (!current) refreshThemeContent();
   if (errors.length) {
     const error = document.getElementById("themeError"); error.textContent = errors.join(" · "); error.hidden = false;
   }
   select.onchange = () => applyTheme(select.value);
   document.getElementById("colorModeSelect").onchange = event => applyTheme(select.value, event.target.value);
+  systemAppearance.addEventListener("change", () => { if (modePreference === "system" && current) applyTheme(current.id, "system"); });
 }

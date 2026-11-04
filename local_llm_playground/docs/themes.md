@@ -1,6 +1,6 @@
 # Customizing themes
 
-Choose a family and light/dark appearance in **Settings → Appearance**. The browser remembers them under `playground.appearance.v1`. Appearance never changes inference settings or saved conversations.
+Choose a family and Light, Dark, or Follow system appearance in **Settings → Appearance**. Follow system selects one of the family's two palettes when the system appearance changes. The browser remembers the preference under `playground.appearance.v1`. Appearance never changes inference settings or saved conversations.
 
 The composer uses grouped controls in both empty and active chats. **Options** opens system instructions, temperature, and advanced sampling; the compact **Thinking** control stays visible beside it. Supported models show On/Off, and unsupported/unconfigured models show Unavailable/Unknown with explanatory help. Both controls share one saved preference and apply it to the next supported response. The model control shows a readable name and ready indicator; its menu separates selection from explicit loading and retains the full path, current loaded name, load errors, and a link to Settings. The context percentage opens exact or estimated token usage, with warnings as it fills.
 
@@ -13,6 +13,8 @@ Response actions and settings scope share that text map too: `regenerateBranch`,
 Drafts are independent of appearance. Each chat's exact unsent text is stored under `playground.draft.v1:<chatId>`; an unsent new chat uses `playground.draft.v1:new`. `playground.activeChat.v1` remembers which chat to restore after refresh. Saves are debounced while typing and flushed on chat navigation, page hide, and document hide. Browser storage failures keep drafts in memory for the open tab and show a persistent warning; override `draftUnavailable` to change that message. Deleting a chat removes its draft, and response actions preserve any separate text being composed.
 
 The implementation uses the existing HTML/chat controller, a small `frontend/theme.js`, and three independent JSON/CSS pairs. No frontend build step is required.
+
+The Library, expanded editor, reading preferences, and token-usage dialog share `frontend/enhancements.js`. They use native dialogs, the existing palette, and the same theme text map. Built-in response profiles and starter prompts live in `frontend/presets.json`; custom library items stay in the browser. The [chat tools guide](usability.md#library-and-composing) explains their scope. Reading size/spacing preferences apply on top of the selected theme without changing its configuration.
 
 ## Where to edit
 
@@ -125,7 +127,7 @@ Each configuration specifies three explicit placement choices:
 
 For a new component arrangement, edit scoped CSS under `:root[data-theme="claude"]` (or the relevant ID). Do not duplicate the composer or replace message nodes to change appearance. The three layouts deliberately share behavior but retain their own structural rules.
 
-Action icons use the local `assets/icons.svg` sprite. Override any of `panel`, `newChat`, `settings`, `send`, `stop`, `close`, `copy`, `regenerate`, `continue`, `thinking`, `options`, and `chevronDown` in `icons`. Values may be `panel`, `edit`, `plus`, `settings`, `arrow-up`, `arrow-right`, `stop`, `close`, `copy`, `retry`, `send`, `brain`, `sliders`, or `chevron-down`, or a local SVG asset path:
+Action icons use the local `themes/assets/icons.svg` sprite. Override any of `panel`, `newChat`, `settings`, `send`, `stop`, `close`, `copy`, `regenerate`, `continue`, `thinking`, `options`, `chevronDown`, `expand`, and `library` in `icons`. Values may be `panel`, `edit`, `plus`, `settings`, `arrow-up`, `arrow-right`, `stop`, `close`, `copy`, `retry`, `send`, `brain`, `sliders`, `chevron-down`, `expand`, or `book`, or a local SVG asset path:
 
 ```json
 "icons": { "newChat": "plus", "send": "send" }
