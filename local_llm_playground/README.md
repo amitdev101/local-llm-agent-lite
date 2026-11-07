@@ -58,6 +58,8 @@ Use the sidebar search to find chat titles or matching messages in the selected 
 
 **Library** contains reusable response profiles and saved prompts. Start with General, Coding, or Writing, or save the current response settings as your own profile. Profiles apply to the next response in this chat and leave server defaults alone. Prompt templates fill the composer; when a draft exists, choose **Add to draft** or **Replace draft**. Three starter prompts also appear in an empty chat. Custom library items stay in this browser; built-in entries are editable in [`frontend/presets.json`](frontend/presets.json).
 
+Use fields such as `{{language}}` and `{{topic}}` in a saved prompt. When you use it, fill each field once to replace every occurrence before adding the prompt to the composer.
+
 Use the expand icon beside the prompt for a larger editor. It edits the same draft, with **Enter** for line breaks and **Ctrl/Cmd+Enter** to send. **Edit prompt** on a completed response creates a new alternative chat using the revised prompt and that turn's original response settings.
 
 Use the paperclip to preview a UTF-8 text or code file up to 64 KiB and see a rough token estimate. **Add file to draft** inserts the filename and contents as editable text. Open **Context → Preview draft context** for an estimate of the complete request with the loaded model.

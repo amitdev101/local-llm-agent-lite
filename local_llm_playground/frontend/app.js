@@ -1,5 +1,5 @@
-import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=8";
-import { initEnhancements } from "./enhancements.js?v=6";
+import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=9";
+import { initEnhancements } from "./enhancements.js?v=7";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(

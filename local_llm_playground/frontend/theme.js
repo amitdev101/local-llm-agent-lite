@@ -83,6 +83,8 @@ const defaults = {
   attachTextTooLarge: "Choose a file of 64 KiB or less.",
   attachTextInvalid: "Choose a nonempty UTF-8 text or code file.",
   attachTextAdd: "Add file to draft",
+  promptVariables: "Fill in prompt fields", promptVariableHelp: "Use placeholders such as {{language}} in a saved prompt. You’ll fill them in when you use it.",
+  promptVariableEmpty: "Enter a value for this field.",
   comparisonUnavailable: "Load a model and open an active chat to run an alternative.",
   comparisonDetails: "{model} · Temperature {temperature} · {seconds}s · {speed} tok/s · {input} input / {output} output tokens (estimated)",
   runComparison: "Run with {model} and current options",

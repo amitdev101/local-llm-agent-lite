@@ -108,6 +108,7 @@ export function initEnhancements(hooks) {
       <div id="libraryPromptFields">
         <label for="libraryEditContent" data-text="savedPromptText"></label>
         <textarea id="libraryEditContent" required></textarea>
+        <p class="setting-help" data-text="promptVariableHelp"></p>
       </div>
       <fieldset id="libraryProfileFields" class="library-profile-fields">
         <p class="setting-help" data-text="editProfileHelp"></p>
@@ -200,10 +201,43 @@ export function initEnhancements(hooks) {
   };
   let pendingPrompt = "";
   const draftChoice = dialog("promptChoiceDialog", "usePrompt", '<p data-text="draftExists"></p>', '<button id="cancelPromptChoice" class="secondary-button" data-text="cancel"></button><button id="appendPromptChoice" class="secondary-button" data-text="appendDraft"></button><button id="replacePromptChoice" class="primary-button" data-text="replaceDraft"></button>');
-  function usePrompt(content) {
-    if (library.open) library.close();
+  const variables = dialog("promptVariablesDialog", "promptVariables", '<form id="promptVariablesForm"></form>',
+    '<button class="primary-button" type="submit" form="promptVariablesForm" data-text="usePrompt"></button>');
+  const variablePattern = /\{\{\s*([A-Za-z_][\w-]{0,39})\s*\}\}/g;
+  function fillPromptVariables(templates, apply) {
+    const names = new Set(templates.flatMap(template => [...template.matchAll(variablePattern)].map(match => match[1])));
+    if (!names.size) return apply(templates);
+    const form = $("promptVariablesForm");
+    const fields = new Map();
+    form.replaceChildren();
+    for (const name of names) {
+      const label = element("label", name);
+      const input = document.createElement("input");
+      input.required = true;
+      input.autocomplete = "off";
+      input.oninput = () => input.setCustomValidity("");
+      label.append(input);
+      form.append(label);
+      fields.set(name, input);
+    }
+    form.onsubmit = event => {
+      event.preventDefault();
+      const empty = [...fields.values()].find(input => !input.value.trim());
+      if (empty) { empty.setCustomValidity(text("promptVariableEmpty")); empty.reportValidity(); return; }
+      const resolved = templates.map(template => template.replace(variablePattern, (_, name) => fields.get(name).value));
+      variables.close();
+      apply(resolved);
+    };
+    open(variables);
+    fields.values().next().value.focus();
+  }
+  function insertPrompt(content) {
     if (hooks.getState().draft) { pendingPrompt = content; open(draftChoice); }
     else hooks.setDraft(content);
+  }
+  function usePrompt(content) {
+    if (library.open) library.close();
+    fillPromptVariables([content], ([resolved]) => insertPrompt(resolved));
   }
   $("cancelPromptChoice").onclick = () => draftChoice.close();
   $("appendPromptChoice").onclick = () => { hooks.setDraft(hooks.getState().draft + "\n\n" + pendingPrompt); draftChoice.close(); prompt.focus(); };
@@ -406,6 +440,6 @@ export function initEnhancements(hooks) {
       wasGenerating = state.generating;
       downloader.update();
     },
-    themeChanged() { [editor, attachment, editDialog, library, libraryEditor, draftChoice, usage].forEach(node => refreshThemeContent(node)); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); conversations.themeChanged(); }
+    themeChanged() { [editor, attachment, editDialog, library, libraryEditor, variables, draftChoice, usage].forEach(node => refreshThemeContent(node)); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); conversations.themeChanged(); }
   };
 }
