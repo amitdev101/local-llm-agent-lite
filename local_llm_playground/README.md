@@ -42,6 +42,8 @@ The model menu separates selection from loading, shows the full path and loaded 
 
 While a model is loading, **Cancel load** appears beside the model selector and in **Settings → Model loading**. It stops the model worker and releases its memory without waiting for loading to finish. Once ready, **Unload model** releases the model's memory. Stop an active response before unloading. Chats, drafts, response preferences, downloaded files, and the saved model selection remain available; choose **Load** to use the model again. Refreshing the browser keeps it unloaded for the current server session; restarting the server retains the usual automatic loading behavior.
 
+In **Settings → Model loading**, set **Unload after idle (minutes)** and save the timeout to free model memory automatically. The countdown starts after loading or after the last model request finishes. Use **0** to disable it. An active response can finish before the countdown begins.
+
 | Response options | Model selection |
 | --- | --- |
 | ![Grouped response options in the Claude dark theme](docs/images/themes/claude-dark-options.png) | ![Selected model, loaded state, and Thinking support in the Claude dark theme](docs/images/themes/claude-dark-model.png) |

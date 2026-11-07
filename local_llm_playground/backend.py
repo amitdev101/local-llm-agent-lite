@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -54,6 +55,7 @@ DEFAULTS = {
     "context_size": 8192,
     "gpu_layers": 0,
     "threads": max(1, (os.cpu_count() or 4) - 2),
+    "idle_unload_minutes": 0,
     "temperature": 0.15,
     "top_p": 0.95,
     "top_k": 40,
@@ -202,6 +204,8 @@ class ModelRuntime:
         self.load_done = None
         self.cancelled_loads = deque(maxlen=128)
         self.auto_load_suppressed = False
+        self.unloaded_for_idle = False
+        self.last_model_activity = time.monotonic()
 
     @staticmethod
     def close_model(model):
@@ -220,6 +224,7 @@ class ModelRuntime:
                     "model_path": model_path, "thinking_support": thinking_support(model_path) if model_path else "unknown",
                     "loaded_settings": dict(self.loaded_settings) if model_path else {}, "error": self.error,
                     "auto_load_suppressed": self.auto_load_suppressed,
+                    "unloaded_for_idle": self.unloaded_for_idle,
                     "can_unload": self.llm is not None or self.load_cancel is not None}
 
     def load(self, settings: dict, remember: bool = False) -> dict:
@@ -237,6 +242,7 @@ class ModelRuntime:
             self.load_id = identifier
             self.status = "loading"
             self.error = ""
+            self.unloaded_for_idle = False
         started = time.perf_counter()
         candidate = None
         try:
@@ -265,6 +271,7 @@ class ModelRuntime:
                 self.loaded_settings = {key: settings[key] for key in ("context_size", "gpu_layers", "threads")}
                 self.loaded_settings["model_path"] = str(path)
                 self.status = "ready"
+                self.last_model_activity = time.monotonic()
                 self.auto_load_suppressed = False
                 remembered = True
                 if remember:
@@ -300,8 +307,10 @@ class ModelRuntime:
                 if cancelled.is_set() and self.status == "unloading" and self.llm is None:
                     self.status = "not_loaded"
 
-    def unload(self, load_id=None) -> dict:
+    def unload(self, load_id=None, *, idle_seconds=None) -> dict:
         with self.lifecycle_lock:
+            if idle_seconds is not None and (self.status != "ready" or self.load_cancel is not None):
+                return self.snapshot()
             if load_id:
                 # Remember early cancellation even if its Load request hasn't arrived.
                 self.cancelled_loads.append(load_id)
@@ -314,7 +323,12 @@ class ModelRuntime:
             if not loading:
                 acquired = self.generation_lock.acquire(blocking=False)
                 if not acquired:
+                    if idle_seconds is not None:
+                        return self.snapshot()
                     raise HTTPException(409, "Stop the response before unloading the model")
+                if idle_seconds is not None and time.monotonic() - self.last_model_activity < idle_seconds:
+                    self.generation_lock.release()
+                    return self.snapshot()
             self.status = "unloading"
             self.error = ""
             self.auto_load_suppressed = True
@@ -332,6 +346,7 @@ class ModelRuntime:
                 self.load_id = None
                 if done is None or done.is_set():
                     self.status = "not_loaded"
+                    self.unloaded_for_idle = idle_seconds is not None
                 return self.snapshot()
         except Exception as error:
             with self.lifecycle_lock:
@@ -346,11 +361,28 @@ class ModelRuntime:
 runtime = ModelRuntime()
 
 
+async def monitor_idle_model(stop: asyncio.Event) -> None:
+    while not stop.is_set():
+        try:
+            await asyncio.wait_for(stop.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            try:
+                minutes = read_config()["idle_unload_minutes"]
+                if minutes > 0 and runtime.status == "ready":
+                    await asyncio.to_thread(runtime.unload, idle_seconds=minutes * 60)
+            except Exception:
+                logger.exception("Could not unload idle model")
+
+
 @asynccontextmanager
 async def lifespan(app):
+    stop = asyncio.Event()
+    monitor = asyncio.create_task(monitor_idle_model(stop))
     try:
         yield
     finally:
+        stop.set()
+        await monitor
         runtime.close_model(runtime.llm)
 
 
@@ -430,6 +462,7 @@ class SettingsUpdate(BaseModel):
     context_size: int | None = Field(None, ge=256, le=131072)
     gpu_layers: int | None = Field(None, ge=-1, le=1000)
     threads: int | None = Field(None, ge=1, le=256)
+    idle_unload_minutes: int | None = Field(None, ge=0, le=1440)
     system_prompt: str | None = None
     thinking: bool | None = None
     temperature: float | None = Field(None, ge=0.0, le=2.0)
@@ -915,6 +948,7 @@ def preview_context(request: ContextPreviewRequest) -> dict:
         context = prepare_context(request, chat["messages"])
         return {**context, "prompt_tokens": estimate_prompt_tokens(context["messages"])}
     finally:
+        runtime.last_model_activity = time.monotonic()
         runtime.generation_lock.release()
 
 
@@ -974,6 +1008,7 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
     if completed is not None:
         # A lost connection may hide a successful answer. Replay it without inference.
         runtime.active_chat_id = None
+        runtime.last_model_activity = time.monotonic()
         runtime.generation_lock.release()
 
         def replay() -> Iterator[str]:
@@ -1060,6 +1095,7 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
         finally:
             runtime.cancel.clear()
             runtime.active_chat_id = None
+            runtime.last_model_activity = time.monotonic()
             runtime.generation_lock.release()
         # The UI can issue its next request as soon as it receives this record.
         yield event(terminal)

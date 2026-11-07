@@ -1,4 +1,4 @@
-import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=10";
+import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=11";
 import { initEnhancements } from "./enhancements.js?v=8";
 
 const $ = (id) => document.getElementById(id);
@@ -30,6 +30,8 @@ let modelOperation = 0;
 let loadRequestId = null;
 let runtimeStatus = "not_loaded";
 let runtimeRefreshTimer = null;
+let idleUnloadMinutes = 0;
+let unloadedForIdle = false;
 let availableModels = [];
 let loadedThinkingSupport = "unknown";
 let loadedModelSettings = {};
@@ -393,7 +395,7 @@ function updateModelPicker() {
   const detail = lastStatus.detail;
   const label = typeof detail === "object" ? text(detail.key, detail.values) : detail || text(lastStatus.status);
   const needsLoad = !busy && !matched && ["ready", "not_loaded"].includes(lastStatus.status);
-  ui.composerStatus.textContent = readOnly ? text("restoreBeforeSending") : needsLoad ? path ? text("loadSelectedFirst") : text("selectModel")
+  ui.composerStatus.textContent = readOnly ? text("restoreBeforeSending") : needsLoad ? unloadedForIdle ? text("idleModelUnloaded") : path ? text("loadSelectedFirst") : text("selectModel")
     : !busy && pending && lastStatus.status === "ready" ? text("readyReloadPending") : label;
   ui.composerStatus.dataset.status = needsLoad ? "not_loaded" : lastStatus.status;
   updateThinkingControls();
@@ -894,6 +896,9 @@ async function loadInitial() {
     else if (settings.model_path) ui.customModel.value = settings.model_path;
     ui.quickModelSelect.value = ui.modelSelect.value;
     ui.contextSize.value = settings.context_size; ui.gpuLayers.value = settings.gpu_layers; ui.threads.value = settings.threads;
+    idleUnloadMinutes = settings.idle_unload_minutes || 0;
+    $("idleUnloadMinutes").value = idleUnloadMinutes;
+    $("idleUnloadMinutes").disabled = $("saveIdleUnload").disabled = false;
     responseDefaults = { ...responseDefaults, ...Object.fromEntries(Object.keys(generationValues())
       .filter(key => Object.hasOwn(settings, key)).map(key => [key, settings[key]])) };
     if (responseRevision === initialResponseRevision) restoreResponseSettings(responseDefaults);
@@ -941,6 +946,7 @@ async function refreshModels(preferred = null) {
 function updateModelStatus(status, settings = {}) {
   clearTimeout(runtimeRefreshTimer); runtimeRefreshTimer = null;
   runtimeStatus = status.status;
+  unloadedForIdle = Boolean(status.unloaded_for_idle);
   canUnloadModel = status.can_unload ?? Boolean(status.model_path);
   const previousPath = loadedModelPath;
   const previousContext = loadedModelSettings.context_size;
@@ -962,8 +968,14 @@ function updateModelStatus(status, settings = {}) {
   } else { ui.activeModel.textContent = text("noModel"); ui.modelMeta.textContent = text("selectModel"); }
   if (!generating && !loadingModel && !unloadingModel && ["loading", "unloading", "generating"].includes(runtimeStatus)) {
     runtimeRefreshTimer = setTimeout(refreshRuntimeStatus, 1000);
-  }
+  } else scheduleIdleRefresh();
   updateResponseActions();
+}
+
+function scheduleIdleRefresh() {
+  if (idleUnloadMinutes > 0 && runtimeStatus === "ready" && !generating && !loadingModel && !unloadingModel) {
+    runtimeRefreshTimer = setTimeout(refreshRuntimeStatus, 5000);
+  }
 }
 
 async function refreshRuntimeStatus() {
@@ -973,8 +985,28 @@ async function refreshRuntimeStatus() {
     const status = await api("/api/status");
     if (operation === modelOperation && !generating && !loadingModel && !unloadingModel) updateModelStatus(status);
   } catch (_) {
-    if (operation === modelOperation && !generating && !loadingModel && !unloadingModel) updateModelStatus({ status: "error", error: text("connectionLost") });
+    if (operation === modelOperation && !generating && !loadingModel && !unloadingModel) {
+      if (runtimeStatus === "ready" && idleUnloadMinutes > 0) scheduleIdleRefresh();
+      else updateModelStatus({ status: "error", error: text("connectionLost") });
+    }
   }
+}
+
+async function saveIdleUnload() {
+  const input = $("idleUnloadMinutes"), button = $("saveIdleUnload"), status = $("idleUnloadStatus");
+  if (button.disabled || !input.reportValidity()) return;
+  input.disabled = button.disabled = true;
+  status.textContent = "";
+  try {
+    const settings = await api("/api/settings", { method: "PATCH", body: JSON.stringify({ idle_unload_minutes: Number(input.value) }) });
+    idleUnloadMinutes = settings.idle_unload_minutes;
+    status.textContent = text("idleUnloadSaved");
+    if (runtimeStatus === "ready") {
+      clearTimeout(runtimeRefreshTimer); runtimeRefreshTimer = null;
+      scheduleIdleRefresh();
+    }
+  } catch (error) { status.textContent = error.message; }
+  finally { input.disabled = button.disabled = false; }
 }
 
 async function refreshChats() {
@@ -1493,6 +1525,7 @@ function resizePrompt() {
 }
 
 ui.settingsButton.onclick = () => openSettings(true); ui.closeSettings.onclick = () => openSettings(false); ui.overlay.onclick = () => { openSettings(false); if (mobile.matches) setSidebar(false); };
+$("saveIdleUnload").onclick = saveIdleUnload;
 ui.modelSettingsButton.onclick = () => { openSettings(true); ui.modelSelect.focus(); };
 ui.menuButton.onclick = () => setSidebar(mobile.matches ? !ui.sidebar.classList.contains("open") : !sidebarExpanded);
 ui.sidebarClose.onclick = () => setSidebar(false);
