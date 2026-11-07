@@ -92,6 +92,11 @@ The interface provides:
 - 📚 Saved profiles and prompt templates, starter prompts, an expanded editor, and Edit prompt branches
 - 📊 Stored token-usage heatmaps across chats and individual responses
 - 📖 Browse other chats during generation; choose reading size, spacing, and send shortcuts
+- ⏭️ Queue follow-up prompts during a response and remove any that are still waiting
+- 🗂️ Archive or restore chats, undo moves to Trash, navigate branches, and search message text
+- 💾 Export chats as Markdown and restore JSON backups of chats and Library items
+- 🧰 Cancel model loading, unload models, and check RAM, disk space, and CPU starter settings
+- ✏️ Edit saved prompts and profiles or customize a starter item in the Library
 - 📊 Context usage, first-token latency, speed, and token metrics
 - 📱 Responsive layouts, keyboard shortcuts, and an always-visible composer
 - ♾️ No fixed output-token limit; generation stops at EOS, context boundary, interruption, or error
@@ -100,6 +105,11 @@ The interface provides:
 See the [Playground README and six-theme gallery](local_llm_playground/README.md), [theme customization guide](local_llm_playground/docs/themes.md), and [chat behavior guide](local_llm_playground/docs/usability.md).
 
 Use **Settings → Model loading → Get models** to browse public Hugging Face repositories. See the [model download guide and screenshot](local_llm_playground/docs/model-downloads.md).
+
+While a response runs, type a follow-up and select **Queue prompt**. Waiting prompts
+appear above the composer and send in order. Select **Remove** to skip a prompt
+that is still waiting. A stopped or failed response, or a page refresh, pauses
+the queue until you select **Resume queue**.
 
 ## 💡 Example prompts
 
@@ -229,6 +239,13 @@ values afterward in Settings.
     starter prompts, and an expanded composer.
   - 💬 **Keep your place:** restored per-chat drafts, edited prompt branches,
     browsing other chats during generation, and reading and send preferences.
+  - ⏭️ **Prompt queue.** Send follow-ups in order and remove waiting prompts.
+  - 🗂️ **Chat organization and backups.** Archive chats, undo moves to Trash,
+    jump to related branches, search messages, and export or restore conversations.
+  - 🧰 **Model controls.** Cancel a load, unload a model to free memory, and use
+    RAM and disk guidance to choose CPU starter settings.
+  - ✏️ **Library editing.** Update saved prompts and profiles in place or save
+    a customized copy of a starter item.
 
   See the [Playground README and screenshots](local_llm_playground/README.md) and
   [model download guide](local_llm_playground/docs/model-downloads.md).
