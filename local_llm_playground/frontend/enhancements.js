@@ -1,5 +1,6 @@
 // Shared chat tools. Theme files continue to own appearance, not behavior.
-import { initModelDownloads } from "./downloads.js";
+import { initModelDownloads } from "./downloads.js?v=2";
+import { initConversationTools } from "./conversation-tools.js";
 export function initEnhancements(hooks) {
   const { text, api, refreshThemeContent } = hooks;
   const $ = id => document.getElementById(id);
@@ -86,8 +87,7 @@ export function initEnhancements(hooks) {
   });
   let libraryEditTarget = null;
 
-  function savedLibrary() {
-    const value = read(libraryKey, {});
+  function savedLibrary(value = read(libraryKey, {})) {
     const items = kind => (Array.isArray(value[kind]) ? value[kind] : []).filter(item => item && typeof item.id === "string" && typeof item.name === "string"
       && (kind === "prompts" ? typeof item.content === "string" : item.settings && typeof item.settings === "object" && !Array.isArray(item.settings)));
     return { profiles: items("profiles"), prompts: items("prompts") };
@@ -307,16 +307,53 @@ export function initEnhancements(hooks) {
   usage.addEventListener("close", () => { usageRevision++; });
 
   const downloader = initModelDownloads({ ...hooks, element, dialog, open });
+  const conversations = initConversationTools({ ...hooks, element, dialog, open,
+    browserBackup: () => ({ library: savedLibrary(), preferences, appearance: { theme: $("themeSelect").value, mode: $("colorModeSelect").value } }),
+    restoreBrowserBackup(data, restorePreferences) {
+      const current = savedLibrary(), imported = savedLibrary(data.library);
+      let added = 0;
+      for (const kind of ["prompts", "profiles"]) {
+        for (const item of imported[kind]) {
+          const name = item.name.trim();
+          if (!name || name.length > 80 || current[kind].some(entry => entry.id === item.id)
+              || libraryNameExists(kind, current[kind], name)) continue;
+          if (kind === "prompts" && !item.content.trim()) continue;
+          if (kind === "profiles") {
+            if (item.settings.system_prompt != null && typeof item.settings.system_prompt !== "string") continue;
+            const valid = profileInputs.every(([key, field]) => {
+              const input = field.cloneNode(false);
+              input.value = item.settings[key] ?? input.defaultValue;
+              return input.checkValidity();
+            });
+            if (!valid) continue;
+          }
+          current[kind].push({ ...item, name });
+          added++;
+        }
+      }
+      let persisted = !added || save(libraryKey, current);
+      if (restorePreferences && data.preferences) {
+        preferences = { ...preferenceDefaults, ...data.preferences };
+        applyPreferences();
+        persisted = save(preferenceKey, preferences) && persisted;
+      }
+      if (restorePreferences && ["light", "dark", "system"].includes(data.appearance?.mode)) {
+        hooks.applyAppearance(data.appearance.theme, data.appearance.mode);
+      }
+      renderLibrary();
+      return { added, persisted };
+    },
+  });
   return {
     isExpanded: () => editor.open, modifierSends: () => preferences.send === "modifier",
     finishCompose() { if (editor.open) editor.close(); },
     editPrompt(target) { editing = target; $("editedPrompt").value = target.message; $("editPromptError").textContent = ""; open(editDialog); $("editedPrompt").focus(); },
     update() {
-      const state = hooks.getState(); $("chatUsageButton").disabled = !state.chatId; $("composerSend").disabled = state.generating;
+      const state = hooks.getState(); $("chatUsageButton").disabled = !state.chatId; $("composerSend").disabled = state.generating || state.chatReadOnly;
       if (wasGenerating && !state.generating && usage.open) loadUsage();
       wasGenerating = state.generating;
       downloader.update();
     },
-    themeChanged() { [editor, editDialog, library, libraryEditor, draftChoice, usage].forEach(node => refreshThemeContent(node)); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); }
+    themeChanged() { [editor, editDialog, library, libraryEditor, draftChoice, usage].forEach(node => refreshThemeContent(node)); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); conversations.themeChanged(); }
   };
 }

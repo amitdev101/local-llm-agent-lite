@@ -1,5 +1,5 @@
-import { initThemes, text, refreshThemeContent } from "./theme.js?v=2";
-import { initEnhancements } from "./enhancements.js?v=2";
+import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=3";
+import { initEnhancements } from "./enhancements.js?v=3";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
@@ -14,6 +14,11 @@ let generationSession = null;
 let enhancements = null;
 let lastUserMessage = "";
 let allChats = [];
+let undoChatMove = null;
+const movingChats = new Set();
+let chatSearchTimer = null;
+let chatSearchRequest = null;
+let chatSearchResults = null;
 let conversationChars = 0;
 let generationTimer = null;
 let loadedModelPath = "";
@@ -188,6 +193,7 @@ function activateChat(id, transferDraft = false) {
   restoreDraft();
   updateLabels();
   updateRunningResponse();
+  updateChatTools();
   enhancements?.update();
 }
 
@@ -340,15 +346,16 @@ function updateModelPicker() {
     notice.textContent = text("modelReloadHelp");
   }
   ui.quickLoadModel.disabled = ui.menuLoadModel.disabled = ui.loadModel.disabled = busy || !path;
-  ui.sendButton.disabled = busy || runtimeStatus !== "ready" || !matched;
-  const sendHelp = busy ? text(isUnloading ? "unloading" : isLoading ? "loading" : "generating") : !path ? text("selectModel") : !matched ? text("loadSelectedFirst")
+  const readOnly = activeChatVisibility() !== "active";
+  ui.sendButton.disabled = busy || readOnly || runtimeStatus !== "ready" || !matched;
+  const sendHelp = readOnly ? text("restoreBeforeSending") : busy ? text(isUnloading ? "unloading" : isLoading ? "loading" : "generating") : !path ? text("selectModel") : !matched ? text("loadSelectedFirst")
     : text("sendWithModel", { model: readableModelName(loadedModelPath) });
   ui.sendButton.title = sendHelp;
   ui.sendButton.setAttribute("aria-label", sendHelp);
   const detail = lastStatus.detail;
   const label = typeof detail === "object" ? text(detail.key, detail.values) : detail || text(lastStatus.status);
   const needsLoad = !busy && !matched && ["ready", "not_loaded"].includes(lastStatus.status);
-  ui.composerStatus.textContent = needsLoad ? path ? text("loadSelectedFirst") : text("selectModel")
+  ui.composerStatus.textContent = readOnly ? text("restoreBeforeSending") : needsLoad ? path ? text("loadSelectedFirst") : text("selectModel")
     : !busy && pending && lastStatus.status === "ready" ? text("readyReloadPending") : label;
   ui.composerStatus.dataset.status = needsLoad ? "not_loaded" : lastStatus.status;
   updateThinkingControls();
@@ -431,12 +438,12 @@ function messageElement(role, content = "", metrics = null, status = "complete",
   document.body.dataset.chatState = "active";
   const wrapper = document.createElement("article");
   wrapper.className = `message ${role}`;
+  wrapper.messageId = messageId;
   if (role === "user") {
     wrapper.innerHTML = `<div class="bubble"></div>`;
     wrapper.firstElementChild.textContent = content;
   } else {
     wrapper.generationRequest = request;
-    wrapper.messageId = messageId;
     wrapper.innerHTML = `<div class="assistant-head"><img class="assistant-icon" data-brand-logo alt=""><span data-text="assistantName"></span></div><div class="thinking-slot"><details class="thinking-box" hidden><summary></summary><div class="thinking-content"></div></details></div><div class="response-progress" role="status" hidden></div><div class="content"></div><div class="response-notice" hidden></div><details class="response-details" hidden><summary data-text="responseDetails"></summary><div class="metrics"></div></details><div class="message-actions"><button class="copy-response"><span data-icon="copy"></span><span data-text="copy"></span></button><button class="regenerate"><span data-icon="regenerate"></span><span data-text="regenerate"></span></button><button class="continue-response"><span data-icon="continue"></span><span data-text="continue"></span></button></div>`;
     const edit = document.createElement("button"); edit.className = "edit-prompt"; edit.dataset.text = "editPrompt"; edit.textContent = text("editPrompt");
     wrapper.querySelector(".message-actions").appendChild(edit);
@@ -462,7 +469,7 @@ function messageElement(role, content = "", metrics = null, status = "complete",
 
 function updateResponseActions() {
   const latest = [...ui.messages.querySelectorAll(".message")].at(-1);
-  const busy = generating || loadingModel || ["loading", "unloading", "generating"].includes(runtimeStatus);
+  const busy = generating || loadingModel || activeChatVisibility() !== "active" || ["loading", "unloading", "generating"].includes(runtimeStatus);
   ui.newChat.disabled = generating && !generationSession?.assistant;
   ui.chatList.querySelectorAll(".delete-chat").forEach(button => { button.disabled = generating && button.dataset.chatId === generationSession?.chatId; });
   ui.messages.querySelectorAll(".assistant").forEach(element => {
@@ -659,7 +666,7 @@ async function loadInitial() {
     if (navigation === chatNavigation && !preserveNewComposition && !(activeChat === null
         && (promptRevision !== initialPromptRevision || responseRevision !== initialResponseRevision))) {
       const selected = readBrowserState(ACTIVE_CHAT_KEY);
-      const initialChat = chats.find(chat => chat.id === selected) || (selected === "new" ? null : chats[0]);
+      const initialChat = chats.find(chat => chat.id === selected) || (selected === "new" ? null : chats.find(chat => (chat.visibility || "active") === "active"));
       if (initialChat) await openChat(initialChat.id);
       else { activateChat(null); restoreResponseSettings(); }
     } else if (activeChat === null) writeBrowserState(ACTIVE_CHAT_KEY, "new");
@@ -733,13 +740,77 @@ async function refreshRuntimeStatus() {
 
 async function refreshChats() {
   allChats = await api("/api/chats");
-  renderChatList();
+  if (ui.chatSearch.value.trim()) queueChatSearch();
+  else renderChatList();
+}
+
+function activeChatVisibility() {
+  return allChats.find(chat => chat.id === activeChat)?.visibility || "active";
+}
+
+function updateChatTools() {
+  const visibility = activeChatVisibility();
+  $("chatTools").hidden = !activeChat;
+  $("restoreCurrentChat").hidden = visibility === "active";
+  $("chatVisibilityNotice").hidden = visibility === "active";
+  $("chatVisibilityNotice").textContent = visibility === "archived" ? text("archivedChatNotice") : text("trashedChatNotice");
+  updateModelPicker();
+}
+
+function renderUndo() {
+  $("chatUndo").hidden = !undoChatMove;
+  if (undoChatMove) $("chatUndoLabel").textContent = text(undoChatMove.message);
+}
+
+async function moveChat(chat, visibility, canUndo = true) {
+  if (!chat || movingChats.has(chat.id)) return;
+  const previous = chat.visibility || "active";
+  movingChats.add(chat.id);
+  try {
+    const updated = await api(`/api/chats/${chat.id}/visibility`, { method: "PATCH", body: JSON.stringify({ visibility }) });
+    const current = allChats.find(item => item.id === chat.id) || chat;
+    Object.assign(current, { visibility: updated.visibility, updated_at: updated.updated_at });
+    const from = updated.previous_visibility || previous;
+    if (canUndo && visibility !== "active" && from !== visibility) {
+      undoChatMove = { chat: current, visibility: from, message: visibility === "archived" ? "chatArchived" : "chatTrashed" };
+    } else {
+      if (undoChatMove?.chat.id === chat.id) undoChatMove = null;
+      showToast(text("chatRestored"));
+    }
+    renderUndo();
+    if (activeChat === chat.id && visibility !== "active") await newChat();
+    if (visibility === "active") $("chatFolder").value = "active";
+    renderChatList();
+    updateResponseActions();
+    await refreshChats();
+  } catch (error) { showToast(error.message); }
+  finally { movingChats.delete(chat.id); }
 }
 
 function renderChatList() {
+  updateChatTools();
   ui.chatList.innerHTML = "";
   const query = ui.chatSearch.value.trim().toLowerCase();
-  const chats = allChats.filter((chat) => chat.title.toLowerCase().includes(query));
+  const folder = $("chatFolder").value || "active";
+  if (chatSearchResults?.query === query && chatSearchResults.folder === folder) {
+    for (const match of chatSearchResults.items) {
+      const button = document.createElement("button"); button.className = "chat-item chat-search-result";
+      const title = document.createElement("strong"); title.textContent = match.title;
+      button.appendChild(title);
+      if (match.snippet) {
+        const snippet = document.createElement("span");
+        snippet.textContent = `${text(match.role === "user" ? "exportUser" : "exportAssistant")} · ${match.snippet}`;
+        button.appendChild(snippet);
+      }
+      button.onclick = () => openChat(match.id, match.message_id).catch(error => showToast(error.message));
+      ui.chatList.appendChild(button);
+    }
+    return;
+  }
+  const chats = allChats.filter(chat => (chat.visibility || "active") === folder && chat.title.toLowerCase().includes(query));
+  if (!chats.length && !query) {
+    const empty = document.createElement("p"); empty.className = "chat-group"; empty.textContent = text("noChatsInFolder"); ui.chatList.appendChild(empty);
+  }
   let currentGroup = "";
   chats.forEach((chat) => {
     const date = new Date(chat.updated_at);
@@ -750,8 +821,16 @@ function renderChatList() {
       ui.chatList.appendChild(heading); currentGroup = group;
     }
     const row = document.createElement("div"); row.className = "chat-row";
-    row.innerHTML = `<button class="chat-item ${chat.id === activeChat ? "active" : ""}">${escapeHtml(chat.title)}</button><details class="chat-menu"><summary data-title="chatActions" aria-label="${escapeHtml(text("chatActions"))}">•••</summary><div><button class="rename-chat" data-text="rename">${escapeHtml(text("rename"))}</button><button class="delete-chat danger" data-text="delete">${escapeHtml(text("delete"))}</button></div></details>`;
-    row.querySelector(".chat-item").onclick = () => openChat(chat.id);
+    row.innerHTML = `<button class="chat-item ${chat.id === activeChat ? "active" : ""}">${escapeHtml(chat.title)}</button><details class="chat-menu"><summary data-title="chatActions" aria-label="${escapeHtml(text("chatActions"))}">•••</summary><div><button class="rename-chat">${escapeHtml(text("rename"))}</button><button class="archive-chat">${escapeHtml(text("archiveChat"))}</button><button class="trash-chat">${escapeHtml(text("trashChat"))}</button><button class="restore-chat">${escapeHtml(text("restoreChat"))}</button><button class="delete-chat danger">${escapeHtml(text("deletePermanently"))}</button></div></details>`;
+    row.querySelector(".chat-item").onclick = () => openChat(chat.id).catch(error => showToast(error.message));
+    row.querySelector(".rename-chat").hidden = folder !== "active";
+    row.querySelector(".archive-chat").hidden = folder !== "active";
+    row.querySelector(".trash-chat").hidden = folder === "trashed";
+    row.querySelector(".restore-chat").hidden = folder === "active";
+    row.querySelector(".delete-chat").hidden = folder !== "trashed";
+    row.querySelector(".archive-chat").onclick = () => moveChat(chat, "archived");
+    row.querySelector(".trash-chat").onclick = () => moveChat(chat, "trashed");
+    row.querySelector(".restore-chat").onclick = () => moveChat(chat, "active");
     row.querySelector(".rename-chat").onclick = async () => {
       const title = prompt(text("renameChat"), chat.title);
       if (title?.trim()) { await api(`/api/chats/${chat.id}`, { method: "PATCH", body: JSON.stringify({ title: title.trim() }) }); await refreshChats(); }
@@ -760,7 +839,9 @@ function renderChatList() {
       event.stopPropagation();
       if (generating && chat.id === generationSession?.chatId) return;
       if (!confirm(text("deleteConfirm", { title: chat.title }))) return;
-      await api(`/api/chats/${chat.id}`, { method: "DELETE" });
+      try { await api(`/api/chats/${chat.id}`, { method: "DELETE" }); }
+      catch (error) { showToast(error.message); return; }
+      if (undoChatMove?.chat.id === chat.id) { undoChatMove = null; renderUndo(); }
       if (activeChat === chat.id) {
         clearTimeout(draftSaveTimer); draftSaveTimer = null;
         clearTimeout(responseSettingsTimer); responseSettingsTimer = null;
@@ -779,6 +860,32 @@ function renderChatList() {
   });
 }
 
+function queueChatSearch() {
+  clearTimeout(chatSearchTimer);
+  chatSearchRequest?.abort();
+  chatSearchResults = null;
+  const query = ui.chatSearch.value.trim();
+  const folder = $("chatFolder").value || "active";
+  const status = $("chatSearchStatus");
+  status.hidden = !query;
+  status.textContent = query ? text("searchingChats") : "";
+  renderChatList();
+  if (!query) return;
+  const request = chatSearchRequest = new AbortController();
+  chatSearchTimer = setTimeout(async () => {
+    try {
+      const items = await api(`/api/chat-search?q=${encodeURIComponent(query)}&visibility=${encodeURIComponent(folder)}`, { signal: request.signal });
+      if (request.signal.aborted) return;
+      if (!Array.isArray(items)) throw new Error(text("chatSearchUnavailable"));
+      chatSearchResults = { query: query.toLowerCase(), folder, items };
+      status.textContent = items.length ? text("chatSearchMatches", { count: items.length }) : text("noChatSearchMatches");
+      renderChatList();
+    } catch (_) {
+      if (!request.signal.aborted) status.textContent = text("chatSearchUnavailable");
+    }
+  }, 250);
+}
+
 async function newChat() {
   if (generating && !generationSession?.assistant) return;
   chatNavigation++;
@@ -789,7 +896,7 @@ async function newChat() {
   renderChatList(); if (mobile.matches) setSidebar(false); ui.prompt.focus();
 }
 
-async function openChat(id) {
+async function openChat(id, messageId = null) {
   if (generating && !generationSession?.assistant) return;
   const navigation = ++chatNavigation;
   closeComposerPopovers();
@@ -798,10 +905,23 @@ async function openChat(id) {
   if (navigation !== chatNavigation) return;
   displayChat(chat, id);
   await refreshChats();
+  if (navigation !== chatNavigation) return;
   if (mobile.matches) setSidebar(false);
+  if (messageId) {
+    const target = [...ui.messages.querySelectorAll(".message")].find(message => message.messageId === messageId);
+    if (target) {
+      target.tabIndex = -1;
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: "center" });
+    }
+  }
 }
 
 function displayChat(chat, id = chat.id) {
+  if (typeof chat.title === "string") {
+    const summary = { id, title: chat.title, updated_at: chat.updated_at, visibility: chat.visibility, branch_of: chat.branch_of };
+    allChats = [summary, ...allChats.filter(item => item.id !== id)];
+  }
   activateChat(id); resetMessages(); lastUserMessage = "";
   restoreResponseSettings(chat.settings);
   conversationChars = ui.systemPrompt.value.length;
@@ -924,6 +1044,7 @@ async function send(message, retryRequest = null, branchTarget = null) {
   const fromComposer = message === undefined;
   message ??= ui.prompt.value.trim();
   if (!message || generating) return;
+  if (activeChatVisibility() !== "active") return showToast(text("restoreBeforeSending"));
   enhancements?.finishCompose();
   if (!retryRequest && !validateResponseSettings(true)) return;
   const submittedDraft = ui.prompt.value;
@@ -1109,7 +1230,11 @@ ui.customModel.oninput = () => { showModelError(); updateModelPicker(); };
 ui.chooseDetectedModel.onclick = () => { ui.customModel.value = ""; showModelError(); updateModelPicker(); ui.quickModelSelect.focus(); };
 ui.quickLoadModel.onclick = ui.menuLoadModel.onclick = loadModel;
 ui.quickUnloadModel.onclick = ui.menuUnloadModel.onclick = ui.unloadModel.onclick = unloadModel;
-ui.chatSearch.oninput = renderChatList;
+ui.chatSearch.oninput = queueChatSearch;
+$("chatFolder").onchange = queueChatSearch;
+$("restoreCurrentChat").onclick = () => moveChat(allChats.find(chat => chat.id === activeChat), "active");
+$("undoChatMove").onclick = () => { if (undoChatMove) moveChat(undoChatMove.chat, undoChatMove.visibility, false); };
+$("dismissChatUndo").onclick = () => { undoChatMove = null; renderUndo(); };
 ui.quickModelSelect.onchange = () => {
   if (generating || loadingModel || unloadingModel) return;
   ui.modelSelect.value = ui.quickModelSelect.value;
@@ -1144,6 +1269,7 @@ document.addEventListener("themechange", () => {
     node.querySelector(".thinking-box summary").textContent = text(node.dataset.status === "streaming" ? "working" : "worked", { duration: node.dataset.duration });
   });
   updateResponseActions();
+  updateChatTools(); renderUndo();
   resizePrompt();
   enhancements?.themeChanged();
 });
@@ -1152,9 +1278,18 @@ initComposerPopovers();
 initDrafts();
 await initThemes();
 enhancements = initEnhancements({ api, text, refreshThemeContent, notify: showToast, resize: resizePrompt, send: () => send(),
-  getState: () => ({ chatId: activeChat, draft: ui.prompt.value, settings: generationValues(), generating,
+  getState: () => ({ chatId: activeChat, draft: ui.prompt.value, settings: generationValues(), generating, chatReadOnly: activeChatVisibility() !== "active",
     modelBusy: loadingModel || unloadingModel || ["loading", "unloading", "generating"].includes(runtimeStatus), hasModels: Boolean(availableModels.length || selectedModelPath()) }),
   refreshModels,
+  selectedModel: () => availableModels.find(model => model.path === selectedModelPath()),
+  useCpuSettings(values) {
+    ui.contextSize.value = values.context_size;
+    ui.gpuLayers.value = values.gpu_layers;
+    ui.threads.value = values.threads;
+    updateModelPicker(); openSettings(true);
+    showToast(text("cpuSettingsPrepared"));
+  },
+  openChat, refreshChats, getChats: () => allChats, applyAppearance: applyTheme,
   loadDownloaded: async path => { if (await refreshModels(path)) await loadModel(); },
   closePanels: () => { openSettings(false); closeComposerPopovers(); },
   setDraft: value => { ui.prompt.value = value; promptInput(); saveDraft(); ui.prompt.focus(); },

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import shutil
 import threading
 import time
 import uuid
@@ -11,12 +13,13 @@ from collections import deque
 from contextlib import asynccontextmanager, closing
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from model_worker import ProcessModel as Llama
+import psutil
 from pydantic import BaseModel, Field
 from token_usage import TokenUsageStore
 from model_downloads import DownloadError, ModelDownloads, repository_id
@@ -42,6 +45,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("playground")
 settings_lock = threading.Lock()
+chat_lock = threading.RLock()
 usage_store = TokenUsageStore(DATA / "token_usage.jsonl")
 downloads = ModelDownloads(PROJECT_ROOT / "models", DATA / "downloads.json")
 
@@ -102,18 +106,23 @@ def chat_path(chat_id: str) -> Path:
 
 def append_event(chat_id: str, event: dict) -> None:
     event = {"time": datetime.now().isoformat(timespec="seconds"), **event}
-    with chat_path(chat_id).open("a", encoding="utf-8") as handle:
+    with chat_lock, chat_path(chat_id).open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(event, ensure_ascii=False) + "\n")
 
 
 def read_events(chat_id: str) -> list[dict]:
     path = chat_path(chat_id)
-    if not path.exists():
-        raise HTTPException(404, "Chat not found")
-    events = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    with chat_lock:
         try:
-            events.append(json.loads(line))
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except FileNotFoundError as error:
+            raise HTTPException(404, "Chat not found") from error
+    events = []
+    for line in lines:
+        try:
+            value = json.loads(line)
+            if isinstance(value, dict):
+                events.append(value)
         except json.JSONDecodeError:
             continue
     return events
@@ -126,6 +135,7 @@ def chat_view(chat_id: str) -> dict:
     messages = []
     generation_request = None
     branch_of = None
+    visibility = "active"
     created_at = events[0].get("time", "") if events else ""
     for index, event in enumerate(events):
         kind = event.get("type")
@@ -135,6 +145,8 @@ def chat_view(chat_id: str) -> dict:
             settings.update(event.get("values", {}))
         elif kind == "branched":
             branch_of = {"chat_id": event["chat_id"], "message_id": event["message_id"]}
+        elif kind == "visibility" and event.get("value") in ("active", "archived", "trashed"):
+            visibility = event["value"]
         elif kind == "user":
             generation_request = {
                 key: value for key, value in settings.items()
@@ -155,6 +167,7 @@ def chat_view(chat_id: str) -> dict:
         "settings": settings,
         "messages": messages,
         "branch_of": branch_of,
+        "visibility": visibility,
     }
 
 
@@ -362,6 +375,20 @@ class ChatUpdate(BaseModel):
     title: str = Field(min_length=1, max_length=100)
 
 
+class ChatVisibility(BaseModel):
+    visibility: Literal["active", "archived", "trashed"]
+
+
+class BackupChat(BaseModel):
+    id: str = Field(min_length=1, max_length=80, pattern=r"^[0-9a-f-]+$")
+    events: list[dict] = Field(max_length=200000)
+
+
+class BackupRestore(BaseModel):
+    version: Literal[1]
+    chats: list[BackupChat] = Field(max_length=10000)
+
+
 class BranchRequest(BaseModel):
     message_id: str = Field(min_length=1, max_length=100)
     message: str | None = Field(None, min_length=1, max_length=100000)
@@ -422,6 +449,17 @@ def models() -> list[dict]:
         "size": path.stat().st_size,
         "thinking_support": thinking_support(str(path)),
     } for path in sorted((PROJECT_ROOT / "models").glob("*.gguf"))]
+
+
+@app.get("/api/model-guidance")
+def model_guidance() -> dict:
+    memory = psutil.virtual_memory()
+    folder = downloads.models_dir
+    disk = shutil.disk_usage(folder if folder.is_dir() else folder.parent)
+    threads = psutil.cpu_count(logical=False) or os.cpu_count() or 1
+    return {"available_ram": memory.available, "total_ram": memory.total, "free_disk": disk.free,
+            "cpu_starter": {"context_size": 2048 if memory.available < 4 * 1024 ** 3 else 4096,
+                            "gpu_layers": 0, "threads": min(threads, 8)}}
 
 
 @app.get("/api/settings")
@@ -502,23 +540,127 @@ def unload_model(request: UnloadRequest | None = None) -> dict:
 
 @app.get("/api/chats")
 def list_chats() -> list[dict]:
-    chats = []
+    chats = [{key: view[key] for key in ("id", "title", "updated_at", "visibility", "branch_of")} for view in chat_views()]
+    return sorted(chats, key=lambda item: item["updated_at"], reverse=True)
+
+
+def chat_views() -> Iterator[dict]:
     for path in CHATS.glob("*.jsonl"):
         try:
-            view = chat_view(path.stem)
-            chats.append({key: view[key] for key in ("id", "title", "updated_at")})
+            yield chat_view(path.stem)
         except Exception:
             logger.exception("Could not read chat %s", path)
-    return sorted(chats, key=lambda item: item["updated_at"], reverse=True)
+
+
+@app.get("/api/chat-search")
+def search_chats(q: str = Query(min_length=1, max_length=120),
+                 visibility: Literal["active", "archived", "trashed"] = "active") -> list[dict]:
+    query = q.strip()
+    if not query:
+        return []
+    pattern = re.compile(re.escape(query), re.IGNORECASE)
+    results = []
+    for chat in chat_views():
+        if chat["visibility"] != visibility:
+            continue
+        summary = {"id": chat["id"], "title": chat["title"], "updated_at": chat["updated_at"]}
+        matches = 0
+        for message in reversed(chat["messages"]):
+            content = message.get("content", "")
+            match = pattern.search(content) if isinstance(content, str) else None
+            if not match:
+                continue
+            start, end = max(0, match.start() - 45), min(len(content), match.end() + 75)
+            snippet = " ".join(content[start:end].split())
+            results.append({**summary, "message_id": message["id"], "role": message["type"],
+                            "snippet": ("…" if start else "") + snippet + ("…" if end < len(content) else "")})
+            matches += 1
+            if matches == 3:
+                break
+        if not matches and isinstance(chat["title"], str) and pattern.search(chat["title"]):
+            results.append({**summary, "message_id": None, "role": None, "snippet": ""})
+    return sorted(results, key=lambda item: item["updated_at"], reverse=True)[:60]
+
+
+@app.get("/api/chat-backup")
+def chat_backup() -> dict:
+    with chat_lock:
+        chats = [{"id": path.stem, "events": read_events(path.stem)} for path in sorted(CHATS.glob("*.jsonl"))
+                 if re.fullmatch(r"[0-9a-f-]{1,80}", path.stem)]
+    return {"version": 1, "chats": chats}
+
+
+def backup_lines(events: list[dict]) -> bytes:
+    """Validate fields used by the chat reader before writing any restored files."""
+    for row in events:
+        kind = row.get("type")
+        if not isinstance(row.get("time", ""), str):
+            raise ValueError("Invalid chat timestamp")
+        if kind in ("created", "renamed"):
+            if not isinstance(row.get("title"), str) or not row["title"].strip():
+                raise ValueError("Invalid chat title")
+        elif kind == "settings":
+            if not isinstance(row.get("values"), dict):
+                raise ValueError("Invalid response settings")
+            ResponseSettings(**row["values"])
+        elif kind == "branched":
+            if not isinstance(row.get("chat_id"), str) or not isinstance(row.get("message_id"), str):
+                raise ValueError("Invalid branch reference")
+            chat_path(row["chat_id"])
+        elif kind == "visibility":
+            ChatVisibility(visibility=row.get("value"))
+        elif kind in ("user", "assistant"):
+            if not isinstance(row.get("content"), str):
+                raise ValueError("Invalid message text")
+            for key in ("request_id", "message_id", "status", "error"):
+                if row.get(key) is not None and not isinstance(row[key], str):
+                    raise ValueError("Invalid message details")
+            if row.get("metrics") is not None and not isinstance(row["metrics"], dict):
+                raise ValueError("Invalid response metrics")
+        else:
+            raise ValueError("Unrecognized chat event")
+    return "".join(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n" for row in events).encode("utf-8")
+
+
+@app.post("/api/chat-backup/restore")
+def restore_chat_backup(request: BackupRestore) -> dict:
+    try:
+        prepared = [(chat_path(chat.id), backup_lines(chat.events)) for chat in request.chats]
+    except (ValueError, HTTPException) as error:
+        raise HTTPException(400, "The backup contains invalid chat data") from error
+    restored, skipped = 0, 0
+    try:
+        with chat_lock:
+            for path, lines in prepared:
+                if path.exists():
+                    skipped += 1
+                    continue
+                temporary = path.with_name(f".{uuid.uuid4().hex}.tmp")
+                try:
+                    temporary.write_bytes(lines)
+                    if os.name == "nt":
+                        temporary.rename(path)
+                    else:
+                        os.link(temporary, path)
+                    restored += 1
+                except FileExistsError:
+                    skipped += 1
+                finally:
+                    temporary.unlink(missing_ok=True)
+    except OSError as error:
+        logger.exception("Could not finish restoring chat backup")
+        raise HTTPException(500, f"Restore stopped after {restored} chats. Check available disk space and retry.") from error
+    return {"restored": restored, "skipped": skipped}
 
 
 @app.post("/api/chats")
 def create_chat(request: ChatCreate) -> dict:
     chat_id = str(uuid.uuid4())
-    append_event(chat_id, {"type": "created", "title": "New chat"})
     defaults = {key: value for key, value in read_config().items() if key in ResponseSettings.model_fields}
     values = ResponseSettings(**{**defaults, **request.model_dump(exclude_unset=True)}).model_dump()
-    append_event(chat_id, {"type": "settings", "values": values})
+    with chat_lock:
+        append_event(chat_id, {"type": "created", "title": "New chat"})
+        append_event(chat_id, {"type": "settings", "values": values})
     return chat_view(chat_id)
 
 
@@ -532,6 +674,8 @@ def branch_chat(chat_id: str, request: BranchRequest) -> dict:
     if request.message is not None and not request.message.strip():
         raise HTTPException(400, "Enter a message")
     source = chat_view(chat_id)
+    if source["visibility"] != "active":
+        raise HTTPException(409, "Restore this chat before creating an alternative")
     target = next((index for index, item in enumerate(source["messages"])
                    if item["id"] == request.message_id and item["type"] == "assistant"), None)
     if target is None:
@@ -543,30 +687,43 @@ def branch_chat(chat_id: str, request: BranchRequest) -> dict:
     if user_index is None:
         raise HTTPException(409, "The response has no source prompt")
     branch_id = str(uuid.uuid4())
-    append_event(branch_id, {"type": "created", "title": f"{source['title'][:85]} · Alternative"})
-    append_event(branch_id, {"type": "branched", "chat_id": chat_id, "message_id": request.message_id})
-    for index, item in enumerate(source["messages"][:user_index + 1]):
-        if item["type"] == "user":
-            values = {key: value for key, value in item["request"].items() if key in ResponseSettings.model_fields}
-            append_event(branch_id, {"type": "settings", "values": values})
-        copied = {key: value for key, value in item.items() if key not in {"id", "request", "time"}}
-        if item["type"] == "user":
-            copied["request_id"] = item["request"]["request_id"]
-            if index == user_index and request.message is not None:
-                copied["content"] = request.message.strip()
-                copied["request_id"] = str(uuid.uuid4())
-        else:
-            copied["message_id"] = item["id"]
-            copied["usage_inherited"] = True
-        append_event(branch_id, copied)
+    with chat_lock:
+        append_event(branch_id, {"type": "created", "title": f"{source['title'][:85]} · Alternative"})
+        append_event(branch_id, {"type": "branched", "chat_id": chat_id, "message_id": request.message_id})
+        for index, item in enumerate(source["messages"][:user_index + 1]):
+            if item["type"] == "user":
+                values = {key: value for key, value in item["request"].items() if key in ResponseSettings.model_fields}
+                append_event(branch_id, {"type": "settings", "values": values})
+            copied = {key: value for key, value in item.items() if key not in {"id", "request", "time"}}
+            if item["type"] == "user":
+                copied["request_id"] = item["request"]["request_id"]
+                if index == user_index and request.message is not None:
+                    copied["content"] = request.message.strip()
+                    copied["request_id"] = str(uuid.uuid4())
+            else:
+                copied["message_id"] = item["id"]
+                copied["usage_inherited"] = True
+            append_event(branch_id, copied)
     return chat_view(branch_id)
 
 
 @app.patch("/api/chats/{chat_id}")
 def rename_chat(chat_id: str, request: ChatUpdate) -> dict:
-    read_events(chat_id)
-    append_event(chat_id, {"type": "renamed", "title": request.title.strip()})
+    with chat_lock:
+        read_events(chat_id)
+        append_event(chat_id, {"type": "renamed", "title": request.title.strip()})
     return chat_view(chat_id)
+
+
+@app.patch("/api/chats/{chat_id}/visibility")
+def set_chat_visibility(chat_id: str, request: ChatVisibility) -> dict:
+    with chat_lock:
+        if runtime.active_chat_id == chat_id:
+            raise HTTPException(409, "Stop this chat's response before moving it")
+        chat = chat_view(chat_id)
+        if chat["visibility"] != request.visibility:
+            append_event(chat_id, {"type": "visibility", "value": request.visibility})
+        return {**chat_view(chat_id), "previous_visibility": chat["visibility"]}
 
 
 @app.delete("/api/chats/{chat_id}")
@@ -578,8 +735,12 @@ def delete_chat(chat_id: str) -> dict:
     if not acquired and runtime.active_chat_id in {None, chat_id}:
         raise HTTPException(409, "Stop this chat's response before deleting it")
     try:
-        usage_store.snapshot(CHATS)
-        path.unlink()
+        with chat_lock:
+            usage_store.snapshot(CHATS)
+            try:
+                path.unlink()
+            except FileNotFoundError as error:
+                raise HTTPException(404, "Chat not found") from error
     finally:
         if acquired:
             runtime.generation_lock.release()
@@ -609,6 +770,8 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
                 and Path(request.expected_model_path).expanduser().resolve() != Path(runtime.model_path).resolve()):
             raise HTTPException(409, "The loaded model changed. Select and load the model you want, then try again.")
         chat = chat_view(chat_id)
+        if chat["visibility"] != "active":
+            raise HTTPException(409, "Restore this chat before sending a message")
         saved = chat["messages"]
         target = next((index for index, item in enumerate(saved)
                        if item["type"] == "user" and request.request_id

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Local LLM Playground</title>
   <link rel="icon" type="image/svg+xml" href="/assets/themes/assets/fallback.svg">
-  <link rel="stylesheet" href="/assets/styles.css?v=16">
+  <link rel="stylesheet" href="/assets/styles.css?v=17">
   <link rel="stylesheet" href="/assets/themes/chatgpt.css">
   <link rel="stylesheet" href="/assets/themes/claude.css">
   <link rel="stylesheet" href="/assets/themes/github-copilot.css">
@@ -15,8 +15,13 @@
     <aside class="sidebar" id="sidebar">
       <div class="sidebar-top"><div class="brand"><img class="brand-mark" data-brand-logo src="/assets/themes/assets/fallback.svg" alt=""><strong data-brand-name>Local LLM Playground</strong></div><button class="icon-button" id="sidebarClose" aria-label="Close sidebar" data-title="closeSidebar"><span data-icon="panel"></span></button></div>
       <button class="new-chat" id="newChat"><span data-icon="newChat"></span><span data-text="newChat">New chat</span></button>
-      <input class="chat-search" id="chatSearch" type="search" placeholder="Search chats…" aria-label="Search chats">
-      <div class="sidebar-label" data-text="recentChats">Recent chats</div>
+      <input class="chat-search" id="chatSearch" type="search" maxlength="120" placeholder="Search chats and messages…" aria-label="Search chats and messages" data-label="searchChats" data-placeholder="searchChats">
+      <p id="chatSearchStatus" class="chat-search-status" role="status" hidden></p>
+      <select class="chat-folder" id="chatFolder" aria-label="Chat folder" data-label="chatFolder">
+        <option value="active" data-text="recentChats">Recent chats</option>
+        <option value="archived" data-text="archivedChats">Archived chats</option>
+        <option value="trashed" data-text="trash">Trash</option>
+      </select>
       <nav id="chatList" class="chat-list"></nav>
       <button id="downloadsSidebar" class="secondary-button sidebar-tool"><span data-text="downloads">Model downloads</span><small id="downloadIndicator" class="download-indicator" role="status"></small></button>
       <button id="usageSidebar" class="secondary-button sidebar-tool" data-text="tokenUsage">Token usage</button>
@@ -36,6 +41,13 @@
       </header>
 
       <div id="runningResponse" class="running-response" role="status" hidden><span id="runningResponseLabel"></span><button id="returnToResponse" class="text-button" data-text="returnResponse">View response</button></div>
+      <div id="chatUndo" class="running-response" hidden><span id="chatUndoLabel" role="status"></span><button id="undoChatMove" class="text-button" data-text="undo">Undo</button><button id="dismissChatUndo" class="text-button" data-text="dismiss">Dismiss</button></div>
+      <div id="chatTools" class="chat-tools" hidden>
+        <span id="chatVisibilityNotice" class="setting-help" role="status" hidden></span>
+        <button id="restoreCurrentChat" class="secondary-button" data-text="restoreChat" hidden>Restore chat</button>
+        <button id="chatBranches" class="secondary-button" data-text="chatBranches">Branches</button>
+        <button id="exportChat" class="secondary-button" data-text="exportChat">Export Markdown</button>
+      </div>
 
       <div class="chat-stage">
       <section class="messages" id="messages">
@@ -130,7 +142,7 @@
         <div class="section-title"><span data-text="modelLoading">Model loading</span><span class="reload-badge" data-text="requiresReload">Requires reload</span></div>
         <label for="modelSelect" data-text="detectedModel">Detected model</label>
         <select id="modelSelect"></select>
-        <div class="settings-actions model-library-actions"><button id="getModelsButton" class="secondary-button" data-text="getModels">Get models</button><button id="refreshModelsButton" class="secondary-button" data-text="refreshModels">Refresh installed models</button></div>
+        <div class="settings-actions model-library-actions"><button id="getModelsButton" class="secondary-button" data-text="getModels">Get models</button><button id="refreshModelsButton" class="secondary-button" data-text="refreshModels">Refresh installed models</button><button id="modelGuidanceButton" class="secondary-button" data-text="modelGuidance">Model guidance</button></div>
         <label for="customModel" data-text="customModel">Custom GGUF path</label>
         <input id="customModel" placeholder="D:\path\to\model.gguf" data-placeholder="customModelPlaceholder">
         <div class="grid-three">
@@ -184,12 +196,13 @@
         </div>
         <label><span data-text="sendBehavior">Send shortcut</span><select id="sendBehavior"><option value="enter" data-text="enterSends">Enter sends · Shift+Enter adds a line</option><option value="modifier" data-text="modifierSends">Ctrl/Cmd+Enter sends · Enter adds a line</option></select></label>
         <button id="usageButton" class="secondary-button full" data-text="tokenUsage">Token usage</button>
+        <button id="openChatBackups" class="secondary-button full" data-text="chatBackups">Chat backups</button>
       </section>
       <details class="keyboard-help"><summary data-text="keyboardShortcuts">Keyboard shortcuts</summary><dl><dt data-text="send">Send message</dt><dd><kbd>Enter</kbd></dd><dt data-text="newLine">New line</dt><dd><kbd>Shift + Enter</kbd></dd><dt data-text="stop">Stop response</dt><dd><kbd>Ctrl / Cmd + Shift + X</kbd></dd><dt data-text="closePanels">Close panels</dt><dd><kbd>Escape</kbd></dd></dl></details>
     </aside>
     <div class="overlay" id="overlay"></div>
     <div class="toast" id="toast" role="status"></div>
   </div>
-  <script type="module" src="/assets/app.js?v=18"></script>
+  <script type="module" src="/assets/app.js?v=19"></script>
 </body>
 </html>

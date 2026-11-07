@@ -50,6 +50,12 @@ More views: [Claude on mobile](docs/images/themes/claude-dark-mobile.png), [GitH
 
 ## 💬 Chat behavior
 
+Use the sidebar search to find chat titles or matching messages in the selected folder. Each message result jumps to its place in the conversation. The chat menu can archive a chat or move it to Trash, with **Undo** and **Restore chat** available afterward. Use **Branches** to find related alternatives and jump to their source responses.
+
+**Export Markdown** downloads the open chat. **Settings → Reading and composing → Chat backups** exports chats, saved prompts, profiles, reading preferences, and appearance as JSON. Restore adds missing chats and Library items. Select the preferences checkbox to restore appearance and reading settings too.
+
+**Settings → Model loading → Model guidance** shows available RAM and disk space and offers CPU starter settings. The RAM comparison uses file size as a rough guide. The model runtime and context use additional memory. See the [GGUF quantization reference](https://huggingface.co/docs/hub/en/gguf#quantization-types) for filename labels such as Q4 and Q8.
+
 **Library** contains reusable response profiles and saved prompts. Start with General, Coding, or Writing, or save the current response settings as your own profile. Profiles apply to the next response in this chat and leave server defaults alone. Prompt templates fill the composer; when a draft exists, choose **Add to draft** or **Replace draft**. Three starter prompts also appear in an empty chat. Custom library items stay in this browser; built-in entries are editable in [`frontend/presets.json`](frontend/presets.json).
 
 Use the expand icon beside the prompt for a larger editor. It edits the same draft, with **Enter** for line breaks and **Ctrl/Cmd+Enter** to send. **Edit prompt** on a completed response creates a new alternative chat using the revised prompt and that turn's original response settings.

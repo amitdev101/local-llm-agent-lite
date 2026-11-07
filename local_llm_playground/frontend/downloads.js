@@ -4,6 +4,16 @@ export function initModelDownloads(hooks) {
   const $ = id => document.getElementById(id);
   const panel = dialog("modelDownloadsDialog", "getModels", '<p class="setting-help" data-text="downloadHelp"></p><div class="tool-tabs"><button id="downloadBrowseTab" data-text="getModels"></button><button id="downloadJobsTab" data-text="downloads"></button></div><section id="downloadBrowse"><div id="modelCatalog" class="download-catalog"></div><form id="repositoryForm"><label for="repositoryInput" data-text="modelRepository"></label><div class="download-search"><input id="repositoryInput" required maxlength="300" placeholder="owner/model-GGUF" autocomplete="off"><button class="secondary-button" data-text="browseFiles"></button></div></form><p id="repositoryStatus" role="status"></p><div id="repositoryFiles"></div></section><section id="downloadJobs" hidden><p id="downloadJobsStatus" role="status"></p><p id="downloadDestination" class="setting-help model-path"></p><div id="downloadJobList"></div></section>');
   panel.classList.add("download-dialog");
+  const downloadResources = element("p", "", "setting-help");
+  $("downloadBrowse").prepend(downloadResources);
+  const guidance = dialog("modelGuidanceDialog", "modelGuidance", `
+    <p id="modelResources" role="status"></p><p id="modelFit" class="setting-help"></p>
+    <p class="setting-help" data-text="modelMemoryHelp"></p>
+    <p class="setting-help" data-text="quantizationHelp"></p>
+    <p id="cpuStarterSummary" class="setting-help"></p>
+    <div class="settings-actions"><button id="refreshModelGuidance" class="secondary-button" data-text="refresh"></button>
+    <button id="useCpuStarter" class="primary-button" data-text="useCpuStarter" disabled></button></div>`);
+  let machine = null, machineRequest = 0;
   let jobs = [], catalogLoaded = false, timer = null, revision = 0, pollRevision = 0, pending = false, request = null, actionError = "";
   const rows = new Map(), fileControls = [];
   const activeStates = ["downloading", "verifying", "pausing", "cancelling"];
@@ -13,6 +23,36 @@ export function initModelDownloads(hooks) {
     const units = ["B", "KiB", "MiB", "GiB", "TiB"]; let unit = 0;
     while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit++; }
     return value.toLocaleString(undefined, { maximumFractionDigits: unit ? 2 : 0 }) + " " + units[unit];
+  }
+  function fileDescription(file) {
+    const format = file.filename?.match(/(?:^|[-_.])((?:I?Q[1-8](?:_[A-Z0-9]+)*)|BF16|F16|F32)(?=\.gguf$|[-.])/i)?.[1];
+    return format ? `${bytes(file.size)} · ${format.toUpperCase()}` : bytes(file.size);
+  }
+  function renderGuidance() {
+    const resources = machine ? text("availableModelResources", { ram: bytes(machine.available_ram), total: bytes(machine.total_ram), disk: bytes(machine.free_disk) }) : "";
+    downloadResources.textContent = resources;
+    $("modelResources").textContent = resources;
+    const file = hooks.selectedModel();
+    $("modelFit").textContent = file ? text("modelFileSize", { name: file.name, size: fileDescription({ ...file, filename: file.name }) }) : text("modelFitSelect");
+    if (file && machine && file.size > machine.available_ram) $("modelFit").textContent += ` ${text("modelLargeForRam")}`;
+    $("cpuStarterSummary").textContent = machine ? text("cpuStarterSummary", machine.cpu_starter) : "";
+    $("useCpuStarter").disabled = !machine || busyModel();
+  }
+  async function readMachine() {
+    const revision = ++machineRequest;
+    if (guidance.open) $("modelResources").textContent = text("checkingModels");
+    try {
+      const data = await api("/api/model-guidance");
+      if (!Number.isFinite(data.available_ram) || !Number.isFinite(data.total_ram) || !Number.isFinite(data.free_disk) || !data.cpu_starter) throw new Error(text("modelGuidanceUnavailable"));
+      if (revision !== machineRequest) return;
+      machine = data;
+      renderGuidance(); updateButtons();
+    } catch (_) {
+      if (revision !== machineRequest) return;
+      machine = null;
+      renderGuidance(); updateButtons();
+      if (guidance.open) $("modelResources").textContent = text("modelGuidanceUnavailable");
+    }
   }
   function showTab(tab) {
     $("downloadBrowse").hidden = tab !== "browse"; $("downloadJobs").hidden = tab !== "jobs";
@@ -26,6 +66,8 @@ export function initModelDownloads(hooks) {
       item.existing.hidden = !exists;
       item.existing.disabled = busyModel();
       item.notice.textContent = exists ? text("filenameExists") : item.input.value !== item.file.save_name && item.file.thinking_support === "supported" ? text("renamedThinking") : "";
+      item.fit.textContent = machine && item.file.size > machine.free_disk ? text("modelLargeForDisk")
+        : machine && item.file.size > machine.available_ram ? text("modelLargeForRam") : "";
     }
     for (const job of jobs) {
       const row = rows.get(job.id); if (!row) continue;
@@ -107,7 +149,9 @@ export function initModelDownloads(hooks) {
       const link = element("a", text("modelCard")); link.href = data.source_url; link.target = "_blank"; link.rel = "noopener noreferrer";
       $("repositoryFiles").append(link);
       for (const file of data.files) {
-        const card = element("section", "", "download-file"); card.append(element("h3", file.filename), element("p", bytes(file.size), "setting-help"));
+        const card = element("section", "", "download-file");
+        const fit = element("p", "", "setting-help model-fit-note");
+        card.append(element("h3", file.filename), element("p", fileDescription(file), "setting-help"), fit);
         const label = element("label", text("saveModelAs")), input = document.createElement("input");
         input.value = file.save_name; input.maxLength = 206; input.required = true; input.setAttribute("aria-label", text("saveModelAs") + " " + file.filename); label.append(input);
         const notice = element("p", "", "setting-help"), actions = element("div", "", "settings-actions");
@@ -126,7 +170,7 @@ export function initModelDownloads(hooks) {
           finally { pending = false; updateButtons(); }
         };
         actions.append(button, existing); card.append(label, notice, actions); $("repositoryFiles").append(card);
-        fileControls.push({ file, input, button, existing, notice });
+        fileControls.push({ file, input, button, existing, notice, fit });
       }
       updateButtons();
       $("repositoryStatus").scrollIntoView({ block: "nearest" });
@@ -146,7 +190,7 @@ export function initModelDownloads(hooks) {
       catalogLoaded = true;
     } catch (_) { $("repositoryStatus").textContent = text("catalogUnavailable"); }
   }
-  function show(jobsFirst = false) { open(panel); showTab(jobsFirst ? "jobs" : "browse"); catalog(); poll(); }
+  function show(jobsFirst = false) { open(panel); showTab(jobsFirst ? "jobs" : "browse"); catalog(); poll(); readMachine(); }
   $("getModelsButton").onclick = () => show(); $("getFirstModel").onclick = () => show();
   $("downloadsSidebar").onclick = () => show(jobs.length > 0);
   $("downloadBrowseTab").onclick = () => showTab("browse"); $("downloadJobsTab").onclick = () => showTab("jobs");
@@ -155,10 +199,17 @@ export function initModelDownloads(hooks) {
     try { await hooks.refreshModels(); hooks.notify(text("modelsRefreshed")); }
     catch (error) { hooks.notify(error.message); }
   };
+  $("modelGuidanceButton").onclick = () => { open(guidance); renderGuidance(); readMachine(); };
+  $("refreshModelGuidance").onclick = readMachine;
+  $("useCpuStarter").onclick = () => {
+    if (!machine || busyModel()) return;
+    guidance.close();
+    hooks.useCpuSettings(machine.cpu_starter);
+  };
   panel.addEventListener("close", () => { if (!activeJob()) { clearTimeout(timer); timer = null; } });
   poll(); // Local history only; Hugging Face is contacted after Browse or Download.
   return {
-    update() { updateButtons(); $("getFirstModel").hidden = hooks.getState().hasModels; $("refreshModelsButton").disabled = busyModel(); },
-    themeChanged() { hooks.refreshThemeContent(panel); renderJobs(); }
+    update() { updateButtons(); $("getFirstModel").hidden = hooks.getState().hasModels; $("refreshModelsButton").disabled = busyModel(); if (guidance.open) $("useCpuStarter").disabled = !machine || busyModel(); },
+    themeChanged() { hooks.refreshThemeContent(panel); hooks.refreshThemeContent(guidance); renderJobs(); renderGuidance(); }
   };
 }
