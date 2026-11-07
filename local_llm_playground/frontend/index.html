@@ -25,6 +25,7 @@
       <nav id="chatList" class="chat-list"></nav>
       <button id="downloadsSidebar" class="secondary-button sidebar-tool"><span data-text="downloads">Model downloads</span><small id="downloadIndicator" class="download-indicator" role="status"></small></button>
       <button id="usageSidebar" class="secondary-button sidebar-tool" data-text="tokenUsage">Token usage</button>
+      <button id="bookmarksSidebar" class="secondary-button sidebar-tool" data-text="bookmarks">Bookmarked responses</button>
       <div class="sidebar-footer"><span class="status-dot" id="statusDot"></span><div><strong data-text="localRuntime">Local runtime</strong><span id="statusText" role="status">Not loaded</span></div><span class="local-badge" data-text="localBadge">GGUF</span></div>
     </aside>
 
@@ -46,6 +47,7 @@
         <span id="chatVisibilityNotice" class="setting-help" role="status" hidden></span>
         <button id="restoreCurrentChat" class="secondary-button" data-text="restoreChat" hidden>Restore chat</button>
         <button id="chatBranches" class="secondary-button" data-text="chatBranches">Branches</button>
+        <button id="pinCurrentChat" class="secondary-button" data-text="pinChat">Pin chat</button>
         <button id="exportChat" class="secondary-button" data-text="exportChat">Export Markdown</button>
       </div>
 
@@ -220,6 +222,6 @@
     <div class="overlay" id="overlay"></div>
     <div class="toast" id="toast" role="status"></div>
   </div>
-  <script type="module" src="/assets/app.js?v=25"></script>
+  <script type="module" src="/assets/app.js?v=26"></script>
 </body>
 </html>

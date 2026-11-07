@@ -66,6 +66,33 @@ export function initConversationTools(hooks) {
   }
 
   $("chatBranches").onclick = () => { renderBranches(); open(branches); };
+  const bookmarks = dialog("bookmarksDialog", "bookmarks", '<p id="bookmarksStatus" class="setting-help" role="status"></p><div id="bookmarksList"></div>');
+  let bookmarkRevision = 0;
+  $("bookmarksSidebar").onclick = async () => {
+    const revision = ++bookmarkRevision;
+    const list = $("bookmarksList"), status = $("bookmarksStatus");
+    list.replaceChildren();
+    status.textContent = text("loadingBookmarks");
+    open(bookmarks);
+    try {
+      const items = await api("/api/bookmarks");
+      if (revision !== bookmarkRevision || !bookmarks.open) return;
+      status.textContent = items.length ? "" : text("noBookmarks");
+      for (const item of items) {
+        const row = element("div", "", "library-item");
+        const jump = element("button", item.title, "secondary-button");
+        jump.onclick = async () => {
+          bookmarks.close();
+          try { await hooks.openChat(item.chat_id, item.message_id); }
+          catch (error) { hooks.notify(error.message); }
+        };
+        row.append(jump, element("p", item.snippet, "setting-help"));
+        list.append(row);
+      }
+    } catch (error) {
+      if (revision === bookmarkRevision && bookmarks.open) status.textContent = error.message;
+    }
+  };
   $("exportChat").onclick = async () => {
     const id = hooks.getState().chatId;
     if (!id) return;
@@ -221,6 +248,6 @@ export function initConversationTools(hooks) {
 
   return {
     compareResponse,
-    themeChanged() { [branches, backups, comparison].forEach(hooks.refreshThemeContent); if (branches.open) renderBranches(); },
+    themeChanged() { [branches, bookmarks, backups, comparison].forEach(hooks.refreshThemeContent); if (branches.open) renderBranches(); },
   };
 }

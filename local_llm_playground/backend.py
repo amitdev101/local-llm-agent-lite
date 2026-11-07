@@ -136,6 +136,8 @@ def chat_view(chat_id: str) -> dict:
     generation_request = None
     branch_of = None
     visibility = "active"
+    pinned = False
+    bookmarks = set()
     created_at = events[0].get("time", "") if events else ""
     for index, event in enumerate(events):
         kind = event.get("type")
@@ -147,6 +149,13 @@ def chat_view(chat_id: str) -> dict:
             branch_of = {"chat_id": event["chat_id"], "message_id": event["message_id"]}
         elif kind == "visibility" and event.get("value") in ("active", "archived", "trashed"):
             visibility = event["value"]
+        elif kind == "pin":
+            pinned = event.get("value") is True
+        elif kind == "bookmark" and isinstance(event.get("message_id"), str):
+            if event.get("value") is True:
+                bookmarks.add(event["message_id"])
+            else:
+                bookmarks.discard(event["message_id"])
         elif kind == "user":
             generation_request = {
                 key: value for key, value in settings.items()
@@ -159,6 +168,10 @@ def chat_view(chat_id: str) -> dict:
             messages.append({**event, "id": generation_request["request_id"], "request": generation_request})
         elif kind == "assistant":
             messages.append({**event, "id": event.get("message_id") or f"legacy-{index}", "request": generation_request})
+    for message in messages:
+        message.pop("bookmarked", None)
+        if message["type"] == "assistant" and message["id"] in bookmarks and message.get("status", "complete") == "complete":
+            message["bookmarked"] = True
     return {
         "id": chat_id,
         "title": title,
@@ -168,6 +181,7 @@ def chat_view(chat_id: str) -> dict:
         "messages": messages,
         "branch_of": branch_of,
         "visibility": visibility,
+        "pinned": pinned,
     }
 
 
@@ -379,6 +393,10 @@ class ChatVisibility(BaseModel):
     visibility: Literal["active", "archived", "trashed"]
 
 
+class SavedState(BaseModel):
+    value: bool
+
+
 class BackupChat(BaseModel):
     id: str = Field(min_length=1, max_length=80, pattern=r"^[0-9a-f-]+$")
     events: list[dict] = Field(max_length=200000)
@@ -545,7 +563,7 @@ def unload_model(request: UnloadRequest | None = None) -> dict:
 
 @app.get("/api/chats")
 def list_chats() -> list[dict]:
-    chats = [{key: view[key] for key in ("id", "title", "updated_at", "visibility", "branch_of")} for view in chat_views()]
+    chats = [{key: view[key] for key in ("id", "title", "updated_at", "visibility", "branch_of", "pinned")} for view in chat_views()]
     return sorted(chats, key=lambda item: item["updated_at"], reverse=True)
 
 
@@ -555,6 +573,15 @@ def chat_views() -> Iterator[dict]:
             yield chat_view(path.stem)
         except Exception:
             logger.exception("Could not read chat %s", path)
+
+
+@app.get("/api/bookmarks")
+def list_bookmarks() -> list[dict]:
+    return [{"chat_id": chat["id"], "title": chat["title"], "message_id": item["id"],
+             "snippet": re.sub(r"<think>[\s\S]*?(?:</think>|$)", "", item.get("content", "")).strip()[:180]}
+            for chat in sorted(chat_views(), key=lambda item: item["updated_at"], reverse=True)
+            if chat["visibility"] != "trashed"
+            for item in reversed(chat["messages"]) if item.get("bookmarked")]
 
 
 @app.get("/api/chat-search")
@@ -614,6 +641,9 @@ def backup_lines(events: list[dict]) -> bytes:
             chat_path(row["chat_id"])
         elif kind == "visibility":
             ChatVisibility(visibility=row.get("value"))
+        elif kind in ("pin", "bookmark"):
+            if not isinstance(row.get("value"), bool) or (kind == "bookmark" and not isinstance(row.get("message_id"), str)):
+                raise ValueError("Invalid saved item")
         elif kind in ("user", "assistant"):
             if not isinstance(row.get("content"), str):
                 raise ValueError("Invalid message text")
@@ -701,7 +731,7 @@ def branch_chat(chat_id: str, request: BranchRequest) -> dict:
                 if index == user_index and request.response_settings is not None:
                     values = request.response_settings.model_dump()
                 append_event(branch_id, {"type": "settings", "values": values})
-            copied = {key: value for key, value in item.items() if key not in {"id", "request", "time"}}
+            copied = {key: value for key, value in item.items() if key not in {"id", "request", "time", "bookmarked"}}
             if item["type"] == "user":
                 copied["request_id"] = item["request"]["request_id"]
                 if index == user_index and request.message is not None:
@@ -770,6 +800,32 @@ def set_chat_visibility(chat_id: str, request: ChatVisibility) -> dict:
         if chat["visibility"] != request.visibility:
             append_event(chat_id, {"type": "visibility", "value": request.visibility})
         return {**chat_view(chat_id), "previous_visibility": chat["visibility"]}
+
+
+@app.patch("/api/chats/{chat_id}/pin")
+def pin_chat(chat_id: str, request: SavedState) -> dict:
+    with chat_lock:
+        chat = chat_view(chat_id)
+        if chat["visibility"] != "active":
+            raise HTTPException(409, "Restore the chat before changing its pin")
+        if chat["pinned"] != request.value:
+            append_event(chat_id, {"type": "pin", "value": request.value})
+        return {"pinned": request.value}
+
+
+@app.patch("/api/chats/{chat_id}/bookmark/{message_id}")
+def bookmark_response(chat_id: str, message_id: str, request: SavedState) -> dict:
+    with chat_lock:
+        chat = chat_view(chat_id)
+        if chat["visibility"] == "trashed":
+            raise HTTPException(409, "Restore the chat before changing a bookmark")
+        item = next((item for item in chat["messages"] if item["id"] == message_id
+                     and item["type"] == "assistant" and item.get("status", "complete") == "complete"), None)
+        if item is None:
+            raise HTTPException(404, "Completed response not found")
+        if bool(item.get("bookmarked")) != request.value:
+            append_event(chat_id, {"type": "bookmark", "message_id": message_id, "value": request.value})
+        return {"bookmarked": request.value}
 
 
 @app.delete("/api/chats/{chat_id}")

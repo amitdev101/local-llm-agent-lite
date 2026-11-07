@@ -1,5 +1,5 @@
-import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=9";
-import { initEnhancements } from "./enhancements.js?v=7";
+import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=10";
+import { initEnhancements } from "./enhancements.js?v=8";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
@@ -490,6 +490,20 @@ function messageElement(role, content = "", metrics = null, status = "complete",
     compare.dataset.text = "compareResponse"; compare.textContent = text("compareResponse");
     wrapper.querySelector(".message-actions").appendChild(compare);
     compare.onclick = () => enhancements?.compareResponse(activeChat, wrapper.messageId);
+    const bookmark = document.createElement("button"); bookmark.className = "bookmark-response";
+    wrapper.querySelector(".message-actions").appendChild(bookmark);
+    bookmark.onclick = async () => {
+      if (bookmark.disabled || bookmark.hidden) return;
+      bookmark.disabled = true;
+      try {
+        const updated = await api(`/api/chats/${activeChat}/bookmark/${encodeURIComponent(wrapper.messageId)}`, {
+          method: "PATCH", body: JSON.stringify({ value: !wrapper.bookmarked })
+        });
+        wrapper.bookmarked = updated.bookmarked;
+        updateResponseActions();
+      } catch (error) { showToast(error.message); }
+      finally { bookmark.disabled = false; }
+    };
     edit.onclick = () => {
       if (!edit.disabled && request) enhancements?.editPrompt({ chatId: activeChat, messageId: wrapper.messageId, message: request.message, request });
     };
@@ -528,6 +542,11 @@ function updateResponseActions() {
     element.querySelector(".continue-response").title = text("continueLatest");
     element.querySelector(".edit-prompt").disabled = busy || !element.messageId || !element.generationRequest || element.dataset.status !== "complete";
     element.querySelector(".compare-response").hidden = !element.messageId || !element.generationRequest || element.dataset.status !== "complete";
+    const bookmark = element.querySelector(".bookmark-response");
+    bookmark.hidden = !element.messageId || element.dataset.status !== "complete" || activeChatVisibility() === "trashed";
+    bookmark.dataset.text = element.bookmarked ? "removeBookmark" : "bookmarkResponse";
+    bookmark.textContent = text(bookmark.dataset.text);
+    bookmark.setAttribute("aria-pressed", String(Boolean(element.bookmarked)));
   });
   updateRunningResponse();
   enhancements?.update();
@@ -972,6 +991,12 @@ function updateChatTools() {
   const visibility = activeChatVisibility();
   $("chatTools").hidden = !activeChat;
   $("restoreCurrentChat").hidden = visibility === "active";
+  const pin = $("pinCurrentChat");
+  const pinned = Boolean(allChats.find(chat => chat.id === activeChat)?.pinned);
+  pin.hidden = visibility !== "active";
+  pin.dataset.text = pinned ? "unpinChat" : "pinChat";
+  pin.textContent = text(pin.dataset.text);
+  pin.setAttribute("aria-pressed", String(pinned));
   $("chatVisibilityNotice").hidden = visibility === "active";
   $("chatVisibilityNotice").textContent = visibility === "archived" ? text("archivedChatNotice") : text("trashedChatNotice");
   updateModelPicker();
@@ -1029,6 +1054,7 @@ function renderChatList() {
     return;
   }
   const chats = allChats.filter(chat => (chat.visibility || "active") === folder && chat.title.toLowerCase().includes(query));
+  if (folder === "active") chats.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
   if (!chats.length && !query) {
     const empty = document.createElement("p"); empty.className = "chat-group"; empty.textContent = text("noChatsInFolder"); ui.chatList.appendChild(empty);
   }
@@ -1036,7 +1062,7 @@ function renderChatList() {
   chats.forEach((chat) => {
     const date = new Date(chat.updated_at);
     const today = new Date();
-    const group = date.toDateString() === today.toDateString() ? "today" : "earlier";
+    const group = folder === "active" && chat.pinned ? "pinnedChats" : date.toDateString() === today.toDateString() ? "today" : "earlier";
     if (group !== currentGroup) {
       const heading = document.createElement("div"); heading.className = "chat-group"; heading.dataset.text = group; heading.textContent = text(group);
       ui.chatList.appendChild(heading); currentGroup = group;
@@ -1141,7 +1167,7 @@ async function openChat(id, messageId = null) {
 
 function displayChat(chat, id = chat.id) {
   if (typeof chat.title === "string") {
-    const summary = { id, title: chat.title, updated_at: chat.updated_at, visibility: chat.visibility, branch_of: chat.branch_of };
+    const summary = { id, title: chat.title, updated_at: chat.updated_at, visibility: chat.visibility, branch_of: chat.branch_of, pinned: chat.pinned };
     allChats = [summary, ...allChats.filter(item => item.id !== id)];
   }
   activateChat(id); resetMessages(); lastUserMessage = "";
@@ -1155,7 +1181,8 @@ function displayChat(chat, id = chat.id) {
   let sourcePrompt = "";
   chat.messages.forEach((message) => {
     if (message.type === "user") { sourcePrompt = message.content; lastUserMessage = message.content; }
-    messageElement(message.type, message.content, message.metrics, message.status, sourcePrompt, message.request, message.error, message.id);
+    const node = messageElement(message.type, message.content, message.metrics, message.status, sourcePrompt, message.request, message.error, message.id);
+    node.bookmarked = message.bookmarked;
     conversationChars += message.content.length;
   });
   if (generationSession?.chatId === id) generationSession.countedInView = chat.messages.some(message => message.id && message.id === generationSession.assistant?.messageId);
@@ -1501,6 +1528,18 @@ ui.quickUnloadModel.onclick = ui.menuUnloadModel.onclick = ui.unloadModel.onclic
 ui.chatSearch.oninput = queueChatSearch;
 $("chatFolder").onchange = queueChatSearch;
 $("restoreCurrentChat").onclick = () => moveChat(allChats.find(chat => chat.id === activeChat), "active");
+$("pinCurrentChat").onclick = async () => {
+  const button = $("pinCurrentChat"), chat = allChats.find(item => item.id === activeChat);
+  if (button.disabled || !chat || activeChatVisibility() !== "active") return;
+  button.disabled = true;
+  try {
+    const updated = await api(`/api/chats/${chat.id}/pin`, { method: "PATCH", body: JSON.stringify({ value: !chat.pinned }) });
+    const current = allChats.find(item => item.id === chat.id);
+    if (current) current.pinned = updated.pinned;
+    renderChatList();
+  } catch (error) { showToast(error.message); }
+  finally { button.disabled = false; }
+};
 $("undoChatMove").onclick = () => { if (undoChatMove) moveChat(undoChatMove.chat, undoChatMove.visibility, false); };
 $("dismissChatUndo").onclick = () => { undoChatMove = null; renderUndo(); };
 ui.quickModelSelect.onchange = () => {

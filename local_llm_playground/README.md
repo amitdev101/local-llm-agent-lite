@@ -52,6 +52,8 @@ More views: [Claude on mobile](docs/images/themes/claude-dark-mobile.png), [GitH
 
 Use the sidebar search to find chat titles or matching messages in the selected folder. Each message result jumps to its place in the conversation. The chat menu can archive a chat or move it to Trash, with **Undo** and **Restore chat** available afterward. Use **Branches** to find related alternatives and jump to their source responses.
 
+**Pin chat** puts the conversation in the Pinned group above recent chats. Use **Bookmark** on a completed answer and open **Bookmarked responses** in the sidebar to jump back to it. Pins and bookmarks are saved with chat backups.
+
 **Export Markdown** downloads the open chat. **Settings → Reading and composing → Chat backups** exports chats, saved prompts, profiles, reading preferences, and appearance as JSON. Restore adds missing chats and Library items. Select the preferences checkbox to restore appearance and reading settings too.
 
 **Settings → Model loading → Model guidance** shows available RAM and disk space and offers CPU starter settings. The RAM comparison uses file size as a rough guide. The model runtime and context use additional memory. See the [GGUF quantization reference](https://huggingface.co/docs/hub/en/gguf#quantization-types) for filename labels such as Q4 and Q8.
