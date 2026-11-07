@@ -56,7 +56,7 @@ Use the sidebar search to find chat titles or matching messages in the selected 
 
 **Pin chat** puts the conversation in the Pinned group above recent chats. Use **Bookmark** on a completed answer and open **Bookmarked responses** in the sidebar to jump back to it. Pins and bookmarks are saved with chat backups.
 
-**Export Markdown** downloads the open chat. **Settings → Reading and composing → Chat backups** exports chats, saved prompts, profiles, reading preferences, and appearance as JSON. Restore adds missing chats and Library items. Select the preferences checkbox to restore appearance and reading settings too.
+**Export Markdown** downloads the open chat. **Settings → Reading and composing → Chat backups** exports chats, Library items, reading preferences, and appearance as JSON. You can include unsent drafts and the token usage ledger, including usage for deleted chats. Restore merges missing data and reports how many entries it skipped and why. Select the checkboxes to restore drafts, usage, or preferences.
 
 **Settings → Model loading → Model guidance** shows available RAM and disk space and offers CPU starter settings. The RAM comparison uses file size as a rough guide. The model runtime and context use additional memory. See the [GGUF quantization reference](https://huggingface.co/docs/hub/en/gguf#quantization-types) for filename labels such as Q4 and Q8.
 

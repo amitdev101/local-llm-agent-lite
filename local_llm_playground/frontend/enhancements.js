@@ -1,6 +1,6 @@
 // Shared chat tools. Theme files continue to own appearance, not behavior.
 import { initModelDownloads } from "./downloads.js?v=2";
-import { initConversationTools } from "./conversation-tools.js?v=4";
+import { initConversationTools } from "./conversation-tools.js?v=5";
 export function initEnhancements(hooks) {
   const { text, api, refreshThemeContent } = hooks;
   const $ = id => document.getElementById(id);
@@ -497,21 +497,23 @@ export function initEnhancements(hooks) {
     browserBackup: () => ({ library: savedLibrary(), preferences, appearance: { theme: $("themeSelect").value, mode: $("colorModeSelect").value } }),
     restoreBrowserBackup(data, restorePreferences) {
       const current = savedLibrary(), imported = savedLibrary(data.library);
-      let added = 0;
+      let added = 0, duplicateItems = 0, invalidItems = 0;
       for (const kind of ["prompts", "profiles", "sets"]) {
+        invalidItems += (Array.isArray(data.library[kind]) ? data.library[kind].length : 0) - imported[kind].length;
         for (const item of imported[kind]) {
           const name = item.name.trim();
-          if (!name || name.length > 80 || current[kind].some(entry => entry.id === item.id)
-              || libraryNameExists(kind, current[kind], name)) continue;
-          if (kind === "prompts" && !item.content.trim()) continue;
+          if (!name || name.length > 80 || (kind === "prompts" && !item.content.trim())) { invalidItems++; continue; }
+          if (current[kind].some(entry => entry.id === item.id) || libraryNameExists(kind, current[kind], name)) {
+            duplicateItems++; continue;
+          }
           if (kind === "profiles") {
-            if (item.settings.system_prompt != null && typeof item.settings.system_prompt !== "string") continue;
+            if (item.settings.system_prompt != null && typeof item.settings.system_prompt !== "string") { invalidItems++; continue; }
             const valid = profileInputs.every(([key, field]) => {
               const input = field.cloneNode(false);
               input.value = item.settings[key] ?? input.defaultValue;
               return input.checkValidity();
             });
-            if (!valid) continue;
+            if (!valid) { invalidItems++; continue; }
           }
           current[kind].push({ ...item, name });
           added++;
@@ -527,7 +529,7 @@ export function initEnhancements(hooks) {
         hooks.applyAppearance(data.appearance.theme, data.appearance.mode);
       }
       renderLibrary();
-      return { added, persisted };
+      return { added, duplicateItems, invalidItems, persisted };
     },
   });
   return {

@@ -437,6 +437,7 @@ class BackupChat(BaseModel):
 class BackupRestore(BaseModel):
     version: Literal[1]
     chats: list[BackupChat] = Field(max_length=10000)
+    usage: list[dict] | None = Field(None, max_length=200000)
 
 
 class BranchRequest(BaseModel):
@@ -648,11 +649,14 @@ def search_chats(q: str = Query(min_length=1, max_length=120),
 
 
 @app.get("/api/chat-backup")
-def chat_backup() -> dict:
+def chat_backup(include_usage: bool = False) -> dict:
     with chat_lock:
         chats = [{"id": path.stem, "events": read_events(path.stem)} for path in sorted(CHATS.glob("*.jsonl"))
                  if re.fullmatch(r"[0-9a-f-]{1,80}", path.stem)]
-    return {"version": 1, "chats": chats}
+        backup = {"version": 1, "chats": chats}
+        if include_usage:
+            backup["usage"], _ = usage_store.backfill(CHATS)
+    return backup
 
 
 def backup_lines(events: list[dict]) -> bytes:
@@ -696,9 +700,26 @@ def restore_chat_backup(request: BackupRestore) -> dict:
         prepared = [(chat_path(chat.id), backup_lines(chat.events)) for chat in request.chats]
     except (ValueError, HTTPException) as error:
         raise HTTPException(400, "The backup contains invalid chat data") from error
+    usage = None
+    if request.usage is not None:
+        usage = []
+        for row in request.usage:
+            status, timestamp = row.get("status"), row.get("time")
+            identifier = row.get("chat_id")
+            if (not isinstance(status, str) or not isinstance(timestamp, str) or not timestamp
+                    or not isinstance(identifier, str) or not re.fullmatch(r"[0-9a-f-]{1,80}", identifier)):
+                raise HTTPException(400, "The backup contains invalid token usage")
+            record = usage_store.entry(identifier, row.get("id"), row, status, timestamp)
+            if record is None:
+                raise HTTPException(400, "The backup contains invalid token usage")
+            record["estimated"] = bool(record["estimated"])
+            usage.append(record)
     restored, skipped = 0, 0
+    usage_result = {}
     try:
         with chat_lock:
+            if usage is not None:
+                usage_store.backfill(CHATS)
             for path, lines in prepared:
                 if path.exists():
                     skipped += 1
@@ -715,10 +736,12 @@ def restore_chat_backup(request: BackupRestore) -> dict:
                     skipped += 1
                 finally:
                     temporary.unlink(missing_ok=True)
+            if usage is not None:
+                usage_result = usage_store.restore_records(usage)
     except OSError as error:
         logger.exception("Could not finish restoring chat backup")
         raise HTTPException(500, f"Restore stopped after {restored} chats. Check available disk space and retry.") from error
-    return {"restored": restored, "skipped": skipped}
+    return {"restored": restored, "skipped": skipped, **usage_result}
 
 
 @app.post("/api/chats")

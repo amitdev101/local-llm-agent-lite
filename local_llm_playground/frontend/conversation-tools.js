@@ -111,27 +111,37 @@ export function initConversationTools(hooks) {
 
   const backups = dialog("backupDialog", "chatBackups", `
     <p class="setting-help" data-text="backupHelp"></p>
+    <label class="library-thinking-field"><input id="includeBackupDrafts" type="checkbox"><span data-text="includeBackupDrafts"></span></label>
+    <label class="library-thinking-field"><input id="includeBackupUsage" type="checkbox"><span data-text="includeBackupUsage"></span></label>
     <button id="downloadChatBackup" class="primary-button" data-text="downloadBackup"></button>
     <div class="backup-restore">
       <label for="chatBackupFile" data-text="selectBackup"></label>
       <input id="chatBackupFile" type="file" accept=".json,application/json">
       <p id="backupContents" class="setting-help" role="status"></p>
       <label class="library-thinking-field"><input id="restoreBackupPreferences" type="checkbox"><span data-text="restorePreferences"></span></label>
+      <label class="library-thinking-field" id="restoreDraftsOption" hidden><input id="restoreBackupDrafts" type="checkbox"><span data-text="restoreBackupDrafts"></span></label>
+      <label class="library-thinking-field" id="restoreUsageOption" hidden><input id="restoreBackupUsage" type="checkbox"><span data-text="restoreBackupUsage"></span></label>
       <button id="restoreChatBackup" class="secondary-button" data-text="restoreBackup" disabled></button>
     </div>
     <p id="backupStatus" class="setting-help" role="status"></p>`);
   let backup = null, backupBusy = false, fileRevision = 0;
+  const maxBackupBytes = 50 * 1024 * 1024;
 
   function updateBackupButtons() {
     $("downloadChatBackup").disabled = $("chatBackupFile").disabled = backupBusy;
     $("restoreChatBackup").disabled = backupBusy || !backup;
+    for (const id of ["includeBackupDrafts", "includeBackupUsage", "restoreBackupDrafts", "restoreBackupUsage", "restoreBackupPreferences"]) {
+      $(id).disabled = backupBusy;
+    }
+    $("restoreDraftsOption").hidden = !backup?.drafts?.length;
+    $("restoreUsageOption").hidden = !backup?.usage?.length;
   }
 
   $("openChatBackups").onclick = () => {
     if (!backupBusy) {
       backup = null;
       $("chatBackupFile").value = "";
-      $("restoreBackupPreferences").checked = false;
+      for (const id of ["includeBackupDrafts", "includeBackupUsage", "restoreBackupDrafts", "restoreBackupUsage", "restoreBackupPreferences"]) $(id).checked = false;
       $("backupContents").textContent = $("backupStatus").textContent = "";
     }
     updateBackupButtons();
@@ -142,9 +152,12 @@ export function initConversationTools(hooks) {
     updateBackupButtons();
     $("backupStatus").textContent = text("preparingBackup");
     try {
-      const data = await api("/api/chat-backup");
+      const data = await api("/api/chat-backup" + ($("includeBackupUsage").checked ? "?include_usage=true" : ""));
       const contents = { format: "myllm-playground", ...data, ...hooks.browserBackup() };
-      downloadFile("myllm-playground-backup.json", JSON.stringify(contents, null, 2), "application/json");
+      if ($("includeBackupDrafts").checked) contents.drafts = hooks.backupDrafts(data.chats.map(chat => chat.id));
+      const json = JSON.stringify(contents);
+      if (new Blob([json]).size > maxBackupBytes) throw new Error(text("backupExportTooLarge"));
+      downloadFile("myllm-playground-backup.json", json, "application/json");
       $("backupStatus").textContent = text("backupDownloaded");
     } catch (error) { $("backupStatus").textContent = error.message; }
     finally { backupBusy = false; updateBackupButtons(); }
@@ -153,20 +166,24 @@ export function initConversationTools(hooks) {
     const revision = ++fileRevision;
     const file = event.target.files[0];
     backup = null;
+    $("restoreBackupDrafts").checked = $("restoreBackupUsage").checked = false;
     $("backupContents").textContent = $("backupStatus").textContent = "";
     updateBackupButtons();
     if (!file) return;
     try {
-      if (file.size > 50 * 1024 * 1024) throw new Error(text("backupTooLarge"));
+      if (file.size > maxBackupBytes) throw new Error(text("backupTooLarge"));
       let data;
       try { data = JSON.parse(await file.text()); }
       catch (_) { throw new Error(text("invalidBackup")); }
       if (revision !== fileRevision || !backups.open) return;
       if (data?.format !== "myllm-playground" || data.version !== 1 || !Array.isArray(data.chats)
-          || !Array.isArray(data.library?.profiles) || !Array.isArray(data.library?.prompts)) throw new Error(text("invalidBackup"));
+          || !Array.isArray(data.library?.profiles) || !Array.isArray(data.library?.prompts)
+          || (data.drafts !== undefined && !Array.isArray(data.drafts))
+          || (data.usage !== undefined && !Array.isArray(data.usage))) throw new Error(text("invalidBackup"));
       backup = data;
       $("backupContents").textContent = text("backupPreview", { chats: data.chats.length,
-        items: data.library.profiles.length + data.library.prompts.length + (Array.isArray(data.library.sets) ? data.library.sets.length : 0) });
+        items: data.library.profiles.length + data.library.prompts.length + (Array.isArray(data.library.sets) ? data.library.sets.length : 0),
+        drafts: data.drafts?.length || 0, usage: data.usage?.length || 0 });
     } catch (error) { if (revision === fileRevision && backups.open) $("backupStatus").textContent = error.message; }
     finally { updateBackupButtons(); }
   };
@@ -175,12 +192,23 @@ export function initConversationTools(hooks) {
     backupBusy = true;
     updateBackupButtons();
     const restorePreferences = $("restoreBackupPreferences").checked;
+    const restoreDrafts = $("restoreBackupDrafts").checked && backup.drafts;
+    const restoreUsage = $("restoreBackupUsage").checked && backup.usage;
     $("backupStatus").textContent = text("restoringBackup");
     try {
-      const result = await api("/api/chat-backup/restore", { method: "POST", body: JSON.stringify({ version: backup.version, chats: backup.chats }) });
+      const result = await api("/api/chat-backup/restore", { method: "POST", body: JSON.stringify({ version: backup.version, chats: backup.chats,
+        ...(restoreUsage ? { usage: restoreUsage } : {}) }) });
       const browser = hooks.restoreBrowserBackup(backup, restorePreferences);
-      const message = text("backupRestored", { ...result, items: browser.added });
-      $("backupStatus").textContent = browser.persisted ? message : `${message} ${text("storageUnavailable")}`;
+      const messages = [text("backupRestored", { ...result, ...browser, items: browser.added })];
+      let persisted = browser.persisted;
+      if (restoreDrafts) {
+        const drafts = hooks.restoreBackupDrafts(restoreDrafts, backup.chats.map(chat => chat.id));
+        messages.push(text("backupDraftsRestored", drafts));
+        persisted = persisted && drafts.persisted;
+      }
+      if (restoreUsage) messages.push(text("backupUsageRestored", result));
+      if (!persisted) messages.push(text("storageUnavailable"));
+      $("backupStatus").textContent = messages.join(" ");
       backup = null;
       $("chatBackupFile").value = "";
       $("backupContents").textContent = "";

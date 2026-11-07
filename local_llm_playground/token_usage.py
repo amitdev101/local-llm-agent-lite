@@ -61,12 +61,12 @@ class TokenUsageStore:
                         if handle.read(1) != b"\n":
                             handle.write(b"\n")
                     handle.write(("\n".join(json.dumps(row) for row in pending) + "\n").encode("utf-8"))
-            return records + pending
+            return records + pending, len(pending)
 
     def record(self, chat_id, message_id, metrics, status="complete", timestamp=None):
         self._append([self.entry(chat_id, message_id, metrics, status, timestamp)])
 
-    def snapshot(self, chats_dir: Path, chat_id=None):
+    def backfill(self, chats_dir: Path):
         """Backfill recorded legacy metrics; inherited branch messages add no work."""
         candidates, titles = [], {}
         with self.lock:
@@ -92,7 +92,15 @@ class TokenUsageStore:
                                                      event.get("status", "complete"), event.get("time", "")))
                     except (ValueError, TypeError, AttributeError):
                         continue
-            records = self._append(candidates)
+            records, _ = self._append(candidates)
+        return records, titles
+
+    def restore_records(self, records):
+        _, added = self._append(records)
+        return {"usage_added": added, "usage_skipped": len(records) - added}
+
+    def snapshot(self, chats_dir: Path, chat_id=None):
+        records, titles = self.backfill(chats_dir)
         selected = [row for row in records if chat_id is None or row["chat_id"] == chat_id]
         chats = {}
         for row in selected:

@@ -1,5 +1,5 @@
-import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=13";
-import { initEnhancements } from "./enhancements.js?v=10";
+import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=14";
+import { initEnhancements } from "./enhancements.js?v=11";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
@@ -186,6 +186,31 @@ function restoreDraft() {
   ui.prompt.value = readBrowserState(draftKey()) || "";
   draftBaseline = ui.prompt.value; promptRevision++;
   resizePrompt();
+}
+
+function backupDrafts(chatIds) {
+  saveDraft();
+  return [null, ...chatIds].flatMap(chatId => {
+    const draft = readBrowserState(draftKey(chatId));
+    return draft ? [{ chat_id: chatId, text: draft }] : [];
+  });
+}
+
+function restoreBackupDrafts(drafts, chatIds) {
+  saveDraft();
+  const allowed = new Set([null, ...chatIds]);
+  let added = 0, skipped = 0, persisted = true;
+  for (const entry of drafts) {
+    if (!entry || !allowed.has(entry.chat_id) || typeof entry.text !== "string" || !entry.text
+        || readBrowserState(draftKey(entry.chat_id))) {
+      skipped++;
+      continue;
+    }
+    persisted = writeBrowserState(draftKey(entry.chat_id), entry.text) && persisted;
+    added++;
+    if (activeChat === entry.chat_id) { restoreDraft(); updateQueueControls(); }
+  }
+  return { draftsAdded: added, draftsSkipped: skipped, persisted };
 }
 
 function activateChat(id, transferDraft = false) {
@@ -1720,6 +1745,7 @@ enhancements = initEnhancements({ api, text, refreshThemeContent, notify: showTo
   },
   openChat, refreshChats, getChats: () => allChats, applyAppearance: applyTheme,
   runPromptSet, maxQueuedPrompts: MAX_QUEUED_PROMPTS,
+  backupDrafts, restoreBackupDrafts,
   loadDownloaded: async path => { if (await refreshModels(path)) await loadModel(); },
   closePanels: () => { openSettings(false); closeComposerPopovers(); },
   setDraft: value => { ui.prompt.value = value; promptInput(); saveDraft(); ui.prompt.focus(); },
