@@ -1,6 +1,6 @@
 // Shared chat tools. Theme files continue to own appearance, not behavior.
 import { initModelDownloads } from "./downloads.js?v=2";
-import { initConversationTools } from "./conversation-tools.js?v=3";
+import { initConversationTools } from "./conversation-tools.js?v=4";
 export function initEnhancements(hooks) {
   const { text, api, refreshThemeContent } = hooks;
   const $ = id => document.getElementById(id);
@@ -95,7 +95,7 @@ export function initEnhancements(hooks) {
     const selected = editing; editDialog.close(); hooks.edit($("editedPrompt").value.trim(), selected);
   };
 
-  const library = dialog("libraryDialog", "library", '<p class="setting-help" data-text="libraryHelp"></p><div class="tool-tabs"><button id="profilesTab" data-text="responseProfiles"></button><button id="promptsTab" data-text="savedPrompts"></button></div><p id="libraryStatus" role="status"></p><form id="saveLibraryForm"><label for="libraryName" data-text="itemName"></label><input id="libraryName" maxlength="80" required autocomplete="off"><button id="saveLibraryItem" class="secondary-button"></button></form><div id="libraryItems" class="library-items"></div>');
+  const library = dialog("libraryDialog", "library", '<p class="setting-help" data-text="libraryHelp"></p><div class="tool-tabs"><button id="profilesTab" data-text="responseProfiles"></button><button id="promptsTab" data-text="savedPrompts"></button><button id="setsTab" data-text="promptSets"></button></div><p id="libraryStatus" role="status"></p><form id="saveLibraryForm"><label for="libraryName" data-text="itemName"></label><input id="libraryName" maxlength="80" required autocomplete="off"><button id="saveLibraryItem" class="secondary-button"></button></form><button id="createPromptSet" class="secondary-button" data-text="createPromptSet" hidden></button><p id="promptSetRunHelp" class="setting-help" data-text="promptSetRunHelp" hidden></p><div id="libraryItems" class="library-items"></div>');
   const samplingFields = [
     ["temperatureNumber", "temperature", "temperatureTitle"],
     ["topP", "top_p", "Top-p"], ["topK", "top_k", "Top-k"], ["minP", "min_p", "Min-p"],
@@ -134,14 +134,19 @@ export function initEnhancements(hooks) {
   let libraryEditTarget = null;
 
   function savedLibrary(value = read(libraryKey, {})) {
-    const items = kind => (Array.isArray(value[kind]) ? value[kind] : []).filter(item => item && typeof item.id === "string" && typeof item.name === "string"
-      && (kind === "prompts" ? typeof item.content === "string" : item.settings && typeof item.settings === "object" && !Array.isArray(item.settings)));
-    return { profiles: items("profiles"), prompts: items("prompts") };
+    const items = (kind, valid) => (Array.isArray(value[kind]) ? value[kind] : [])
+      .filter(item => item && typeof item.id === "string" && typeof item.name === "string" && valid(item));
+    return {
+      profiles: items("profiles", item => item.settings && typeof item.settings === "object" && !Array.isArray(item.settings)),
+      prompts: items("prompts", item => typeof item.content === "string"),
+      sets: items("sets", item => Array.isArray(item.prompts) && item.prompts.length > 0 && item.prompts.length <= hooks.maxQueuedPrompts
+        && item.prompts.every(prompt => typeof prompt === "string" && prompt.trim() && prompt.length <= 100000)),
+    };
   }
   function libraryNameExists(kind, items, name, excludedId) {
     const normalized = name.toLowerCase();
     const matches = item => typeof item?.name === "string" && item.name.toLowerCase() === normalized;
-    return presets[kind].some(matches) || items.some(item => item.id !== excludedId && matches(item));
+    return (presets[kind] || []).some(matches) || items.some(item => item.id !== excludedId && matches(item));
   }
   function editLibraryItem(kind, item, copy) {
     libraryEditTarget = { kind, item, copy };
@@ -199,12 +204,75 @@ export function initEnhancements(hooks) {
     libraryEditor.close();
     renderLibrary(updated.id);
   };
+  const setEditor = dialog("promptSetEditor", "createPromptSet", `
+    <form id="promptSetForm">
+      <label for="promptSetName" data-text="itemName"></label><input id="promptSetName" required maxlength="80">
+      <p class="setting-help" data-text="promptSetHelp"></p>
+      <div id="promptSetFields"></div>
+      <button id="addSetPrompt" type="button" class="secondary-button" data-text="addSetPrompt"></button>
+      <p id="promptSetStatus" class="setting-help" role="status"></p>
+    </form>`, '<button class="primary-button" type="submit" form="promptSetForm" data-text="saveLibraryChanges"></button>');
+  let editingSet = null;
+  const setFields = $("promptSetFields");
+  function updateSetFields() {
+    const count = setFields.children.length;
+    [...setFields.children].forEach((row, index) => {
+      row.querySelector("span").textContent = text("promptSetNumber", { number: index + 1 });
+      row.querySelector("button").disabled = count === 1;
+    });
+    $("addSetPrompt").disabled = count >= hooks.maxQueuedPrompts;
+  }
+  function addSetField(content = "") {
+    const row = element("div", ""), label = document.createElement("label");
+    const field = document.createElement("textarea"), remove = element("button", text("remove"), "text-button");
+    field.required = true; field.maxLength = 100000; field.rows = 3; field.value = content;
+    remove.type = "button";
+    remove.onclick = () => { row.remove(); updateSetFields(); $("addSetPrompt").focus(); };
+    label.append(element("span", ""), field);
+    row.append(label, remove); setFields.append(row);
+    updateSetFields();
+    return field;
+  }
+  function editPromptSet(item = null) {
+    editingSet = item;
+    $("promptSetEditorTitle").dataset.text = item ? "editPromptSet" : "createPromptSet";
+    $("promptSetName").value = item?.name || "";
+    $("promptSetStatus").textContent = "";
+    setFields.replaceChildren();
+    (item?.prompts || [""]).forEach(addSetField);
+    refreshThemeContent(setEditor);
+    open(setEditor);
+    $("promptSetName").focus();
+  }
+  $("createPromptSet").onclick = () => editPromptSet();
+  $("addSetPrompt").onclick = () => addSetField().focus();
+  $("promptSetForm").onsubmit = event => {
+    event.preventDefault();
+    const name = $("promptSetName").value.trim(), status = $("promptSetStatus");
+    const prompts = [...setFields.querySelectorAll("textarea")].map(field => field.value.trim());
+    if (!name || prompts.some(prompt => !prompt)) {
+      status.textContent = text(name ? "libraryPromptRequired" : "libraryNameRequired");
+      return;
+    }
+    const values = savedLibrary();
+    const index = editingSet ? values.sets.findIndex(entry => entry.id === editingSet.id) : -1;
+    if (editingSet && (index < 0 || JSON.stringify(values.sets[index]) !== JSON.stringify(editingSet))) {
+      status.textContent = text("libraryItemChanged"); return;
+    }
+    if (libraryNameExists("sets", values.sets, name, editingSet?.id)) { status.textContent = text("nameExists"); return; }
+    const updated = { id: editingSet?.id || crypto.randomUUID(), name, prompts };
+    if (index < 0) values.sets.push(updated);
+    else values.sets[index] = updated;
+    $("libraryStatus").textContent = save(libraryKey, values) ? text("librarySaved") : text("storageUnavailable");
+    setEditor.close();
+    renderLibrary(updated.id);
+  };
   let pendingPrompt = "";
   const draftChoice = dialog("promptChoiceDialog", "usePrompt", '<p data-text="draftExists"></p>', '<button id="cancelPromptChoice" class="secondary-button" data-text="cancel"></button><button id="appendPromptChoice" class="secondary-button" data-text="appendDraft"></button><button id="replacePromptChoice" class="primary-button" data-text="replaceDraft"></button>');
   const variables = dialog("promptVariablesDialog", "promptVariables", '<form id="promptVariablesForm"></form>',
-    '<button class="primary-button" type="submit" form="promptVariablesForm" data-text="usePrompt"></button>');
+    '<button id="applyPromptVariables" class="primary-button" type="submit" form="promptVariablesForm" data-text="usePrompt"></button>');
   const variablePattern = /\{\{\s*([A-Za-z_][\w-]{0,39})\s*\}\}/g;
-  function fillPromptVariables(templates, apply) {
+  function fillPromptVariables(templates, apply, action = "usePrompt") {
     const names = new Set(templates.flatMap(template => [...template.matchAll(variablePattern)].map(match => match[1])));
     if (!names.size) return apply(templates);
     const form = $("promptVariablesForm");
@@ -228,6 +296,8 @@ export function initEnhancements(hooks) {
       variables.close();
       apply(resolved);
     };
+    $("applyPromptVariables").dataset.text = action;
+    $("applyPromptVariables").textContent = text(action);
     open(variables);
     fields.values().next().value.focus();
   }
@@ -243,10 +313,14 @@ export function initEnhancements(hooks) {
   $("appendPromptChoice").onclick = () => { hooks.setDraft(hooks.getState().draft + "\n\n" + pendingPrompt); draftChoice.close(); prompt.focus(); };
   $("replacePromptChoice").onclick = () => { hooks.setDraft(pendingPrompt); draftChoice.close(); prompt.focus(); };
   function renderLibrary(focusId) {
-    const custom = savedLibrary(), items = [...custom[libraryTab], ...presets[libraryTab]];
+    const custom = savedLibrary(), items = [...custom[libraryTab], ...(presets[libraryTab] || [])];
+    const isSet = libraryTab === "sets";
     $("libraryItems").replaceChildren();
     $("profilesTab").setAttribute("aria-pressed", String(libraryTab === "profiles"));
     $("promptsTab").setAttribute("aria-pressed", String(libraryTab === "prompts"));
+    $("setsTab").setAttribute("aria-pressed", String(isSet));
+    $("saveLibraryForm").hidden = isSet;
+    $("createPromptSet").hidden = $("promptSetRunHelp").hidden = !isSet;
     $("saveLibraryItem").textContent = text(libraryTab === "profiles" ? "saveProfile" : "savePrompt");
     if (!items.length) $("libraryItems").append(element("p", text("libraryEmpty"), "setting-help"));
     for (const item of items) {
@@ -255,7 +329,14 @@ export function initEnhancements(hooks) {
       const row = element("section", "", "library-item"), details = document.createElement("details");
       details.append(element("summary", item.name));
       if (item.description) details.append(element("p", item.description, "setting-help"));
-      if (libraryTab === "prompts") details.append(element("pre", item.content, "library-preview"));
+      if (isSet) {
+        const list = document.createElement("ol");
+        item.prompts.forEach(content => {
+          const entry = document.createElement("li");
+          entry.append(element("pre", content, "library-preview")); list.append(entry);
+        });
+        details.append(list);
+      } else if (libraryTab === "prompts") details.append(element("pre", item.content, "library-preview"));
       else {
         const preview = element("dl", "", "profile-preview");
         for (const [key, label] of [["system_prompt", "systemPrompt"], ["thinking", "thinkingMode"], ...samplingFields.map(([, key, label]) => [key, label])]) {
@@ -264,15 +345,19 @@ export function initEnhancements(hooks) {
         details.append(preview);
       }
       row.append(details);
-      const actions = element("div", "", "settings-actions"), use = element("button", text(libraryTab === "profiles" ? "useProfile" : "usePrompt"), "secondary-button");
+      const actions = element("div", "", "settings-actions"), use = element("button", text(isSet ? "runPromptSet" : libraryTab === "profiles" ? "useProfile" : "usePrompt"), "secondary-button");
       use.onclick = () => {
+        if (isSet) {
+          library.close();
+          return fillPromptVariables(item.prompts, hooks.runPromptSet, "runPromptSet");
+        }
         if (libraryTab === "prompts") return usePrompt(item.content);
         hooks.applyProfile(item.settings); library.close(); hooks.notify(text("profileApplied"));
       };
       const isCustom = custom[libraryTab].includes(item);
       const edit = element("button", text(isCustom ? "editLibraryAction" : "customizeLibraryAction"), "secondary-button");
       edit.setAttribute("aria-label", text(isCustom ? "editLibraryItem" : "customizeLibraryItem", { name: item.name }));
-      edit.onclick = () => editLibraryItem(libraryTab, item, !isCustom);
+      edit.onclick = () => isSet ? editPromptSet(item) : editLibraryItem(libraryTab, item, !isCustom);
       actions.append(use, edit);
       if (isCustom) {
         const remove = element("button", text("delete"), "text-button danger");
@@ -289,9 +374,11 @@ export function initEnhancements(hooks) {
   }
   $("profilesTab").onclick = () => { libraryTab = "profiles"; renderLibrary(); };
   $("promptsTab").onclick = () => { libraryTab = "prompts"; renderLibrary(); };
+  $("setsTab").onclick = () => { libraryTab = "sets"; renderLibrary(); };
   $("libraryButton").onclick = () => { renderLibrary(); open(library); };
   $("saveLibraryForm").onsubmit = event => {
     event.preventDefault(); const name = $("libraryName").value.trim(), state = hooks.getState();
+    if (libraryTab === "sets") return;
     if (!name) { $("libraryName").setCustomValidity(text("itemName")); return $("libraryName").reportValidity(); }
     const values = savedLibrary();
     if (libraryTab === "prompts" && !state.draft.trim()) { $("libraryStatus").textContent = text("emptyPrompt"); return; }
@@ -391,7 +478,7 @@ export function initEnhancements(hooks) {
     restoreBrowserBackup(data, restorePreferences) {
       const current = savedLibrary(), imported = savedLibrary(data.library);
       let added = 0;
-      for (const kind of ["prompts", "profiles"]) {
+      for (const kind of ["prompts", "profiles", "sets"]) {
         for (const item of imported[kind]) {
           const name = item.name.trim();
           if (!name || name.length > 80 || current[kind].some(entry => entry.id === item.id)
@@ -440,6 +527,6 @@ export function initEnhancements(hooks) {
       wasGenerating = state.generating;
       downloader.update();
     },
-    themeChanged() { [editor, attachment, editDialog, library, libraryEditor, variables, draftChoice, usage].forEach(node => refreshThemeContent(node)); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); conversations.themeChanged(); }
+    themeChanged() { [editor, attachment, editDialog, library, libraryEditor, setEditor, variables, draftChoice, usage].forEach(node => refreshThemeContent(node)); updateSetFields(); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); conversations.themeChanged(); }
   };
 }

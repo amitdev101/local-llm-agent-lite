@@ -165,7 +165,8 @@ export function initConversationTools(hooks) {
       if (data?.format !== "myllm-playground" || data.version !== 1 || !Array.isArray(data.chats)
           || !Array.isArray(data.library?.profiles) || !Array.isArray(data.library?.prompts)) throw new Error(text("invalidBackup"));
       backup = data;
-      $("backupContents").textContent = text("backupPreview", { chats: data.chats.length, items: data.library.profiles.length + data.library.prompts.length });
+      $("backupContents").textContent = text("backupPreview", { chats: data.chats.length,
+        items: data.library.profiles.length + data.library.prompts.length + (Array.isArray(data.library.sets) ? data.library.sets.length : 0) });
     } catch (error) { if (revision === fileRevision && backups.open) $("backupStatus").textContent = error.message; }
     finally { updateBackupButtons(); }
   };

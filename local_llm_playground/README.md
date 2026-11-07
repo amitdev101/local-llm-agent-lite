@@ -64,6 +64,8 @@ Use the sidebar search to find chat titles or matching messages in the selected 
 
 Use fields such as `{{language}}` and `{{topic}}` in a saved prompt. When you use it, fill each field once to replace every occurrence before adding the prompt to the composer.
 
+In **Library → Prompt sets**, save an ordered group of up to 20 prompts. **Run in new chat** fills any shared fields and sends the set in order using the loaded model and current response options. Change the model or options and run the same set again for a fresh conversation.
+
 Use the expand icon beside the prompt for a larger editor. It edits the same draft, with **Enter** for line breaks and **Ctrl/Cmd+Enter** to send. **Edit prompt** on a completed response creates a new alternative chat using the revised prompt and that turn's original response settings.
 
 Use the paperclip to preview a UTF-8 text or code file up to 64 KiB and see a rough token estimate. **Add file to draft** inserts the filename and contents as editable text. Open **Context → Preview draft context** for an estimate of the complete request with the loaded model.

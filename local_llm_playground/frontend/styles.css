@@ -286,6 +286,8 @@ input[type="range"] { padding: 0; }
 .profile-preview dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .library-item .settings-actions { margin-top: 10px; }
 .library-profile-fields { border: 0; padding: 0; margin: 0; min-inline-size: 0; }
+#promptSetFields textarea { min-height: 92px; }
+#promptSetFields > div { margin-block: 12px; }
 .library-profile-fields textarea { min-height: 110px; }
 .library-thinking-field { display: flex; align-items: center; gap: 8px; min-height: 44px; }
 .library-thinking-field input { width: auto; margin: 0; accent-color: var(--accent); }

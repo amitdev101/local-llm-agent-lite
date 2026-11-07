@@ -1,5 +1,5 @@
-import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=11";
-import { initEnhancements } from "./enhancements.js?v=8";
+import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=12";
+import { initEnhancements } from "./enhancements.js?v=9";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
@@ -686,6 +686,14 @@ function runPromptQueue(chatId, resume = false) {
   void send(request.message, null, null, { chatId, request });
 }
 
+function runPromptSet(prompts) {
+  if (ui.sendButton.disabled || generating || stopRequestPending) return showToast(text("promptSetModelRequired"));
+  if (!validateResponseSettings(true)) return;
+  const items = prompts.slice(0, MAX_QUEUED_PROMPTS).map(message => ({ message, ...generationValues(),
+    request_id: crypto.randomUUID(), expected_model_path: loadedModelPath }));
+  if (items.length) return send(items[0].message, null, null, { request: items[0], newChatItems: items });
+}
+
 function updateAssistant(element, raw, metrics = null, status = "complete", liveSeconds = 0, error = "") {
   element.responseMetrics = metrics;
   const statusChanged = element.dataset.status !== status;
@@ -1339,10 +1347,11 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
     expected_model_path: selectedModelPath() || null };
   // Reserve the UI before the first await so rapid clicks cannot submit twice.
   generating = true;
-  const session = generationSession = { chatId: queued?.chatId || activeChat, assistant: null, request, draftEdited: false,
-    accepted: false, queuedId: queued?.request.request_id, stopRequested: false, finishing: false };
+  const newSet = queued?.newChatItems;
+  const session = generationSession = { chatId: queued ? queued.chatId || null : activeChat, assistant: null, request, draftEdited: false,
+    accepted: false, queuedId: newSet ? null : queued?.request.request_id, stopRequested: false, finishing: false };
   clearTimeout(runtimeRefreshTimer); runtimeRefreshTimer = null;
-  if (!queued) chatNavigation++;
+  if (!queued || newSet) chatNavigation++;
   saveWorkspaceState();
   if (!queued) closeComposerPopovers();
   ui.quickModelSelect.disabled = true; ui.quickLoadModel.disabled = true; ui.loadModel.disabled = true;
@@ -1356,14 +1365,14 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
     const status = await api("/api/status");
     updateModelStatus(status);
     if (!["ready", "stopped"].includes(status.status)) {
-      if (!queued) {
+      if (!queued || newSet) {
         if (status.status === "generating") showToast(text("generationBusy"));
         else openSettings(true);
       }
       return;
     }
     if (queued ? loadedModelPath !== request.expected_model_path : !runtimeModelMatchesSelection()) {
-      if (!queued) showToast(text("loadSelectedFirst"));
+      if (!queued || newSet) showToast(text("loadSelectedFirst"));
       return;
     }
     if (branchTarget) {
@@ -1377,8 +1386,14 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
     if (!session.chatId) {
       const chat = await api("/api/chats", { method: "POST", body: JSON.stringify(request) });
       const revisionBeforeTransfer = promptRevision;
-      activateChat(chat.id, true); resetMessages(); conversationChars = request.system_prompt.length;
       session.chatId = chat.id;
+      if (newSet) {
+        session.queuedId = request.request_id;
+        promptQueues.set(chat.id, { items: newSet, paused: false });
+        savePromptQueues();
+      }
+      activateChat(chat.id, !newSet); resetMessages(); conversationChars = request.system_prompt.length;
+      if (newSet) restoreResponseSettings(request);
       // Moving the same draft from the new-chat slot is not a user edit.
       if (submittedRevision === revisionBeforeTransfer) submittedRevision = promptRevision;
       if (mobile.matches) setSidebar(false);
@@ -1634,6 +1649,7 @@ enhancements = initEnhancements({ api, text, refreshThemeContent, notify: showTo
     showToast(text("cpuSettingsPrepared"));
   },
   openChat, refreshChats, getChats: () => allChats, applyAppearance: applyTheme,
+  runPromptSet, maxQueuedPrompts: MAX_QUEUED_PROMPTS,
   loadDownloaded: async path => { if (await refreshModels(path)) await loadModel(); },
   closePanels: () => { openSettings(false); closeComposerPopovers(); },
   setDraft: value => { ui.prompt.value = value; promptInput(); saveDraft(); ui.prompt.focus(); },
