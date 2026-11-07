@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Local LLM Playground</title>
   <link rel="icon" type="image/svg+xml" href="/assets/themes/assets/fallback.svg">
-  <link rel="stylesheet" href="/assets/styles.css?v=17">
+  <link rel="stylesheet" href="/assets/styles.css?v=18">
   <link rel="stylesheet" href="/assets/themes/chatgpt.css">
   <link rel="stylesheet" href="/assets/themes/claude.css">
   <link rel="stylesheet" href="/assets/themes/github-copilot.css">
@@ -61,6 +61,14 @@
       </section>
 
       <section class="composer-wrap">
+        <section id="promptQueue" class="prompt-queue" aria-labelledby="promptQueueTitle" hidden>
+          <div class="prompt-queue-header">
+            <strong id="promptQueueTitle" role="status">Queued prompts</strong>
+            <button id="resumePromptQueue" class="secondary-button" data-text="resumePromptQueue" hidden>Resume queue</button>
+          </div>
+          <p id="promptQueueStatus" class="setting-help" role="status" hidden></p>
+          <ol id="promptQueueItems"></ol>
+        </section>
         <div class="composer-box">
           <div class="composer">
             <textarea id="prompt" rows="1" placeholder="Message your local model…" aria-label="Message" data-label="messageLabel"></textarea>
@@ -84,6 +92,7 @@
                 <button class="quick-load" id="quickLoadModel">Load</button>
                 <button class="quick-load model-release" id="quickUnloadModel" hidden>Cancel load</button>
               </div>
+              <button class="secondary-button queue-prompt-button" id="queuePrompt" data-text="queuePrompt" hidden>Queue prompt</button>
               <button class="stop-button hidden" id="stopButton" aria-label="Stop response" data-title="stopShortcut" aria-keyshortcuts="Control+Shift+X Meta+Shift+X"><span data-icon="stop"></span></button>
               <button class="send-button" id="sendButton" aria-label="Send" data-title="send"><span data-icon="send"></span></button>
             </div>
@@ -203,6 +212,6 @@
     <div class="overlay" id="overlay"></div>
     <div class="toast" id="toast" role="status"></div>
   </div>
-  <script type="module" src="/assets/app.js?v=19"></script>
+  <script type="module" src="/assets/app.js?v=20"></script>
 </body>
 </html>

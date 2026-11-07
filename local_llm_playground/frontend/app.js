@@ -1,5 +1,5 @@
-import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=3";
-import { initEnhancements } from "./enhancements.js?v=3";
+import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=4";
+import { initEnhancements } from "./enhancements.js?v=4";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
@@ -11,6 +11,7 @@ const defaults = { temperature: 0, top_p: .95, top_k: 40, min_p: .05, repeat_pen
 let activeChat = null;
 let generating = false;
 let generationSession = null;
+let stopRequestPending = false;
 let enhancements = null;
 let lastUserMessage = "";
 let allChats = [];
@@ -47,6 +48,10 @@ const composerPopovers = [[ui.optionsPopover, ui.optionsButton], [ui.modelPopove
 const DRAFT_PREFIX = "playground.draft.v1:";
 const ACTIVE_CHAT_KEY = "playground.activeChat.v1";
 const RESPONSE_PREFIX = "playground.responseSettings.v1:";
+const PROMPT_QUEUE_KEY = "playground.promptQueue.v1";
+const MAX_QUEUED_PROMPTS = 20;
+const promptQueues = new Map();
+let queueStorageUnavailable = false;
 const draftCache = new Map();
 const browserStateErrors = new Map();
 let draftSaveTimer = null;
@@ -170,6 +175,7 @@ function promptInput() {
   promptRevision++;
   if (generating && generationSession?.chatId === activeChat) generationSession.draftEdited = true;
   resizePrompt();
+  updateQueueControls();
   clearTimeout(draftSaveTimer);
   draftSaveTimer = setTimeout(saveDraft, 250);
 }
@@ -194,6 +200,7 @@ function activateChat(id, transferDraft = false) {
   updateLabels();
   updateRunningResponse();
   updateChatTools();
+  renderPromptQueue();
   enhancements?.update();
 }
 
@@ -310,7 +317,7 @@ function updateModelPicker() {
   const pending = modelSettingsPending();
   const isLoading = loadingModel || runtimeStatus === "loading";
   const isUnloading = unloadingModel || runtimeStatus === "unloading";
-  const busy = isLoading || isUnloading || generating || runtimeStatus === "generating";
+  const busy = isLoading || isUnloading || generating || stopRequestPending || runtimeStatus === "generating";
   const state = isUnloading ? "unloading" : isLoading ? "loading" : matched ? "loaded" : path ? "selectedNotLoaded" : "not_loaded";
   ui.modelPickerLabel.textContent = path ? readableModelName(path) : text("selectModel");
   ui.modelPickerButton.setAttribute("aria-label", text("modelPickerDescription", { model: ui.modelPickerLabel.textContent, state: text(state) }));
@@ -359,6 +366,7 @@ function updateModelPicker() {
     : !busy && pending && lastStatus.status === "ready" ? text("readyReloadPending") : label;
   ui.composerStatus.dataset.status = needsLoad ? "not_loaded" : lastStatus.status;
   updateThinkingControls();
+  updateQueueControls();
 }
 
 function resetMessages() {
@@ -434,8 +442,8 @@ function attachCopyButtons(container) {
   });
 }
 
-function messageElement(role, content = "", metrics = null, status = "complete", sourcePrompt = "", request = null, error = "", messageId = "") {
-  document.body.dataset.chatState = "active";
+function messageElement(role, content = "", metrics = null, status = "complete", sourcePrompt = "", request = null, error = "", messageId = "", attach = true) {
+  if (attach) document.body.dataset.chatState = "active";
   const wrapper = document.createElement("article");
   wrapper.className = `message ${role}`;
   wrapper.messageId = messageId;
@@ -461,16 +469,18 @@ function messageElement(role, content = "", metrics = null, status = "complete",
     updateAssistant(wrapper, content, metrics, status, 0, error);
     refreshThemeContent(wrapper);
   }
-  ui.messages.appendChild(wrapper);
-  updateResponseActions();
-  scrollDown();
+  if (attach) {
+    ui.messages.appendChild(wrapper);
+    updateResponseActions();
+    scrollDown();
+  }
   return wrapper;
 }
 
 function updateResponseActions() {
   const latest = [...ui.messages.querySelectorAll(".message")].at(-1);
   const busy = generating || loadingModel || activeChatVisibility() !== "active" || ["loading", "unloading", "generating"].includes(runtimeStatus);
-  ui.newChat.disabled = generating && !generationSession?.assistant;
+  ui.newChat.disabled = generating && !generationSession?.assistant && !generationSession?.queuedId;
   ui.chatList.querySelectorAll(".delete-chat").forEach(button => { button.disabled = generating && button.dataset.chatId === generationSession?.chatId; });
   ui.messages.querySelectorAll(".assistant").forEach(element => {
     const retry = ["error", "interrupted"].includes(element.dataset.status);
@@ -491,6 +501,132 @@ function updateRunningResponse() {
   const banner = $("runningResponse");
   banner.hidden = !generating || !generationSession?.chatId || generationSession.chatId === activeChat;
   $("runningResponseLabel").textContent = text("runningElsewhere");
+}
+
+function restorePromptQueues() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(PROMPT_QUEUE_KEY) || "[]");
+    if (!Array.isArray(saved)) return;
+    for (const entry of saved) {
+      if (!Array.isArray(entry) || typeof entry[0] !== "string" || !Array.isArray(entry[1])) continue;
+      const items = entry[1].filter(request => typeof request?.message === "string" && request.message.trim()
+        && typeof request.request_id === "string" && typeof request.expected_model_path === "string");
+      if (items.length) promptQueues.set(entry[0], { items: items.slice(0, MAX_QUEUED_PROMPTS), paused: true });
+    }
+  } catch (_) { queueStorageUnavailable = true; }
+}
+
+function savePromptQueues() {
+  try {
+    const entries = [...promptQueues].map(([id, queue]) => [id, queue.items]);
+    sessionStorage.setItem(PROMPT_QUEUE_KEY, JSON.stringify(entries));
+    queueStorageUnavailable = false;
+  } catch (_) {
+    queueStorageUnavailable = true;
+    try { sessionStorage.removeItem(PROMPT_QUEUE_KEY); } catch (_) { /* The queue is still available in this tab. */ }
+  }
+}
+
+function canQueueDraft() {
+  if (!activeChat || activeChatVisibility() !== "active") return false;
+  if (generating) return generationSession?.chatId === activeChat && generationSession.accepted;
+  const next = promptQueues.get(activeChat)?.items[0];
+  return Boolean(next && runtimeStatus === "ready" && next.expected_model_path === loadedModelPath);
+}
+
+function canResumeQueue(chatId) {
+  const next = promptQueues.get(chatId)?.items[0];
+  const chat = allChats.find(item => item.id === chatId);
+  return Boolean(next && (chat?.visibility || "active") === "active" && !generating && !stopRequestPending
+    && !loadingModel && !unloadingModel && runtimeStatus === "ready" && next.expected_model_path === loadedModelPath);
+}
+
+function updateQueueControls() {
+  const queue = promptQueues.get(activeChat);
+  const canAdd = canQueueDraft();
+  $("queuePrompt").hidden = !canAdd;
+  $("queuePrompt").disabled = !canAdd || !ui.prompt.value.trim() || queue?.items.length >= MAX_QUEUED_PROMPTS;
+  ui.sendButton.classList.toggle("hidden", generating || Boolean(queue?.items.length));
+  $("resumePromptQueue").hidden = !queue?.paused;
+  $("resumePromptQueue").disabled = !canResumeQueue(activeChat);
+  const next = queue?.items[0];
+  const status = $("promptQueueStatus");
+  const notes = [];
+  if (queue?.paused && next) {
+    notes.push(next.expected_model_path === loadedModelPath ? text("promptQueuePaused")
+      : text("promptQueueLoadModel", { model: readableModelName(next.expected_model_path) }));
+  }
+  if (queue && queueStorageUnavailable) notes.push(text("promptQueueStorageUnavailable"));
+  const notice = notes.join(" ");
+  status.hidden = !notice;
+  if (status.textContent !== notice) status.textContent = notice;
+}
+
+function renderPromptQueue(focusIndex = null) {
+  const chatId = activeChat;
+  const queue = promptQueues.get(chatId);
+  const sending = generating && generationSession?.chatId === chatId ? generationSession.queuedId : null;
+  const items = queue?.items.filter(request => request.request_id !== sending) || [];
+  $("promptQueue").hidden = !items.length;
+  const title = text("queuedPromptCount", { count: items.length });
+  if ($("promptQueueTitle").textContent !== title) $("promptQueueTitle").textContent = title;
+  const list = $("promptQueueItems");
+  const focusedRequest = document.activeElement?.dataset?.queuedRequestId;
+  list.replaceChildren();
+  items.forEach((request, index) => {
+    const item = document.createElement("li");
+    const row = document.createElement("div"); row.className = "prompt-queue-row";
+    const preview = document.createElement("p"); preview.textContent = request.message; preview.title = request.message;
+    const remove = document.createElement("button"); remove.className = "text-button";
+    remove.textContent = text("remove");
+    remove.dataset.queuedRequestId = request.request_id;
+    remove.setAttribute("aria-label", text("removeQueuedPrompt", { number: index + 1 }));
+    remove.onclick = () => removeQueuedPrompt(chatId, request.request_id, index);
+    row.appendChild(preview); row.appendChild(remove); item.appendChild(row); list.appendChild(item);
+    if (focusIndex === null ? request.request_id === focusedRequest : index === Math.min(focusIndex, items.length - 1)) remove.focus();
+  });
+  updateQueueControls();
+  if (focusIndex !== null && !items.length) ui.prompt.focus();
+}
+
+function removeQueuedPrompt(chatId, requestId, focusIndex = null) {
+  const queue = promptQueues.get(chatId);
+  if (!queue) return;
+  queue.items = queue.items.filter(request => request.request_id !== requestId);
+  if (!queue.items.length) promptQueues.delete(chatId);
+  savePromptQueues();
+  if (activeChat === chatId) renderPromptQueue(focusIndex);
+}
+
+function pausePromptQueue(chatId) {
+  const queue = promptQueues.get(chatId);
+  if (queue) queue.paused = true;
+  if (activeChat === chatId) updateQueueControls();
+}
+
+function queueDraft(message) {
+  if (!canQueueDraft()) return;
+  enhancements?.finishCompose();
+  if (!validateResponseSettings(true)) return;
+  const queue = promptQueues.get(activeChat) || { items: [], paused: Boolean(generationSession?.stopRequested) };
+  if (queue.items.length >= MAX_QUEUED_PROMPTS) return showToast(text("promptQueueFull"));
+  const modelPath = queue.items[0]?.expected_model_path || loadedModelPath;
+  queue.items.push({ message, ...generationValues(), request_id: crypto.randomUUID(), expected_model_path: modelPath });
+  promptQueues.set(activeChat, queue);
+  savePromptQueues();
+  ui.prompt.value = "";
+  promptInput(); saveDraft();
+  renderPromptQueue();
+  ui.prompt.focus();
+}
+
+function runPromptQueue(chatId, resume = false) {
+  const queue = promptQueues.get(chatId);
+  if (!queue || (queue.paused && !resume)) return;
+  if (!canResumeQueue(chatId)) { pausePromptQueue(chatId); return; }
+  queue.paused = false;
+  const request = queue.items[0];
+  void send(request.message, null, null, { chatId, request });
 }
 
 function updateAssistant(element, raw, metrics = null, status = "complete", liveSeconds = 0, error = "") {
@@ -771,6 +907,7 @@ async function moveChat(chat, visibility, canUndo = true) {
     const current = allChats.find(item => item.id === chat.id) || chat;
     Object.assign(current, { visibility: updated.visibility, updated_at: updated.updated_at });
     const from = updated.previous_visibility || previous;
+    if (visibility !== "active") pausePromptQueue(chat.id);
     if (canUndo && visibility !== "active" && from !== visibility) {
       undoChatMove = { chat: current, visibility: from, message: visibility === "archived" ? "chatArchived" : "chatTrashed" };
     } else {
@@ -841,6 +978,7 @@ function renderChatList() {
       if (!confirm(text("deleteConfirm", { title: chat.title }))) return;
       try { await api(`/api/chats/${chat.id}`, { method: "DELETE" }); }
       catch (error) { showToast(error.message); return; }
+      if (promptQueues.delete(chat.id)) { savePromptQueues(); renderPromptQueue(); }
       if (undoChatMove?.chat.id === chat.id) { undoChatMove = null; renderUndo(); }
       if (activeChat === chat.id) {
         clearTimeout(draftSaveTimer); draftSaveTimer = null;
@@ -887,7 +1025,7 @@ function queueChatSearch() {
 }
 
 async function newChat() {
-  if (generating && !generationSession?.assistant) return;
+  if (generating && !generationSession?.assistant && !generationSession?.queuedId) return;
   chatNavigation++;
   closeComposerPopovers();
   // An unsent new chat has its own draft; create its server record on Send.
@@ -897,7 +1035,7 @@ async function newChat() {
 }
 
 async function openChat(id, messageId = null) {
-  if (generating && !generationSession?.assistant) return;
+  if (generating && !generationSession?.assistant && !generationSession?.queuedId) return;
   const navigation = ++chatNavigation;
   closeComposerPopovers();
   saveWorkspaceState();
@@ -940,7 +1078,7 @@ function displayChat(chat, id = chat.id) {
   if (generationSession?.chatId === id && generationSession.assistant
       && !chat.messages.some(message => message.id && message.id === generationSession.assistant.messageId)) {
     if (!chat.messages.some(message => message.type === "user" && message.request?.request_id === generationSession.request.request_id)) {
-      messageElement("user", generationSession.request.message);
+      messageElement("user", generationSession.request.message, null, "complete", "", null, "", generationSession.request.request_id);
       conversationChars += generationSession.request.message.length;
     }
     ui.messages.appendChild(generationSession.assistant);
@@ -1040,62 +1178,80 @@ function runtimeModelMatchesSelection() {
   return Boolean(loadedModelPath) && loadedModelPath === selectedModelPath();
 }
 
-async function send(message, retryRequest = null, branchTarget = null) {
-  const fromComposer = message === undefined;
+async function send(message, retryRequest = null, branchTarget = null, queued = null) {
+  const fromComposer = message === undefined && !queued;
   message ??= ui.prompt.value.trim();
-  if (!message || generating) return;
-  if (activeChatVisibility() !== "active") return showToast(text("restoreBeforeSending"));
-  enhancements?.finishCompose();
-  if (!retryRequest && !validateResponseSettings(true)) return;
+  if (!message) return;
+  if (fromComposer && (generating || promptQueues.has(activeChat))) {
+    queueDraft(message);
+    return;
+  }
+  if (generating || stopRequestPending) return;
+  if (!queued && activeChatVisibility() !== "active") return showToast(text("restoreBeforeSending"));
+  if (!queued) enhancements?.finishCompose();
+  if (!retryRequest && !queued && !validateResponseSettings(true)) return;
   const submittedDraft = ui.prompt.value;
   let submittedRevision = promptRevision;
-  let request = { ...(retryRequest || { message, ...generationValues(), request_id: crypto.randomUUID() }),
+  let request = queued?.request || { ...(retryRequest || { message, ...generationValues(), request_id: crypto.randomUUID() }),
     expected_model_path: selectedModelPath() || null };
   // Reserve the UI before the first await so rapid clicks cannot submit twice.
   generating = true;
-  const session = generationSession = { chatId: activeChat, assistant: null, request, draftEdited: false };
+  const session = generationSession = { chatId: queued?.chatId || activeChat, assistant: null, request, draftEdited: false,
+    accepted: false, queuedId: queued?.request.request_id, stopRequested: false, finishing: false };
   clearTimeout(runtimeRefreshTimer); runtimeRefreshTimer = null;
-  chatNavigation++;
+  if (!queued) chatNavigation++;
   saveWorkspaceState();
-  closeComposerPopovers();
+  if (!queued) closeComposerPopovers();
   ui.quickModelSelect.disabled = true; ui.quickLoadModel.disabled = true; ui.loadModel.disabled = true;
   ui.sendButton.classList.add("hidden"); ui.stopButton.classList.remove("hidden"); ui.stopButton.disabled = true;
+  renderPromptQueue();
   updateResponseActions();
   let elapsedSeconds = 0;
-  let raw = "", assistant = null, failed = false;
+  let raw = "", assistant = null, failed = false, completed = false;
   setStatus("generating", { key: "preparing" });
   try {
     const status = await api("/api/status");
     updateModelStatus(status);
     if (!["ready", "stopped"].includes(status.status)) {
-      if (status.status === "generating") showToast(text("generationBusy"));
-      else openSettings(true);
+      if (!queued) {
+        if (status.status === "generating") showToast(text("generationBusy"));
+        else openSettings(true);
+      }
       return;
     }
-    if (!runtimeModelMatchesSelection()) { showToast(text("loadSelectedFirst")); return; }
+    if (queued ? loadedModelPath !== request.expected_model_path : !runtimeModelMatchesSelection()) {
+      if (!queued) showToast(text("loadSelectedFirst"));
+      return;
+    }
     if (branchTarget) {
       const branch = await api(`/api/chats/${branchTarget.chatId}/branch`, { method: "POST", body: JSON.stringify({ message_id: branchTarget.messageId,
         ...(branchTarget.editedMessage ? { message: branchTarget.editedMessage } : {}) }) });
       displayChat(branch);
+      session.chatId = branch.id;
       if (branchTarget.editedMessage) request = { ...branch.messages.at(-1).request, expected_model_path: request.expected_model_path };
     }
-    if (!activeChat) {
+    if (!session.chatId) {
       const chat = await api("/api/chats", { method: "POST", body: JSON.stringify(request) });
       const revisionBeforeTransfer = promptRevision;
       activateChat(chat.id, true); resetMessages(); conversationChars = request.system_prompt.length;
+      session.chatId = chat.id;
       // Moving the same draft from the new-chat slot is not a user edit.
       if (submittedRevision === revisionBeforeTransfer) submittedRevision = promptRevision;
       if (mobile.matches) setSidebar(false);
     }
-    lastUserMessage = request.message;
-    if (!retryRequest) {
-      messageElement("user", request.message);
-      conversationChars += request.message.length; updateContext();
+    const showingChat = activeChat === session.chatId;
+    if (showingChat) {
+      lastUserMessage = request.message;
+      const alreadyShown = queued && [...ui.messages.querySelectorAll(".user")].some(node => node.messageId === request.request_id);
+      if (!retryRequest && !alreadyShown) {
+        messageElement("user", request.message, null, "complete", "", null, "", request.request_id);
+        conversationChars += request.message.length; updateContext();
+      }
     }
-    assistant = messageElement("assistant", "", null, "streaming", request.message, request);
-    session.chatId = activeChat; session.assistant = assistant; session.request = request;
+    assistant = messageElement("assistant", "", null, "streaming", request.message, request, "", "", showingChat);
+    session.assistant = assistant; session.request = request;
     updateResponseActions();
-    scrollDown(true);
+    if (showingChat) scrollDown(!queued);
     generationTimer = setInterval(() => {
       elapsedSeconds += 1;
       setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
@@ -1117,6 +1273,10 @@ async function send(message, retryRequest = null, branchTarget = null) {
         writeBrowserState(draftKey(session.chatId), null);
       }
     }
+    session.accepted = true;
+    if (queued) removeQueuedPrompt(session.chatId, session.queuedId);
+    updateQueueControls();
+    enhancements?.update();
     ui.stopButton.disabled = false;
     const reader = response.body.getReader(); const decoder = new TextDecoder(); let pending = "";
     let terminal = false;
@@ -1124,6 +1284,14 @@ async function send(message, retryRequest = null, branchTarget = null) {
       if (!line.trim() || terminal) return;
       const item = JSON.parse(line);
       if (item.type === "start") {
+        if (queued && item.message_id && activeChat === session.chatId) {
+          const duplicate = [...ui.messages.querySelectorAll(".assistant")].find(node => node !== assistant && node.messageId === item.message_id);
+          if (duplicate) {
+            conversationChars -= (duplicate.dataset.raw || "").length;
+            duplicate.remove();
+            session.countedInView = false;
+          }
+        }
         assistant.messageId = item.message_id || assistant.messageId;
         assistant.dataset.started = "true";
         setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
@@ -1137,6 +1305,7 @@ async function send(message, retryRequest = null, branchTarget = null) {
       }
       else if (item.type === "done" || item.type === "stopped") {
         terminal = true;
+        completed = item.type === "done";
         clearInterval(generationTimer);
         updateAssistant(assistant, raw, item.metrics, item.type === "stopped" ? "interrupted" : "complete", elapsedSeconds);
         if (item.metrics && activeChat === session.chatId) updateContext(item.metrics.context_used, item.metrics.context_size, true);
@@ -1158,40 +1327,52 @@ async function send(message, retryRequest = null, branchTarget = null) {
   } catch (error) {
     failed = true;
     if (assistant) updateAssistant(assistant, raw, null, "error", elapsedSeconds, error.message);
-    else showToast(text(branchTarget ? "regenerateFailed" : "requestFailed"));
+    if (queued && activeChat !== session.chatId) showToast(text(promptQueues.has(session.chatId) ? "backgroundQueuePaused" : "responseFailed"));
+    else if (!assistant) showToast(text(branchTarget ? "regenerateFailed" : "requestFailed"));
   } finally {
     clearInterval(generationTimer); generationTimer = null;
     if (activeChat === session.chatId && !session.countedInView) conversationChars += raw.length;
+    if (!completed || failed || session.stopRequested) pausePromptQueue(session.chatId);
+    session.finishing = true;
+    ui.stopButton.disabled = true;
+    // Cleanup failures must not relabel a completed answer or hide a failed one.
+    const [statusResult, chatsResult] = await Promise.allSettled([api("/api/status"), refreshChats()]);
     generating = false;
     ui.quickModelSelect.disabled = false; ui.quickLoadModel.disabled = false; ui.loadModel.disabled = false;
     ui.sendButton.classList.remove("hidden"); ui.stopButton.classList.add("hidden"); ui.stopButton.disabled = false;
+    renderPromptQueue();
     updateResponseActions();
-    // Cleanup failures must not relabel a completed answer or hide a failed one.
-    const [statusResult, chatsResult] = await Promise.allSettled([api("/api/status"), refreshChats()]);
     if (statusResult.status === "fulfilled") {
       const current = statusResult.value;
       updateModelStatus(current);
       if (failed && !assistant && current.status === "ready") setStatus("ready", { key: "requestFailed" });
     } else {
       setStatus("error", { key: "connectionLost" });
-      ui.sendButton.disabled = false;
+      ui.sendButton.disabled = activeChatVisibility() !== "active" || stopRequestPending;
     }
     if (chatsResult.status === "rejected" && statusResult.status === "fulfilled") showToast(text("chatListUnavailable"));
     if ([ui.sendButton, ui.stopButton, document.body].includes(document.activeElement)) ui.prompt.focus();
+    if (completed && !failed && !session.stopRequested) runPromptQueue(session.chatId);
   }
 }
 
 async function stop() {
   if (!generating || ui.stopButton.disabled) return;
+  const session = generationSession;
+  session.stopRequested = true;
+  stopRequestPending = true;
+  pausePromptQueue(session.chatId);
   ui.stopButton.disabled = true;
   setStatus("generating", { key: "stopping" });
   try {
     await api("/api/generation/stop", { method: "POST" });
-    clearInterval(generationTimer);
+    if (generationSession === session) clearInterval(generationTimer);
   } catch (_) {
     showToast(text("stopFailed"));
   } finally {
-    ui.stopButton.disabled = !generating;
+    stopRequestPending = false;
+    if (generationSession === session) ui.stopButton.disabled = !generating || session.finishing;
+    updateModelPicker();
   }
 }
 function resizePrompt() {
@@ -1205,6 +1386,8 @@ ui.menuButton.onclick = () => setSidebar(mobile.matches ? !ui.sidebar.classList.
 ui.sidebarClose.onclick = () => setSidebar(false);
 mobile.addEventListener("change", () => setSidebar(mobile.matches ? false : sidebarExpanded));
 ui.newChat.onclick = newChat; ui.loadModel.onclick = loadModel; ui.sendButton.onclick = () => send(); ui.stopButton.onclick = stop;
+$("queuePrompt").onclick = () => send();
+$("resumePromptQueue").onclick = () => runPromptQueue(activeChat, true);
 ui.prompt.oninput = promptInput;
 ui.prompt.oncompositionstart = () => { composingPrompt = true; };
 ui.prompt.oncompositionend = () => { composingPrompt = false; };
@@ -1270,15 +1453,18 @@ document.addEventListener("themechange", () => {
   });
   updateResponseActions();
   updateChatTools(); renderUndo();
+  renderPromptQueue();
   resizePrompt();
   enhancements?.themeChanged();
 });
 
 initComposerPopovers();
+restorePromptQueues();
 initDrafts();
 await initThemes();
 enhancements = initEnhancements({ api, text, refreshThemeContent, notify: showToast, resize: resizePrompt, send: () => send(),
   getState: () => ({ chatId: activeChat, draft: ui.prompt.value, settings: generationValues(), generating, chatReadOnly: activeChatVisibility() !== "active",
+    canQueuePrompt: canQueueDraft(), queuePending: promptQueues.has(activeChat),
     modelBusy: loadingModel || unloadingModel || ["loading", "unloading", "generating"].includes(runtimeStatus), hasModels: Boolean(availableModels.length || selectedModelPath()) }),
   refreshModels,
   selectedModel: () => availableModels.find(model => model.path === selectedModelPath()),

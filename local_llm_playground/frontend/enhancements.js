@@ -349,7 +349,12 @@ export function initEnhancements(hooks) {
     finishCompose() { if (editor.open) editor.close(); },
     editPrompt(target) { editing = target; $("editedPrompt").value = target.message; $("editPromptError").textContent = ""; open(editDialog); $("editedPrompt").focus(); },
     update() {
-      const state = hooks.getState(); $("chatUsageButton").disabled = !state.chatId; $("composerSend").disabled = state.generating || state.chatReadOnly;
+      const state = hooks.getState();
+      $("chatUsageButton").disabled = !state.chatId;
+      const queueMode = state.generating || state.queuePending;
+      $("composerSend").disabled = state.chatReadOnly || (queueMode && !state.canQueuePrompt);
+      $("composerSend").dataset.text = queueMode ? "queuePrompt" : "send";
+      $("composerSend").textContent = text($("composerSend").dataset.text);
       if (wasGenerating && !state.generating && usage.open) loadUsage();
       wasGenerating = state.generating;
       downloader.update();
