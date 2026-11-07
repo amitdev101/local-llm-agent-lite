@@ -52,7 +52,7 @@ More views: [Claude on mobile](docs/images/themes/claude-dark-mobile.png), [GitH
 
 ## 💬 Chat behavior
 
-Use the sidebar search to find chat titles or matching messages in the selected folder. Each message result jumps to its place in the conversation. The chat menu can archive a chat or move it to Trash, with **Undo** and **Restore chat** available afterward. Use **Branches** to find related alternatives and jump to their source responses.
+Use the sidebar search to find chat titles or matching messages in the selected folder. Results highlight the matching text. Select a message result to jump to the highlighted message in the conversation. The chat menu can archive a chat or move it to Trash, with **Undo** and **Restore chat** available afterward. Use **Branches** to find related alternatives and jump to their source responses.
 
 **Pin chat** puts the conversation in the Pinned group above recent chats. Use **Bookmark** on a completed answer and open **Bookmarked responses** in the sidebar to jump back to it. Pins and bookmarks are saved with chat backups.
 

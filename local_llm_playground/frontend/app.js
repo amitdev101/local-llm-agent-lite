@@ -1087,6 +1087,19 @@ function updateChatTools() {
   updateModelPicker();
 }
 
+function highlightSearchMatch(parent, value, query) {
+  const literal = query.replace(/[.*+?^$(){}|[\]\\]/g, "\\$&");
+  const parts = value.split(new RegExp("(" + literal + ")", "gi"));
+  parts.forEach((part, index) => {
+    if (index % 2 === 0) parent.appendChild(document.createTextNode(part));
+    else {
+      const match = document.createElement("mark");
+      match.textContent = part;
+      parent.appendChild(match);
+    }
+  });
+}
+
 function renderUndo() {
   $("chatUndo").hidden = !undoChatMove;
   if (undoChatMove) $("chatUndoLabel").textContent = text(undoChatMove.message);
@@ -1126,14 +1139,17 @@ function renderChatList() {
   if (chatSearchResults?.query === query && chatSearchResults.folder === folder) {
     for (const match of chatSearchResults.items) {
       const button = document.createElement("button"); button.className = "chat-item chat-search-result";
-      const title = document.createElement("strong"); title.textContent = match.title;
+      const title = document.createElement("strong");
+      highlightSearchMatch(title, match.title, ui.chatSearch.value.trim());
       button.appendChild(title);
       if (match.snippet) {
         const snippet = document.createElement("span");
-        snippet.textContent = `${text(match.role === "user" ? "exportUser" : "exportAssistant")} · ${match.snippet}`;
+        const author = text(match.role === "user" ? "exportUser" : "exportAssistant");
+        snippet.appendChild(document.createTextNode(author + " · "));
+        highlightSearchMatch(snippet, match.snippet, ui.chatSearch.value.trim().replace(/\s+/g, " "));
         button.appendChild(snippet);
       }
-      button.onclick = () => openChat(match.id, match.message_id).catch(error => showToast(error.message));
+      button.onclick = () => openChat(match.id, match.message_id, true).catch(error => showToast(error.message));
       ui.chatList.appendChild(button);
     }
     return;
@@ -1229,7 +1245,7 @@ async function newChat() {
   renderChatList(); if (mobile.matches) setSidebar(false); ui.prompt.focus();
 }
 
-async function openChat(id, messageId = null) {
+async function openChat(id, messageId = null, searchResult = false) {
   if (generating && !generationSession?.assistant && !generationSession?.queuedId) return;
   const navigation = ++chatNavigation;
   closeComposerPopovers();
@@ -1243,6 +1259,7 @@ async function openChat(id, messageId = null) {
   if (messageId) {
     const target = [...ui.messages.querySelectorAll(".message")].find(message => message.messageId === messageId);
     if (target) {
+      if (searchResult) target.classList.add("search-jump");
       target.tabIndex = -1;
       target.focus({ preventScroll: true });
       target.scrollIntoView({ block: "center" });

@@ -37,6 +37,8 @@ input, select, textarea { accent-color: var(--accent); }
 .chat-search-status { margin: 5px 4px 0; color: var(--muted); font-size: 11px; }
 .chat-search-result { display: grid; gap: 3px; white-space: normal; padding-right: 10px; overflow-wrap: anywhere; }
 .chat-search-result span { color: var(--muted); font-size: 11px; }
+.chat-search-result mark { background: var(--accent); color: var(--on-accent); border-radius: 2px; }
+.message.search-jump { outline: 2px solid var(--accent); outline-offset: 5px; border-radius: var(--button-radius); }
 .sidebar-label { margin: 28px 10px 8px; color: var(--muted); font-size: 12px; font-weight: 600; }
 .chat-folder { margin: 10px 0 4px; min-height: var(--control-height); padding: 5px 8px; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: var(--button-radius); }
 .chat-tools { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 6px; padding: 4px 12px 8px; }
