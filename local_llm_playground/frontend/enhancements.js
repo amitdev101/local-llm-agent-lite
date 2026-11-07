@@ -41,6 +41,51 @@ export function initEnhancements(hooks) {
   $("composerDone").onclick = () => editor.close();
   $("composerSend").onclick = () => { editor.close(); hooks.send(); };
 
+  const attachment = dialog("attachTextDialog", "attachText", `
+    <p class="setting-help" data-text="attachTextHelp"></p>
+    <label for="attachTextFile" data-text="attachTextFile"></label><input id="attachTextFile" type="file">
+    <p id="attachTextStatus" class="setting-help" role="status"></p>
+    <pre id="attachTextPreview" class="library-preview" hidden></pre>`,
+    '<button id="addTextAttachment" class="primary-button" data-text="attachTextAdd" disabled></button>');
+  const attachmentFile = $("attachTextFile"), attachmentPreview = $("attachTextPreview");
+  const attachmentStatus = $("attachTextStatus"), attachmentAdd = $("addTextAttachment");
+  let attachmentRevision = 0, attachmentBlock = "";
+  function resetAttachment() {
+    attachmentRevision += 1;
+    attachmentBlock = attachmentPreview.textContent = attachmentStatus.textContent = "";
+    attachmentPreview.hidden = attachmentAdd.disabled = true;
+  }
+  $("attachTextButton").onclick = () => { attachmentFile.value = ""; resetAttachment(); open(attachment); attachmentFile.focus(); };
+  attachmentFile.onchange = async () => {
+    resetAttachment();
+    const revision = attachmentRevision, file = attachmentFile.files[0];
+    if (!file) return;
+    if (file.size > 64 * 1024) { attachmentStatus.textContent = text("attachTextTooLarge"); return; }
+    try {
+      const contents = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+      if (revision !== attachmentRevision || !attachment.open) return;
+      if (!contents.trim() || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(contents)) throw new Error();
+      const longest = (contents.match(/^ {0,3}`+/gm) || []).reduce((length, run) => Math.max(length, run.trimStart().length), 2);
+      const fence = "`".repeat(longest + 1);
+      const name = file.name.replace(/[\r\n]/g, " ");
+      attachmentBlock = `${name}\n${fence}\n${contents}\n${fence}`;
+      attachmentStatus.textContent = text("attachTextEstimate", { name, tokens: Math.ceil(attachmentBlock.length / 4).toLocaleString() });
+      attachmentPreview.textContent = contents;
+      attachmentPreview.hidden = attachmentAdd.disabled = false;
+    } catch (_) {
+      if (revision === attachmentRevision && attachment.open) attachmentStatus.textContent = text("attachTextInvalid");
+    }
+  };
+  attachmentAdd.onclick = () => {
+    const { draft, chatReadOnly } = hooks.getState();
+    if (!attachmentBlock || chatReadOnly) return;
+    const block = attachmentBlock;
+    resetAttachment();
+    attachment.close();
+    hooks.setDraft(draft ? `${draft}\n\n${block}` : block);
+  };
+  attachment.addEventListener("close", resetAttachment);
+
   const editDialog = dialog("editPromptDialog", "editResend", '<p class="setting-help" data-text="editHelp"></p><textarea id="editedPrompt" rows="12" maxlength="100000" required data-label="messageLabel"></textarea><p id="editPromptError" class="model-load-error" role="alert"></p>', '<button id="cancelEdit" class="secondary-button" data-text="cancel"></button><button id="sendEdit" class="primary-button" data-text="editResend"></button>');
   $("cancelEdit").onclick = () => editDialog.close();
   $("editedPrompt").oninput = () => $("editedPrompt").setCustomValidity("");
@@ -352,6 +397,7 @@ export function initEnhancements(hooks) {
     update() {
       const state = hooks.getState();
       $("chatUsageButton").disabled = !state.chatId;
+      $("attachTextButton").disabled = state.chatReadOnly;
       const queueMode = state.generating || state.queuePending;
       $("composerSend").disabled = state.chatReadOnly || (queueMode && !state.canQueuePrompt);
       $("composerSend").dataset.text = queueMode ? "queuePrompt" : "send";
@@ -360,6 +406,6 @@ export function initEnhancements(hooks) {
       wasGenerating = state.generating;
       downloader.update();
     },
-    themeChanged() { [editor, editDialog, library, libraryEditor, draftChoice, usage].forEach(node => refreshThemeContent(node)); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); conversations.themeChanged(); }
+    themeChanged() { [editor, attachment, editDialog, library, libraryEditor, draftChoice, usage].forEach(node => refreshThemeContent(node)); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); conversations.themeChanged(); }
   };
 }

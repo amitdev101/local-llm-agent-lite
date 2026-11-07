@@ -77,6 +77,12 @@ const defaults = {
   comparisonSamePrompt: "Shared prompt", comparisonOriginal: "Original response", comparisonAlternative: "Alternative response",
   comparisonEmpty: "Run an alternative to compare answers and performance.",
   comparisonUnknownModel: "Model unavailable",
+  attachText: "Attach text or code", attachTextFile: "Choose a text or code file",
+  attachTextHelp: "Preview a UTF-8 text or code file up to 64 KiB. Adding it puts the text in your draft so you can edit or remove it.",
+  attachTextEstimate: "{name} · Roughly {tokens} input tokens",
+  attachTextTooLarge: "Choose a file of 64 KiB or less.",
+  attachTextInvalid: "Choose a nonempty UTF-8 text or code file.",
+  attachTextAdd: "Add file to draft",
   comparisonUnavailable: "Load a model and open an active chat to run an alternative.",
   comparisonDetails: "{model} · Temperature {temperature} · {seconds}s · {speed} tok/s · {input} input / {output} output tokens (estimated)",
   runComparison: "Run with {model} and current options",
@@ -183,8 +189,8 @@ const defaults = {
   temperatureTitle: "Temperature", advancedGeneration: "Advanced generation", repeatPenalty: "Repeat penalty", seed: "Seed", resetDefaults: "Reset generation defaults",
   messageLabel: "Message", systemPreset: "System prompt preset", systemPlaceholder: "Optional—empty means no system prompt", customModelPlaceholder: "D:\\path\\to\\model.gguf"
 };
-const defaultIcons = { panel: "panel", newChat: "edit", settings: "settings", send: "arrow-up", stop: "stop", close: "close", copy: "copy", regenerate: "retry", continue: "arrow-right", thinking: "brain", options: "sliders", chevronDown: "chevron-down", expand: "expand", library: "book" };
-const iconIds = new Set(["panel", "edit", "plus", "settings", "arrow-up", "arrow-right", "stop", "close", "copy", "retry", "send", "brain", "sliders", "chevron-down", "expand", "book"]);
+const defaultIcons = { panel: "panel", newChat: "edit", settings: "settings", send: "arrow-up", stop: "stop", close: "close", copy: "copy", regenerate: "retry", continue: "arrow-right", thinking: "brain", options: "sliders", chevronDown: "chevron-down", expand: "expand", library: "book", attachment: "paperclip" };
+const iconIds = new Set(Object.values(defaultIcons).concat("plus", "send"));
 const colorVars = ["--bg", "--panel", "--panel-2", "--panel-3", "--text", "--muted", "--line", "--accent", "--on-accent", "--danger", "--warning", "--success", "--code-bg", "--overlay", "--focus"];
 const dimensionVars = ["--sidebar-width", "--chat-max-width", "--composer-radius", "--button-radius", "--send-radius", "--control-height", "--text-size", "--line-height", "--shadow", "--font-sans", "--font-conversation", "--font-mono"];
 const localAsset = (value) => typeof value === "string" && /^\/assets\/themes\/assets\/[\w./-]+\.svg$/.test(value) && !value.includes("..");
