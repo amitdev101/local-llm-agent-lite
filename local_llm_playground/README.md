@@ -126,6 +126,8 @@ Models explicitly configured as supported receive `/think` or `/no_think`; these
 
 If a model is missing, confirm its filename ends in `.gguf`, place it in the repository's root `models/` folder, and use **Settings → Model loading → Refresh installed models**. You can also download a model with **Get models** or enter a custom GGUF path in Settings. A newly selected model needs **Load** before sending; context, GPU, or thread changes need **Reload**.
 
+When loading fails, the model menu and Settings show the error and a recovery action. Memory errors offer a smaller context, GPU errors offer CPU loading, and file errors offer model downloads. Review the prepared settings, then select **Load model** to retry.
+
 ## Verification and screenshot refresh
 
 From the repository root, run the controller and backend checks without a browser or a real model:

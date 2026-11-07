@@ -1,4 +1,4 @@
-import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=5";
+import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=6";
 import { initEnhancements } from "./enhancements.js?v=4";
 
 const $ = (id) => document.getElementById(id);
@@ -299,9 +299,40 @@ function updateThinkingControls() {
   ui.modelThinkingSupport.textContent = text(`thinkingSupport_${support}`);
 }
 
-function showModelError(message = "") {
+function modelLoadRecovery(message) {
+  if (/out of memory|cannot allocate memory|failed to allocate|bad_alloc|allocation failed/i.test(message)) return "Memory";
+  if (/cuda|vulkan|gpu backend|gpu layers/i.test(message)) return "Gpu";
+  if (/gguf|no such file|file not found/i.test(message)) return "File";
+  return "Other";
+}
+
+function showModelError(message = "", recover = false) {
   for (const node of [ui.modelMenuError, ui.modelLoadError]) {
     node.textContent = message; node.hidden = !message;
+  }
+  const kind = recover && message ? modelLoadRecovery(message) : "";
+  const canReduce = kind === "Memory" && Number(ui.contextSize.value) > 256;
+  const canUseCpu = kind === "Gpu" && Number(ui.gpuLayers.value) !== 0;
+  const browse = kind === "File" || (kind === "Memory" && !canReduce);
+  const action = browse ? "getModels" : canReduce ? "reduceLoadContext" : canUseCpu ? "loadOnCpu" : "modelSettings";
+  for (const id of ["modelMenuRecovery", "modelLoadRecovery"]) {
+    const button = $(id), help = $(id + "Help");
+    help.hidden = button.hidden = !kind;
+    help.textContent = kind ? text(`loadRecovery${kind}`) : "";
+    button.textContent = kind ? text(action) : "";
+    button.onclick = kind ? () => {
+      openSettings(true);
+      if (browse) { $("getModelsButton").click(); return; }
+      if (canReduce) {
+        ui.contextSize.value = Math.max(256, Math.floor(Number(ui.contextSize.value) / 2));
+        showToast(text("smallerContextPrepared"));
+      } else if (canUseCpu) {
+        ui.gpuLayers.value = 0;
+        showToast(text("cpuSettingsPrepared"));
+      }
+      updateModelPicker();
+      (canReduce || canUseCpu ? ui.loadModel : ui.customModel).focus();
+    } : null;
   }
 }
 
@@ -896,6 +927,7 @@ function updateModelStatus(status, settings = {}) {
   if (!loadedModelPath) loadedModelSettings = {};
   if (loadedModelSettings.context_size && Number(previousContext) !== Number(loadedModelSettings.context_size)) updateContext();
   loadedThinkingSupport = status.thinking_support || "unknown";
+  if (status.status === "error" && status.error && ui.modelLoadError.hidden) showModelError(status.error, true);
   setStatus(status.status, status.error || "");
   if (loadedModelPath) {
     ui.activeModel.textContent = loadedModelPath.split(/[\\/]/).pop();
@@ -1174,7 +1206,7 @@ async function loadModel() {
     showToast(text(status.load_settings_saved === false ? "modelLoadSettingsUnsaved" : "modelReady", { model: readableModelName(status.model_path) }));
   } catch (error) {
     if (operation !== modelOperation) return;
-    showModelError(error.message);
+    showModelError(error.message, true);
     setStatus("error", error.message);
     showToast(text("modelLoadFailed"));
   } finally {

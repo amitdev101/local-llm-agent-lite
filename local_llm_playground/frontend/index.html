@@ -120,6 +120,8 @@
           <button id="menuLoadModel" class="primary-button full" data-text="loadSelectedModel">Load selected model</button>
           <button id="menuUnloadModel" class="secondary-button full model-release" hidden>Unload model</button>
           <p id="modelMenuError" class="model-load-error" role="alert" hidden></p>
+          <p id="modelMenuRecoveryHelp" class="setting-help" hidden></p>
+          <button id="modelMenuRecovery" class="secondary-button full" hidden></button>
           <button id="modelSettingsButton" class="text-button" data-text="modelSettings">Model loading settings</button>
         </div>
         <div class="composer-popover" id="contextPopover" popover="auto" role="dialog" aria-labelledby="contextTitle">
@@ -167,6 +169,8 @@
         <p id="modelReleaseHelp" class="setting-help" role="status" hidden></p>
         <p id="modelReloadNotice" class="setting-help" role="status" hidden></p>
         <p id="modelLoadError" class="model-load-error" role="alert" hidden></p>
+        <p id="modelLoadRecoveryHelp" class="setting-help" hidden></p>
+        <button id="modelLoadRecovery" class="secondary-button full" hidden></button>
       </section>
 
       <section class="setting-section" id="conversationOptions">
@@ -215,6 +219,6 @@
     <div class="overlay" id="overlay"></div>
     <div class="toast" id="toast" role="status"></div>
   </div>
-  <script type="module" src="/assets/app.js?v=21"></script>
+  <script type="module" src="/assets/app.js?v=22"></script>
 </body>
 </html>
