@@ -268,6 +268,12 @@ input[type="range"] { padding: 0; }
 .workbench-dialog footer { justify-content: flex-end; flex-wrap: wrap; margin-top: 18px; }
 .workbench-dialog input, .workbench-dialog textarea { width: 100%; min-width: 0; border: 1px solid var(--line); background: var(--panel-2); border-radius: var(--button-radius); padding: 12px; margin-block: 8px; }
 .workbench-dialog textarea { min-height: 220px; resize: vertical; line-height: 1.6; }
+#comparisonDialog { width: min(1080px, calc(100vw - 32px)); }
+.comparison-answers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
+.comparison-answer { border: 1px solid var(--line); border-radius: var(--button-radius); padding: 12px; overflow-wrap: anywhere; }
+.comparison-answer h3 { margin: 0; font-size: 14px; }
+.comparison-answer .content { max-height: 48dvh; overflow: auto; }
+@media (max-width: 720px) { .comparison-answers { grid-template-columns: 1fr; } }
 #composerDialog #prompt { min-height: min(40dvh, 300px); max-height: 60dvh; border: 0; font-size: max(16px, var(--text-size)); }
 .tool-tabs { display: flex; flex-wrap: wrap; gap: 8px; margin-block: 16px; }
 .tool-tabs button { border: 1px solid var(--line); background: transparent; padding: 9px 12px; }

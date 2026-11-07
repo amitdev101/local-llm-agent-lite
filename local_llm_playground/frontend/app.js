@@ -1,5 +1,5 @@
-import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=6";
-import { initEnhancements } from "./enhancements.js?v=4";
+import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=7";
+import { initEnhancements } from "./enhancements.js?v=5";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
@@ -486,6 +486,10 @@ function messageElement(role, content = "", metrics = null, status = "complete",
     wrapper.innerHTML = `<div class="assistant-head"><img class="assistant-icon" data-brand-logo alt=""><span data-text="assistantName"></span></div><div class="thinking-slot"><details class="thinking-box" hidden><summary></summary><div class="thinking-content"></div></details></div><div class="response-progress" role="status" hidden></div><div class="content"></div><div class="response-notice" hidden></div><details class="response-details" hidden><summary data-text="responseDetails"></summary><div class="metrics"></div></details><div class="message-actions"><button class="copy-response"><span data-icon="copy"></span><span data-text="copy"></span></button><button class="regenerate"><span data-icon="regenerate"></span><span data-text="regenerate"></span></button><button class="continue-response"><span data-icon="continue"></span><span data-text="continue"></span></button></div>`;
     const edit = document.createElement("button"); edit.className = "edit-prompt"; edit.dataset.text = "editPrompt"; edit.textContent = text("editPrompt");
     wrapper.querySelector(".message-actions").appendChild(edit);
+    const compare = document.createElement("button"); compare.className = "compare-response";
+    compare.dataset.text = "compareResponse"; compare.textContent = text("compareResponse");
+    wrapper.querySelector(".message-actions").appendChild(compare);
+    compare.onclick = () => enhancements?.compareResponse(activeChat, wrapper.messageId);
     edit.onclick = () => {
       if (!edit.disabled && request) enhancements?.editPrompt({ chatId: activeChat, messageId: wrapper.messageId, message: request.message, request });
     };
@@ -523,6 +527,7 @@ function updateResponseActions() {
     element.querySelector(".continue-response").disabled = busy || element !== latest || element.dataset.status !== "complete";
     element.querySelector(".continue-response").title = text("continueLatest");
     element.querySelector(".edit-prompt").disabled = busy || !element.messageId || !element.generationRequest || element.dataset.status !== "complete";
+    element.querySelector(".compare-response").hidden = !element.messageId || !element.generationRequest || element.dataset.status !== "complete";
   });
   updateRunningResponse();
   enhancements?.update();
@@ -1304,10 +1309,11 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
     }
     if (branchTarget) {
       const branch = await api(`/api/chats/${branchTarget.chatId}/branch`, { method: "POST", body: JSON.stringify({ message_id: branchTarget.messageId,
-        ...(branchTarget.editedMessage ? { message: branchTarget.editedMessage } : {}) }) });
+        ...(branchTarget.editedMessage ? { message: branchTarget.editedMessage } : {}),
+        ...(branchTarget.responseSettings ? { response_settings: branchTarget.responseSettings } : {}) }) });
       displayChat(branch);
       session.chatId = branch.id;
-      if (branchTarget.editedMessage) request = { ...branch.messages.at(-1).request, expected_model_path: request.expected_model_path };
+      if (branchTarget.editedMessage || branchTarget.responseSettings) request = { ...branch.messages.at(-1).request, expected_model_path: request.expected_model_path };
     }
     if (!session.chatId) {
       const chat = await api("/api/chats", { method: "POST", body: JSON.stringify(request) });
@@ -1562,6 +1568,17 @@ enhancements = initEnhancements({ api, text, refreshThemeContent, notify: showTo
   applyProfile: values => { applySettings(values); responseSettingsChanged(); saveResponseSettings(); },
   validSettings: () => validateResponseSettings(),
   edit: (message, target) => send(message, target.request, { chatId: target.chatId, messageId: target.messageId, editedMessage: message }),
+  comparisonModel: () => ui.sendButton.disabled ? "" : readableModelName(loadedModelPath),
+  runComparison(target) {
+    if (ui.sendButton.disabled) return showToast(text("comparisonUnavailable"));
+    if (!validateResponseSettings(true)) return;
+    return send(target.request.message, target.request, { chatId: target.chat_id, messageId: target.message_id,
+      responseSettings: generationValues() });
+  },
+  renderComparisonAnswer(element, content) {
+    element.innerHTML = markdown(splitThinking(content).answer);
+    attachCopyButtons(element);
+  },
   resetSampling: (parameter = null) => {
     for (const [key, id] of [["temperature", "temperatureNumber"], ["top_p", "topP"], ["top_k", "topK"], ["min_p", "minP"], ["repeat_penalty", "repeatPenalty"], ["seed", "seed"]]) {
       if (parameter === null ? key !== "temperature" : key === parameter) ui[id].value = responseDefaults[key];

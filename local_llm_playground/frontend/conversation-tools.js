@@ -163,7 +163,64 @@ export function initConversationTools(hooks) {
   };
   backups.addEventListener("close", () => { fileRevision++; });
 
+  const comparison = dialog("comparisonDialog", "compareResponse", `
+    <p class="setting-help" data-text="comparisonHelp"></p>
+    <p id="comparisonStatus" class="setting-help" role="status"></p>
+    <details id="comparisonPrompt" hidden><summary data-text="comparisonSamePrompt"></summary><pre class="library-preview"></pre></details>
+    <label id="comparisonChoice" hidden><span data-text="comparisonAlternative"></span> <select id="comparisonAlternative"></select></label>
+    <div id="comparisonAnswers" class="comparison-answers"></div>`,
+    '<button id="runComparison" class="primary-button" hidden></button>');
+  let comparisonRevision = 0;
+  function comparisonCard(item, label) {
+    const metrics = item.metrics || {};
+    const card = element("section", "", "comparison-answer");
+    const heading = element("h3", text(label));
+    const info = element("p", text("comparisonDetails", { model: metrics.model || text("comparisonUnknownModel"),
+      temperature: item.request.temperature ?? "—", seconds: metrics.total_seconds ?? "—",
+      speed: metrics.tokens_per_second ?? "—", input: metrics.prompt_tokens ?? "—", output: metrics.completion_tokens ?? "—" }), "setting-help");
+    const answer = element("div", "", "content");
+    hooks.renderComparisonAnswer(answer, item.content);
+    card.append(heading, info, answer);
+    return card;
+  }
+  async function compareResponse(chatId, messageId) {
+    const revision = ++comparisonRevision;
+    const status = $("comparisonStatus"), select = $("comparisonAlternative"), answers = $("comparisonAnswers");
+    const run = $("runComparison");
+    $("comparisonChoice").hidden = $("comparisonPrompt").hidden = run.hidden = true;
+    answers.replaceChildren();
+    status.textContent = text("comparisonLoading");
+    open(comparison);
+    try {
+      const { original, alternatives } = await api(`/api/chats/${chatId}/compare/${encodeURIComponent(messageId)}`);
+      if (revision !== comparisonRevision || !comparison.open) return;
+      $("comparisonPrompt").hidden = false;
+      $("comparisonPrompt").querySelector("pre").textContent = original.request.message;
+      alternatives.sort((a, b) => Number(b.chat_id === chatId) - Number(a.chat_id === chatId));
+      select.replaceChildren(...alternatives.map((item, index) => {
+        const option = element("option", `${index + 1}. ${item.metrics?.model || item.title}`);
+        option.value = index;
+        return option;
+      }));
+      const render = () => {
+        answers.replaceChildren(comparisonCard(original, "comparisonOriginal"));
+        if (alternatives.length) answers.append(comparisonCard(alternatives[Number(select.value)], "comparisonAlternative"));
+      };
+      $("comparisonChoice").hidden = alternatives.length < 2;
+      select.onchange = render;
+      render();
+      const model = hooks.comparisonModel();
+      run.hidden = !model || original.visibility !== "active";
+      run.textContent = text("runComparison", { model });
+      run.onclick = () => { comparison.close(); hooks.runComparison(original); };
+      status.textContent = run.hidden ? text("comparisonUnavailable") : alternatives.length ? "" : text("comparisonEmpty");
+    } catch (error) {
+      if (revision === comparisonRevision && comparison.open) status.textContent = error.message;
+    }
+  }
+
   return {
-    themeChanged() { hooks.refreshThemeContent(branches); hooks.refreshThemeContent(backups); if (branches.open) renderBranches(); },
+    compareResponse,
+    themeChanged() { [branches, backups, comparison].forEach(hooks.refreshThemeContent); if (branches.open) renderBranches(); },
   };
 }

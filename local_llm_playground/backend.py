@@ -392,6 +392,7 @@ class BackupRestore(BaseModel):
 class BranchRequest(BaseModel):
     message_id: str = Field(min_length=1, max_length=100)
     message: str | None = Field(None, min_length=1, max_length=100000)
+    response_settings: ResponseSettings | None = None
 
 
 class DownloadRequest(BaseModel):
@@ -697,6 +698,8 @@ def branch_chat(chat_id: str, request: BranchRequest) -> dict:
         for index, item in enumerate(source["messages"][:user_index + 1]):
             if item["type"] == "user":
                 values = {key: value for key, value in item["request"].items() if key in ResponseSettings.model_fields}
+                if index == user_index and request.response_settings is not None:
+                    values = request.response_settings.model_dump()
                 append_event(branch_id, {"type": "settings", "values": values})
             copied = {key: value for key, value in item.items() if key not in {"id", "request", "time"}}
             if item["type"] == "user":
@@ -709,6 +712,45 @@ def branch_chat(chat_id: str, request: BranchRequest) -> dict:
                 copied["usage_inherited"] = True
             append_event(branch_id, copied)
     return chat_view(branch_id)
+
+
+@app.get("/api/chats/{chat_id}/compare/{message_id}")
+def compare_responses(chat_id: str, message_id: str) -> dict:
+    def answer(chat, identifier):
+        return next((item for item in chat["messages"] if item["id"] == identifier
+                     and item["type"] == "assistant" and item.get("request")
+                     and item.get("status", "complete") == "complete"), None)
+
+    def card(chat, item):
+        return {"chat_id": chat["id"], "title": chat["title"], "message_id": item["id"],
+                "content": item["content"], "request": item["request"], "metrics": item.get("metrics"),
+                "visibility": chat["visibility"]}
+
+    def same_prompt(first, second):
+        return all(first["request"][key] == second["request"][key] for key in ("request_id", "message"))
+
+    chat = chat_view(chat_id)
+    selected = answer(chat, message_id)
+    if selected is None:
+        raise HTTPException(404, "Completed response not found")
+    relation = chat["branch_of"]
+    if relation and not selected.get("usage_inherited") and chat_path(relation["chat_id"]).exists():
+        source = chat_view(relation["chat_id"])
+        original = answer(source, relation["message_id"])
+        if source["visibility"] != "trashed" and original and same_prompt(selected, original):
+            chat, selected = source, original
+
+    relation = {"chat_id": chat["id"], "message_id": selected["id"]}
+    alternatives = []
+    for other in chat_views():
+        if other["branch_of"] != relation or other["visibility"] == "trashed":
+            continue
+        item = next((item for item in other["messages"] if item["type"] == "assistant"
+                     and not item.get("usage_inherited") and item.get("request") and same_prompt(item, selected)
+                     and item.get("status", "complete") == "complete"), None)
+        if item:
+            alternatives.append(card(other, item))
+    return {"original": card(chat, selected), "alternatives": alternatives}
 
 
 @app.patch("/api/chats/{chat_id}")

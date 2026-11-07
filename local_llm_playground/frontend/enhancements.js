@@ -1,6 +1,6 @@
 // Shared chat tools. Theme files continue to own appearance, not behavior.
 import { initModelDownloads } from "./downloads.js?v=2";
-import { initConversationTools } from "./conversation-tools.js";
+import { initConversationTools } from "./conversation-tools.js?v=2";
 export function initEnhancements(hooks) {
   const { text, api, refreshThemeContent } = hooks;
   const $ = id => document.getElementById(id);
@@ -345,6 +345,7 @@ export function initEnhancements(hooks) {
     },
   });
   return {
+    compareResponse: conversations.compareResponse,
     isExpanded: () => editor.open, modifierSends: () => preferences.send === "modifier",
     finishCompose() { if (editor.open) editor.close(); },
     editPrompt(target) { editing = target; $("editedPrompt").value = target.message; $("editPromptError").textContent = ""; open(editDialog); $("editedPrompt").focus(); },
