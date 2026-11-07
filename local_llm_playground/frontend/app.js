@@ -706,9 +706,8 @@ function editQueuedPrompt(chatId, request, index) {
     queue.editing = false;
     if (promptQueues.get(chatId) !== queue || !queue.items.includes(request)) return;
     if (message && message !== request.message) {
-      request.message = message;
-      request.request_id = crypto.randomUUID();
-      delete request.submitted;
+      const { submitted, ...original } = request;
+      queue.items[queue.items.indexOf(request)] = { ...original, message, request_id: crypto.randomUUID() };
       savePromptQueues();
     }
     if (chatId === activeChat) renderPromptQueue(index, "editQueuedPrompt");
