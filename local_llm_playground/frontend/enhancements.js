@@ -50,12 +50,109 @@ export function initEnhancements(hooks) {
   };
 
   const library = dialog("libraryDialog", "library", '<p class="setting-help" data-text="libraryHelp"></p><div class="tool-tabs"><button id="profilesTab" data-text="responseProfiles"></button><button id="promptsTab" data-text="savedPrompts"></button></div><p id="libraryStatus" role="status"></p><form id="saveLibraryForm"><label for="libraryName" data-text="itemName"></label><input id="libraryName" maxlength="80" required autocomplete="off"><button id="saveLibraryItem" class="secondary-button"></button></form><div id="libraryItems" class="library-items"></div>');
+  const samplingFields = [
+    ["temperatureNumber", "temperature", "temperatureTitle"],
+    ["topP", "top_p", "Top-p"], ["topK", "top_k", "Top-k"], ["minP", "min_p", "Min-p"],
+    ["repeatPenalty", "repeat_penalty", "repeatPenalty"], ["seed", "seed", "seed"],
+  ];
+  const libraryEditor = dialog("libraryEditor", "editSavedPrompt", `
+    <form id="editLibraryForm">
+      <label for="libraryEditName" data-text="itemName"></label>
+      <input id="libraryEditName" maxlength="80" required autocomplete="off">
+      <div id="libraryPromptFields">
+        <label for="libraryEditContent" data-text="savedPromptText"></label>
+        <textarea id="libraryEditContent" required></textarea>
+      </div>
+      <fieldset id="libraryProfileFields" class="library-profile-fields">
+        <p class="setting-help" data-text="editProfileHelp"></p>
+        <label for="libraryEditSystem" data-text="systemPrompt"></label>
+        <textarea id="libraryEditSystem" rows="4" data-placeholder="systemPlaceholder"></textarea>
+        <label class="library-thinking-field"><input id="libraryEditThinking" type="checkbox"><span data-text="thinkingMode"></span></label>
+        <div id="librarySamplingFields" class="grid-two"></div>
+      </fieldset>
+      <p id="libraryEditStatus" class="setting-help" role="status"></p>
+    </form>`, `
+    <button id="cancelLibraryEdit" type="button" class="secondary-button" data-text="cancel"></button>
+    <button id="saveLibraryEdit" type="submit" form="editLibraryForm" class="primary-button" data-text="saveLibraryChanges"></button>`);
+  const profileInputs = samplingFields.map(([id, key, label]) => {
+    const field = $(id).cloneNode(false);
+    field.removeAttribute("id");
+    const caption = element("span", text(label));
+    caption.dataset.text = label;
+    const group = document.createElement("label");
+    group.append(caption, field);
+    $("librarySamplingFields").append(group);
+    return [key, field];
+  });
+  let libraryEditTarget = null;
+
   function savedLibrary() {
     const value = read(libraryKey, {});
     const items = kind => (Array.isArray(value[kind]) ? value[kind] : []).filter(item => item && typeof item.id === "string" && typeof item.name === "string"
       && (kind === "prompts" ? typeof item.content === "string" : item.settings && typeof item.settings === "object" && !Array.isArray(item.settings)));
     return { profiles: items("profiles"), prompts: items("prompts") };
   }
+  function libraryNameExists(kind, items, name, excludedId) {
+    const normalized = name.toLowerCase();
+    const matches = item => typeof item?.name === "string" && item.name.toLowerCase() === normalized;
+    return presets[kind].some(matches) || items.some(item => item.id !== excludedId && matches(item));
+  }
+  function editLibraryItem(kind, item, copy) {
+    libraryEditTarget = { kind, item, copy };
+    const isProfile = kind === "profiles";
+    const title = copy ? (isProfile ? "customizeResponseProfile" : "customizeSavedPrompt") : (isProfile ? "editResponseProfile" : "editSavedPrompt");
+    $("libraryEditorTitle").dataset.text = title;
+    $("saveLibraryEdit").dataset.text = copy ? "saveLibraryCopy" : "saveLibraryChanges";
+    const nameInput = $("libraryEditName");
+    nameInput.value = copy ? text("libraryCopyName", { name: item.name }).slice(0, nameInput.maxLength) : item.name;
+    $("libraryPromptFields").hidden = $("libraryEditContent").disabled = isProfile;
+    $("libraryProfileFields").hidden = $("libraryProfileFields").disabled = !isProfile;
+    if (isProfile) {
+      $("libraryEditSystem").value = item.settings.system_prompt ?? "";
+      $("libraryEditThinking").checked = Boolean(item.settings.thinking);
+      for (const [key, input] of profileInputs) input.value = item.settings[key] ?? input.defaultValue;
+    } else {
+      $("libraryEditContent").value = item.content;
+    }
+    $("libraryEditStatus").textContent = "";
+    libraryEditor.scrollTop = 0;
+    refreshThemeContent(libraryEditor);
+    open(libraryEditor);
+    nameInput.focus();
+    nameInput.select();
+  }
+  $("cancelLibraryEdit").onclick = () => libraryEditor.close();
+  $("editLibraryForm").oninput = () => { $("libraryEditStatus").textContent = ""; };
+  $("editLibraryForm").onsubmit = event => {
+    event.preventDefault();
+    const { kind, item, copy } = libraryEditTarget;
+    const name = $("libraryEditName").value.trim();
+    const content = $("libraryEditContent").value;
+    const status = $("libraryEditStatus");
+    if (!name) { status.textContent = text("libraryNameRequired"); $("libraryEditName").focus(); return; }
+    if (kind === "prompts" && !content.trim()) { status.textContent = text("libraryPromptRequired"); $("libraryEditContent").focus(); return; }
+    const values = savedLibrary();
+    const index = copy ? -1 : values[kind].findIndex(entry => entry.id === item.id);
+    if (!copy && (index === -1 || JSON.stringify(values[kind][index]) !== JSON.stringify(item))) {
+      status.textContent = text("libraryItemChanged");
+      return;
+    }
+    if (libraryNameExists(kind, values[kind], name, copy ? undefined : item.id)) {
+      status.textContent = text("nameExists"); $("libraryEditName").focus(); return;
+    }
+    const updated = copy ? { id: crypto.randomUUID(), name } : { ...item, name };
+    if (kind === "profiles") {
+      updated.settings = { ...item.settings, system_prompt: $("libraryEditSystem").value, thinking: $("libraryEditThinking").checked };
+      for (const [key, input] of profileInputs) updated.settings[key] = input.valueAsNumber;
+    } else {
+      updated.content = content;
+    }
+    if (copy) values[kind].push(updated);
+    else values[kind][index] = updated;
+    $("libraryStatus").textContent = save(libraryKey, values) ? text("librarySaved") : text("storageUnavailable");
+    libraryEditor.close();
+    renderLibrary(updated.id);
+  };
   let pendingPrompt = "";
   const draftChoice = dialog("promptChoiceDialog", "usePrompt", '<p data-text="draftExists"></p>', '<button id="cancelPromptChoice" class="secondary-button" data-text="cancel"></button><button id="appendPromptChoice" class="secondary-button" data-text="appendDraft"></button><button id="replacePromptChoice" class="primary-button" data-text="replaceDraft"></button>');
   function usePrompt(content) {
@@ -66,8 +163,8 @@ export function initEnhancements(hooks) {
   $("cancelPromptChoice").onclick = () => draftChoice.close();
   $("appendPromptChoice").onclick = () => { hooks.setDraft(hooks.getState().draft + "\n\n" + pendingPrompt); draftChoice.close(); prompt.focus(); };
   $("replacePromptChoice").onclick = () => { hooks.setDraft(pendingPrompt); draftChoice.close(); prompt.focus(); };
-  function renderLibrary() {
-    const custom = savedLibrary(), items = [...presets[libraryTab], ...custom[libraryTab]];
+  function renderLibrary(focusId) {
+    const custom = savedLibrary(), items = [...custom[libraryTab], ...presets[libraryTab]];
     $("libraryItems").replaceChildren();
     $("profilesTab").setAttribute("aria-pressed", String(libraryTab === "profiles"));
     $("promptsTab").setAttribute("aria-pressed", String(libraryTab === "prompts"));
@@ -82,8 +179,7 @@ export function initEnhancements(hooks) {
       if (libraryTab === "prompts") details.append(element("pre", item.content, "library-preview"));
       else {
         const preview = element("dl", "", "profile-preview");
-        for (const [key, label] of [["system_prompt", "systemPrompt"], ["thinking", "thinkingMode"], ["temperature", "temperatureTitle"],
-          ["top_p", "Top-p"], ["top_k", "Top-k"], ["min_p", "Min-p"], ["repeat_penalty", "repeatPenalty"], ["seed", "seed"]]) {
+        for (const [key, label] of [["system_prompt", "systemPrompt"], ["thinking", "thinkingMode"], ...samplingFields.map(([, key, label]) => [key, label])]) {
           preview.append(element("dt", text(label)), element("dd", key === "thinking" ? text(item.settings[key] ? "thinkingOn" : "thinkingOff") : String(item.settings[key] ?? "")));
         }
         details.append(preview);
@@ -94,8 +190,12 @@ export function initEnhancements(hooks) {
         if (libraryTab === "prompts") return usePrompt(item.content);
         hooks.applyProfile(item.settings); library.close(); hooks.notify(text("profileApplied"));
       };
-      actions.append(use);
-      if (custom[libraryTab].some(value => value.id === item.id)) {
+      const isCustom = custom[libraryTab].includes(item);
+      const edit = element("button", text(isCustom ? "editLibraryAction" : "customizeLibraryAction"), "secondary-button");
+      edit.setAttribute("aria-label", text(isCustom ? "editLibraryItem" : "customizeLibraryItem", { name: item.name }));
+      edit.onclick = () => editLibraryItem(libraryTab, item, !isCustom);
+      actions.append(use, edit);
+      if (isCustom) {
         const remove = element("button", text("delete"), "text-button danger");
         remove.setAttribute("aria-label", text("delete") + " " + item.name);
         remove.onclick = () => {
@@ -105,6 +205,7 @@ export function initEnhancements(hooks) {
         actions.append(remove);
       }
       row.append(actions); $("libraryItems").append(row);
+      if (isCustom && item.id === focusId) edit.focus();
     }
   }
   $("profilesTab").onclick = () => { libraryTab = "profiles"; renderLibrary(); };
@@ -116,7 +217,7 @@ export function initEnhancements(hooks) {
     const values = savedLibrary();
     if (libraryTab === "prompts" && !state.draft.trim()) { $("libraryStatus").textContent = text("emptyPrompt"); return; }
     if (libraryTab === "profiles" && !hooks.validSettings()) { $("libraryStatus").textContent = text("invalidResponseSettings"); return; }
-    if ([...presets[libraryTab], ...values[libraryTab]].some(item => typeof item?.name === "string" && item.name.toLowerCase() === name.toLowerCase())) { $("libraryStatus").textContent = text("nameExists"); return; }
+    if (libraryNameExists(libraryTab, values[libraryTab], name)) { $("libraryStatus").textContent = text("nameExists"); return; }
     const value = { id: crypto.randomUUID(), name, ...(libraryTab === "profiles" ? { settings: state.settings } : { content: state.draft }) };
     values[libraryTab].push(value);
     $("libraryStatus").textContent = save(libraryKey, values) ? text("librarySaved") : text("storageUnavailable");
@@ -151,9 +252,9 @@ export function initEnhancements(hooks) {
   }
   applyPreferences();
   $("resetSampling").onclick = () => hooks.resetSampling();
-  for (const [id, key] of [["temperatureNumber", "temperature"], ["topP", "top_p"], ["topK", "top_k"], ["minP", "min_p"], ["repeatPenalty", "repeat_penalty"], ["seed", "seed"]]) {
+  for (const [id, key, label] of samplingFields) {
     const reset = element("button", text("reset"), "parameter-reset text-button"); reset.type = "button";
-    const name = { temperature: text("temperatureTitle"), top_p: "Top-p", top_k: "Top-k", min_p: "Min-p", repeat_penalty: text("repeatPenalty"), seed: text("seed") }[key];
+    const name = text(label);
     reset.setAttribute("aria-label", text("resetParameter", { name })); reset.title = text("resetParameter", { name });
     reset.onclick = () => hooks.resetSampling(key); $(id).closest("label").append(reset);
   }
@@ -216,6 +317,6 @@ export function initEnhancements(hooks) {
       wasGenerating = state.generating;
       downloader.update();
     },
-    themeChanged() { [editor, editDialog, library, draftChoice, usage].forEach(node => refreshThemeContent(node)); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); }
+    themeChanged() { [editor, editDialog, library, libraryEditor, draftChoice, usage].forEach(node => refreshThemeContent(node)); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); }
   };
 }
