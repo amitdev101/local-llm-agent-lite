@@ -1,4 +1,4 @@
-import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=4";
+import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=5";
 import { initEnhancements } from "./enhancements.js?v=4";
 
 const $ = (id) => document.getElementById(id);
@@ -701,6 +701,53 @@ function contextNotice(message) {
   notice.textContent = message;
   ui.messages.appendChild(notice);
   scrollDown();
+}
+
+function initContextPreview() {
+  const button = $("previewContext");
+  const status = $("contextPreviewStatus");
+  const list = $("contextPreviewMessages");
+  let revision = 0;
+  const reset = () => {
+    revision += 1;
+    status.hidden = list.hidden = true;
+    list.replaceChildren();
+  };
+  ui.contextPopover.addEventListener("beforetoggle", reset);
+  button.onclick = async () => {
+    reset();
+    const current = revision;
+    const snapshot = () => JSON.stringify({ chat_id: activeChat, message: ui.prompt.value.trim(),
+      expected_model_path: loadedModelPath, ...generationValues() });
+    const show = message => { status.textContent = message; status.hidden = false; };
+    if (!ui.prompt.value.trim()) return show(text("contextPreviewDraft"));
+    if (ui.sendButton.disabled || generating || promptQueues.has(activeChat)) return show(text("contextPreviewWait"));
+    if (!validateResponseSettings()) return show(text("invalidResponseSettings"));
+    const body = snapshot();
+    const navigation = chatNavigation;
+    show(text("contextPreviewLoading"));
+    try {
+      const result = await api("/api/context-preview", { method: "POST", body });
+      if (current !== revision) return;
+      if (snapshot() !== body || navigation !== chatNavigation || generating) return reset();
+      const summary = text("contextPreviewResult", { tokens: result.prompt_tokens.toLocaleString(),
+        limit: result.context_size.toLocaleString(), trimmed: result.trimmed_messages });
+      show(result.prompt_tokens >= result.context_size ? `${summary} ${text("contextPreviewTooLarge")}` : summary);
+      result.messages.forEach(({ role, content }, index) => {
+        const details = document.createElement("details");
+        const label = document.createElement("summary");
+        label.textContent = text(`contextPreview_${index === result.messages.length - 1 ? "draft" : role}`);
+        const message = document.createElement("pre");
+        message.className = "library-preview";
+        message.textContent = content;
+        details.append(label, message);
+        list.append(details);
+      });
+      list.hidden = false;
+    } catch (error) {
+      if (current === revision) show(error.message);
+    }
+  };
 }
 
 function setStatus(status, detail = "") {
@@ -1459,6 +1506,7 @@ document.addEventListener("themechange", () => {
 });
 
 initComposerPopovers();
+initContextPreview();
 restorePromptQueues();
 initDrafts();
 await initThemes();

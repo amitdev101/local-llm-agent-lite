@@ -76,7 +76,7 @@ See the [expanded composer](docs/images/usability/expanded-composer.png) and [ch
 - **Recovery:** failed or stopped responses retain partial text. **Retry** reuses the latest attempt's original prompt and settings without duplicating the user message. If the server already completed the answer, Retry recovers it. Earlier attempts remain available after reopening the chat.
 - **Alternatives:** **Regenerate in new chat** branches from the selected answer's original prompt and settings, preserving the original conversation. **Continue** adds a visible `Continue.` request after the latest completed answer. These actions preserve a separate composer draft.
 - **Response details:** reasoning appears when the model returns it. Reasoning and performance sections start collapsed; expand them to inspect timing, speed, token counts, temperature, effective Thinking state, and the model that answered.
-- **Context:** older complete turns may be trimmed when needed. There is no fixed output-token ceiling; generation ends at EOS, the context boundary, an error, or **Stop**.
+- **Context:** with a model loaded and a draft in the composer, open **Context → Preview draft context**. See the messages the model will receive, the estimated input tokens, and how many older messages will be omitted. Generation ends at EOS, the context boundary, an error, or **Stop**.
 
 ### Settings scope
 

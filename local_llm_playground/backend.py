@@ -427,6 +427,10 @@ class GenerateRequest(ResponseSettings):
     expected_model_path: str | None = Field(None, min_length=1)
 
 
+class ContextPreviewRequest(GenerateRequest):
+    chat_id: str | None = None
+
+
 def event(data: dict) -> str:
     return json.dumps(data, ensure_ascii=False) + "\n"
 
@@ -753,6 +757,69 @@ def stop_generation() -> dict:
     return {"stopping": runtime.generation_lock.locked()}
 
 
+def require_loaded_model(expected_path: str | None) -> None:
+    if runtime.llm is None or runtime.status != "ready":
+        raise HTTPException(409, "Load a model before sending")
+    if expected_path is not None and Path(expected_path).expanduser().resolve() != Path(runtime.model_path).resolve():
+        raise HTTPException(409, "The loaded model changed. Select and load the model you want, then try again.")
+
+
+def estimate_prompt_tokens(messages: list[dict]) -> int:
+    return len(runtime.llm.tokenize(json.dumps(messages).encode("utf-8")))
+
+
+def prepare_context(request: GenerateRequest, saved: list[dict]) -> dict:
+    visible_message = request.message.strip()
+    if not visible_message:
+        raise HTTPException(400, "Enter a message")
+    support = thinking_support(runtime.model_path)
+    thinking_enabled = support == "supported" and request.thinking
+    effective_message = visible_message
+    if support == "supported":
+        directive = "/think" if thinking_enabled else "/no_think"
+        effective_message += f"\n\n{directive}"
+    messages = []
+    if request.system_prompt.strip():
+        messages.append({"role": "system", "content": request.system_prompt.strip()})
+    system_count = len(messages)
+    pending_user = None
+    for item in saved:
+        if item["type"] == "user":
+            pending_user = item
+        elif pending_user and item.get("status", "complete") == "complete":
+            messages.extend([
+                {"role": "user", "content": pending_user["content"]},
+                {"role": "assistant", "content": item.get("content", "")},
+            ])
+            pending_user = None
+    messages.append({"role": "user", "content": effective_message})
+
+    context_size = int(runtime.loaded_settings.get("context_size") or read_config()["context_size"])
+    trimmed_messages = 0
+    while len(messages) > system_count + 1:
+        if estimate_prompt_tokens(messages) <= int(context_size * 0.80):
+            break
+        del messages[system_count:system_count + 2]
+        trimmed_messages += 2
+    return {"messages": messages, "context_size": context_size, "trimmed_messages": trimmed_messages,
+            "thinking": thinking_enabled, "thinking_support": support}
+
+
+@app.post("/api/context-preview")
+def preview_context(request: ContextPreviewRequest) -> dict:
+    if not runtime.generation_lock.acquire(blocking=False):
+        raise HTTPException(409, "Wait for the current model operation before previewing context")
+    try:
+        require_loaded_model(request.expected_model_path)
+        chat = chat_view(request.chat_id) if request.chat_id else {"visibility": "active", "messages": []}
+        if chat["visibility"] != "active":
+            raise HTTPException(409, "Restore this chat before previewing context")
+        context = prepare_context(request, chat["messages"])
+        return {**context, "prompt_tokens": estimate_prompt_tokens(context["messages"])}
+    finally:
+        runtime.generation_lock.release()
+
+
 @app.post("/api/chats/{chat_id}/generate")
 def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
     if runtime.llm is None:
@@ -764,11 +831,7 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
     runtime.cancel.clear()
     completed = None
     try:
-        if runtime.llm is None or runtime.status != "ready":
-            raise HTTPException(409, "Load a model before sending")
-        if (request.expected_model_path is not None
-                and Path(request.expected_model_path).expanduser().resolve() != Path(runtime.model_path).resolve()):
-            raise HTTPException(409, "The loaded model changed. Select and load the model you want, then try again.")
+        require_loaded_model(request.expected_model_path)
         chat = chat_view(chat_id)
         if chat["visibility"] != "active":
             raise HTTPException(409, "Restore this chat before sending a message")
@@ -788,41 +851,13 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
 
         if completed is None:
             visible_message = request.message.strip()
-            if not visible_message:
-                raise HTTPException(400, "Enter a message")
             request_id = request.request_id or str(uuid.uuid4())
-            history = []
-            pending_user = None
-            for item in saved[:target] if target is not None else saved:
-                if item["type"] == "user":
-                    pending_user = item
-                elif pending_user and item.get("status", "complete") == "complete":
-                    history.extend([
-                        {"role": "user", "content": pending_user["content"]},
-                        {"role": "assistant", "content": item.get("content", "")},
-                    ])
-                    pending_user = None
-            support = thinking_support(runtime.model_path)
-            thinking_enabled = support == "supported" and request.thinking
-            effective_message = visible_message
-            if support == "supported":
-                directive = "/think" if thinking_enabled else "/no_think"
-                effective_message += f"\n\n{directive}"
-            messages = []
-            if request.system_prompt.strip():
-                messages.append({"role": "system", "content": request.system_prompt.strip()})
-            system_count = len(messages)
-            messages.extend(history)
-            messages.append({"role": "user", "content": effective_message})
-
-            context_size = int(runtime.loaded_settings.get("context_size") or read_config()["context_size"])
-            trimmed_messages = 0
-            while len(messages) > system_count + 1:
-                estimated = len(runtime.llm.tokenize(json.dumps(messages).encode("utf-8")))
-                if estimated <= int(context_size * 0.80):
-                    break
-                del messages[system_count:system_count + 2]
-                trimmed_messages += 2
+            context = prepare_context(request, saved[:target])
+            messages = context["messages"]
+            context_size = context["context_size"]
+            trimmed_messages = context["trimmed_messages"]
+            support = context["thinking_support"]
+            thinking_enabled = context["thinking"]
 
             settings = request.model_dump(exclude={"message", "request_id", "expected_model_path"})
             settings["model"] = runtime.model_path
@@ -859,7 +894,7 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
 
         def response_metrics():
             elapsed = time.perf_counter() - started
-            prompt_tokens = len(runtime.llm.tokenize(json.dumps(messages).encode("utf-8")))
+            prompt_tokens = estimate_prompt_tokens(messages)
             completion_tokens = len(runtime.llm.tokenize(response.encode("utf-8"))) if response else 0
             return {"first_token_seconds": round((first_token or time.perf_counter()) - started, 3),
                     "total_seconds": round(elapsed, 3), "prompt_tokens": prompt_tokens,

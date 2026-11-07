@@ -127,6 +127,9 @@
           <p id="contextLabel">Context 0%</p>
           <div class="context-track"><span id="contextBar"></span></div>
           <p class="setting-help" id="contextWarning" data-text="contextWarning" hidden>Older turns may be trimmed as the context fills up.</p>
+          <button id="previewContext" class="secondary-button full" data-text="previewContext">Preview draft context</button>
+          <p id="contextPreviewStatus" class="setting-help" role="status" hidden></p>
+          <div id="contextPreviewMessages" hidden></div>
           <button id="chatUsageButton" class="secondary-button full" data-text="chatTokenUsage">Token usage for this chat</button>
         </div>
         <p class="composer-footnote" data-text="footnote">Local models can make mistakes. Check important information.</p>
@@ -212,6 +215,6 @@
     <div class="overlay" id="overlay"></div>
     <div class="toast" id="toast" role="status"></div>
   </div>
-  <script type="module" src="/assets/app.js?v=20"></script>
+  <script type="module" src="/assets/app.js?v=21"></script>
 </body>
 </html>

@@ -159,6 +159,13 @@ const defaults = {
   contextUsage: "Context usage", contextSummary: "Context {percent}%", contextNearLimit: "Near limit · {percent}%",
   contextExact: "{used} / {limit} tokens · {percent}%", contextApproximate: "Approx. {used} / {limit} tokens · {percent}%",
   contextWarning: "Older turns may be trimmed as the context fills up.",
+  previewContext: "Preview draft context", contextPreviewDraft: "Write a draft to preview what the model will receive.",
+  contextPreviewWait: "Preview is available when the model is ready and the queue is empty.",
+  contextPreviewLoading: "Estimating draft context…",
+  contextPreviewResult: "Estimated input: {tokens} of {limit} tokens. {trimmed} older messages omitted.",
+  contextPreviewTooLarge: "Shorten your draft or system prompt, or load the model with more context.",
+  contextPreview_system: "System instructions", contextPreview_user: "Your message",
+  contextPreview_assistant: "Assistant response", contextPreview_draft: "Draft",
   temperatureTitle: "Temperature", advancedGeneration: "Advanced generation", repeatPenalty: "Repeat penalty", seed: "Seed", resetDefaults: "Reset generation defaults",
   messageLabel: "Message", systemPreset: "System prompt preset", systemPlaceholder: "Optional—empty means no system prompt", customModelPlaceholder: "D:\\path\\to\\model.gguf"
 };
