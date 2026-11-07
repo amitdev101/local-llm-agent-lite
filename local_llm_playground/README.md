@@ -72,7 +72,7 @@ Use the paperclip to preview a UTF-8 text or code file up to 64 KiB and see a ro
 
 You can browse other chats or compose a new draft while a response runs. A banner returns you to the running response; **Stop** still controls it. One response runs at a time. In **Settings → Reading and composing**, choose text size, spacing, and the compact composer's send shortcut. Appearance can also **Follow system**. Response settings have short explanations and individual Reset buttons.
 
-While a response runs, use **Queue prompt** or your send shortcut to add a follow-up in the same chat. Waiting prompts appear above the composer with a **Remove** action. They send in order with the model and response settings captured when queued. **Stop**, a failed response, or a browser refresh pauses the queue. Select **Resume queue** when ready. Pending prompts stay in the current browser tab.
+While a response runs, use **Queue prompt** or your send shortcut to add a follow-up in the same chat. Edit, move, or remove waiting prompts above the composer. They send in order with the model and response settings captured when queued. The queue explains why it paused and shows **Resume queue** when a response stops, fails, or the page refreshes. Pending prompts stay in the current browser tab.
 
 These captures use isolated sample chats and fake inference.
 

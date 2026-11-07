@@ -1,5 +1,5 @@
-import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=12";
-import { initEnhancements } from "./enhancements.js?v=9";
+import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=13";
+import { initEnhancements } from "./enhancements.js?v=10";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
@@ -568,7 +568,7 @@ function restorePromptQueues() {
       if (!Array.isArray(entry) || typeof entry[0] !== "string" || !Array.isArray(entry[1])) continue;
       const items = entry[1].filter(request => typeof request?.message === "string" && request.message.trim()
         && typeof request.request_id === "string" && typeof request.expected_model_path === "string");
-      if (items.length) promptQueues.set(entry[0], { items: items.slice(0, MAX_QUEUED_PROMPTS), paused: true });
+      if (items.length) promptQueues.set(entry[0], { items: items.slice(0, MAX_QUEUED_PROMPTS), paused: true, reason: "promptQueueRefreshed" });
     }
   } catch (_) { queueStorageUnavailable = true; }
 }
@@ -592,9 +592,10 @@ function canQueueDraft() {
 }
 
 function canResumeQueue(chatId) {
-  const next = promptQueues.get(chatId)?.items[0];
+  const queue = promptQueues.get(chatId);
+  const next = queue?.items[0];
   const chat = allChats.find(item => item.id === chatId);
-  return Boolean(next && (chat?.visibility || "active") === "active" && !generating && !stopRequestPending
+  return Boolean(next && !queue.editing && (chat?.visibility || "active") === "active" && !generating && !stopRequestPending
     && !loadingModel && !unloadingModel && runtimeStatus === "ready" && next.expected_model_path === loadedModelPath);
 }
 
@@ -610,16 +611,19 @@ function updateQueueControls() {
   const status = $("promptQueueStatus");
   const notes = [];
   if (queue?.paused && next) {
-    notes.push(next.expected_model_path === loadedModelPath ? text("promptQueuePaused")
-      : text("promptQueueLoadModel", { model: readableModelName(next.expected_model_path) }));
+    notes.push(text(queue.reason || "promptQueuePaused"));
+    if (activeChatVisibility() !== "active") notes.push(text("restoreBeforeSending"));
+    else if (next.expected_model_path !== loadedModelPath) notes.push(text("promptQueueLoadModel", { model: readableModelName(next.expected_model_path) }));
+    else if (!canResumeQueue(activeChat)) notes.push(text("promptQueueWait"));
   }
+  if (queue?.paused && next?.submitted) notes.push(text("promptQueueRetryFirst"));
   if (queue && queueStorageUnavailable) notes.push(text("promptQueueStorageUnavailable"));
   const notice = notes.join(" ");
   status.hidden = !notice;
   if (status.textContent !== notice) status.textContent = notice;
 }
 
-function renderPromptQueue(focusIndex = null) {
+function renderPromptQueue(focusIndex = null, focusAction = "removeQueuedPrompt") {
   const chatId = activeChat;
   const queue = promptQueues.get(chatId);
   const sending = generating && generationSession?.chatId === chatId ? generationSession.queuedId : null;
@@ -629,21 +633,62 @@ function renderPromptQueue(focusIndex = null) {
   if ($("promptQueueTitle").textContent !== title) $("promptQueueTitle").textContent = title;
   const list = $("promptQueueItems");
   const focusedRequest = document.activeElement?.dataset?.queuedRequestId;
+  const focusedAction = document.activeElement?.dataset?.queueAction;
   list.replaceChildren();
   items.forEach((request, index) => {
     const item = document.createElement("li");
     const row = document.createElement("div"); row.className = "prompt-queue-row";
     const preview = document.createElement("p"); preview.textContent = request.message; preview.title = request.message;
-    const remove = document.createElement("button"); remove.className = "text-button";
-    remove.textContent = text("remove");
-    remove.dataset.queuedRequestId = request.request_id;
-    remove.setAttribute("aria-label", text("removeQueuedPrompt", { number: index + 1 }));
-    remove.onclick = () => removeQueuedPrompt(chatId, request.request_id, index);
-    row.appendChild(preview); row.appendChild(remove); item.appendChild(row); list.appendChild(item);
-    if (focusIndex === null ? request.request_id === focusedRequest : index === Math.min(focusIndex, items.length - 1)) remove.focus();
+    const actions = document.createElement("div"); actions.className = "prompt-queue-actions";
+    const controls = [
+      ["editQueuedPrompt", text("editLibraryAction"), () => editQueuedPrompt(chatId, request, index), false],
+      ["moveQueuedPromptUp", "↑", () => moveQueuedPrompt(chatId, request, items[index - 1]), index === 0 || request.submitted || items[index - 1]?.submitted],
+      ["moveQueuedPromptDown", "↓", () => moveQueuedPrompt(chatId, request, items[index + 1]), index === items.length - 1 || request.submitted || items[index + 1]?.submitted],
+      ["removeQueuedPrompt", text("remove"), () => removeQueuedPrompt(chatId, request.request_id, index), false],
+    ].map(([key, label, action, disabled]) => {
+      const button = document.createElement("button"); button.className = "text-button";
+      button.textContent = label; button.disabled = Boolean(disabled);
+      button.dataset.queuedRequestId = request.request_id;
+      button.dataset.queueAction = key;
+      button.setAttribute("aria-label", text(key, { number: index + 1 }));
+      button.onclick = action;
+      actions.appendChild(button);
+      return button;
+    });
+    row.appendChild(preview); row.appendChild(actions); item.appendChild(row); list.appendChild(item);
+    if (focusIndex !== null && index === Math.min(focusIndex, items.length - 1)) controls.find(button => button.dataset.queueAction === focusAction)?.focus();
+    else if (request.request_id === focusedRequest) (controls.find(button => button.dataset.queueAction === focusedAction && !button.disabled) || controls[0]).focus();
   });
   updateQueueControls();
   if (focusIndex !== null && !items.length) ui.prompt.focus();
+}
+
+function moveQueuedPrompt(chatId, request, neighbor) {
+  const items = promptQueues.get(chatId)?.items;
+  if (!items || !neighbor || request.submitted || neighbor.submitted) return;
+  const index = items.indexOf(request), next = items.indexOf(neighbor);
+  if (index < 0 || next < 0) return;
+  [items[index], items[next]] = [items[next], items[index]];
+  savePromptQueues();
+  renderPromptQueue();
+}
+
+function editQueuedPrompt(chatId, request, index) {
+  const queue = promptQueues.get(chatId);
+  if (!queue?.items.includes(request) || queue.editing || !enhancements) return;
+  queue.editing = true;
+  enhancements.editQueuedPrompt(request.message, message => {
+    queue.editing = false;
+    if (promptQueues.get(chatId) !== queue || !queue.items.includes(request)) return;
+    if (message && message !== request.message) {
+      request.message = message;
+      request.request_id = crypto.randomUUID();
+      delete request.submitted;
+      savePromptQueues();
+    }
+    if (chatId === activeChat) renderPromptQueue(index, "editQueuedPrompt");
+    if (!generating) runPromptQueue(chatId);
+  });
 }
 
 function removeQueuedPrompt(chatId, requestId, focusIndex = null) {
@@ -655,9 +700,9 @@ function removeQueuedPrompt(chatId, requestId, focusIndex = null) {
   if (activeChat === chatId) renderPromptQueue(focusIndex);
 }
 
-function pausePromptQueue(chatId) {
+function pausePromptQueue(chatId, reason = "promptQueuePaused") {
   const queue = promptQueues.get(chatId);
-  if (queue) queue.paused = true;
+  if (queue) { queue.paused = true; queue.reason = reason; }
   if (activeChat === chatId) updateQueueControls();
 }
 
@@ -665,7 +710,7 @@ function queueDraft(message) {
   if (!canQueueDraft()) return;
   enhancements?.finishCompose();
   if (!validateResponseSettings(true)) return;
-  const queue = promptQueues.get(activeChat) || { items: [], paused: Boolean(generationSession?.stopRequested) };
+  const queue = promptQueues.get(activeChat) || { items: [], paused: Boolean(generationSession?.stopRequested), reason: "promptQueueStopped" };
   if (queue.items.length >= MAX_QUEUED_PROMPTS) return showToast(text("promptQueueFull"));
   const modelPath = queue.items[0]?.expected_model_path || loadedModelPath;
   queue.items.push({ message, ...generationValues(), request_id: crypto.randomUUID(), expected_model_path: modelPath });
@@ -679,7 +724,7 @@ function queueDraft(message) {
 
 function runPromptQueue(chatId, resume = false) {
   const queue = promptQueues.get(chatId);
-  if (!queue || (queue.paused && !resume)) return;
+  if (!queue || queue.editing || (queue.paused && !resume)) return;
   if (!canResumeQueue(chatId)) { pausePromptQueue(chatId); return; }
   queue.paused = false;
   const request = queue.items[0];
@@ -1056,7 +1101,7 @@ async function moveChat(chat, visibility, canUndo = true) {
     const current = allChats.find(item => item.id === chat.id) || chat;
     Object.assign(current, { visibility: updated.visibility, updated_at: updated.updated_at });
     const from = updated.previous_visibility || previous;
-    if (visibility !== "active") pausePromptQueue(chat.id);
+    if (visibility !== "active") pausePromptQueue(chat.id, "promptQueueMoved");
     if (canUndo && visibility !== "active" && from !== visibility) {
       undoChatMove = { chat: current, visibility: from, message: visibility === "archived" ? "chatArchived" : "chatTrashed" };
     } else {
@@ -1416,8 +1461,14 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
       setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
       updateAssistant(assistant, raw, null, "streaming", elapsedSeconds);
     }, 1000);
+    if (queued) {
+      // A lost connection can leave a saved request that must be retried before later prompts.
+      request.submitted = true;
+      savePromptQueues();
+    }
+    const { submitted, ...payload } = request;
     const response = await fetch(`/api/chats/${session.chatId}/generate`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(request)
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
     });
     if (!response.ok) {
       let detail = response.statusText;
@@ -1491,7 +1542,9 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
   } finally {
     clearInterval(generationTimer); generationTimer = null;
     if (activeChat === session.chatId && !session.countedInView) conversationChars += raw.length;
-    if (!completed || failed || session.stopRequested) pausePromptQueue(session.chatId);
+    if (session.stopRequested || (!completed && !failed && assistant?.dataset.status === "interrupted")) {
+      pausePromptQueue(session.chatId, "promptQueueStopped");
+    } else if (!completed || failed) pausePromptQueue(session.chatId, "promptQueueFailed");
     session.finishing = true;
     ui.stopButton.disabled = true;
     // Cleanup failures must not relabel a completed answer or hide a failed one.
@@ -1520,7 +1573,7 @@ async function stop() {
   const session = generationSession;
   session.stopRequested = true;
   stopRequestPending = true;
-  pausePromptQueue(session.chatId);
+  pausePromptQueue(session.chatId, "promptQueueStopped");
   ui.stopButton.disabled = true;
   setStatus("generating", { key: "stopping" });
   try {

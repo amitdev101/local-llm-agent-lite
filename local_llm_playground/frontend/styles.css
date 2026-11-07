@@ -140,6 +140,8 @@ body[data-chat-state="active"] .welcome { display: none; }
 .prompt-queue li + li { border-top: 1px solid var(--line); }
 .prompt-queue-row p { min-width: 0; margin: 6px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prompt-queue-row button, .queue-prompt-button { flex-shrink: 0; font-size: 12px; }
+.prompt-queue-actions { display: flex; align-items: center; flex-shrink: 0; }
+.prompt-queue-actions button { padding-inline: 6px; }
 .composer-tools, .composer-model-actions, .model-picker { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .composer-tools { flex-wrap: wrap; }
 .composer-model-actions { margin-left: auto; }

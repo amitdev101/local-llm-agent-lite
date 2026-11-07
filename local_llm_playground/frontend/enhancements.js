@@ -94,6 +94,26 @@ export function initEnhancements(hooks) {
     if (hooks.getState().generating) { $("editPromptError").textContent = text("generationBusy"); return; }
     const selected = editing; editDialog.close(); hooks.edit($("editedPrompt").value.trim(), selected);
   };
+  const queueEditor = dialog("queueEditor", "editQueueTitle", `
+    <form id="editQueueForm">
+      <label for="queuedMessage" data-text="messageLabel"></label>
+      <textarea id="queuedMessage" rows="8" required></textarea>
+    </form>`, '<button class="primary-button" form="editQueueForm" type="submit" data-text="saveQueuedPrompt"></button>');
+  let queueEditDone = null, queuedMessage = null;
+  $("editQueueForm").onsubmit = event => {
+    event.preventDefault();
+    const field = $("queuedMessage");
+    const message = field.value.trim();
+    if (!message) { field.setCustomValidity(text("emptyPrompt")); field.reportValidity(); return; }
+    queuedMessage = message;
+    queueEditor.close();
+  };
+  $("queuedMessage").oninput = () => $("queuedMessage").setCustomValidity("");
+  queueEditor.addEventListener("close", () => {
+    const done = queueEditDone, message = queuedMessage;
+    queueEditDone = queuedMessage = null;
+    done?.(message);
+  });
 
   const library = dialog("libraryDialog", "library", '<p class="setting-help" data-text="libraryHelp"></p><div class="tool-tabs"><button id="profilesTab" data-text="responseProfiles"></button><button id="promptsTab" data-text="savedPrompts"></button><button id="setsTab" data-text="promptSets"></button></div><p id="libraryStatus" role="status"></p><form id="saveLibraryForm"><label for="libraryName" data-text="itemName"></label><input id="libraryName" maxlength="80" required autocomplete="off"><button id="saveLibraryItem" class="secondary-button"></button></form><button id="createPromptSet" class="secondary-button" data-text="createPromptSet" hidden></button><p id="promptSetRunHelp" class="setting-help" data-text="promptSetRunHelp" hidden></p><div id="libraryItems" class="library-items"></div>');
   const samplingFields = [
@@ -515,6 +535,12 @@ export function initEnhancements(hooks) {
     isExpanded: () => editor.open, modifierSends: () => preferences.send === "modifier",
     finishCompose() { if (editor.open) editor.close(); },
     editPrompt(target) { editing = target; $("editedPrompt").value = target.message; $("editPromptError").textContent = ""; open(editDialog); $("editedPrompt").focus(); },
+    editQueuedPrompt(message, done) {
+      queueEditDone = done;
+      const field = $("queuedMessage");
+      field.value = message; field.setCustomValidity("");
+      open(queueEditor); field.focus();
+    },
     update() {
       const state = hooks.getState();
       $("chatUsageButton").disabled = !state.chatId;
@@ -527,6 +553,6 @@ export function initEnhancements(hooks) {
       wasGenerating = state.generating;
       downloader.update();
     },
-    themeChanged() { [editor, attachment, editDialog, library, libraryEditor, setEditor, variables, draftChoice, usage].forEach(node => refreshThemeContent(node)); updateSetFields(); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); conversations.themeChanged(); }
+    themeChanged() { [editor, attachment, editDialog, queueEditor, library, libraryEditor, setEditor, variables, draftChoice, usage].forEach(node => refreshThemeContent(node)); updateSetFields(); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); conversations.themeChanged(); }
   };
 }
