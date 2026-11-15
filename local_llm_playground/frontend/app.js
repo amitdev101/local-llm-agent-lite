@@ -1,5 +1,5 @@
-import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=18";
-import { initEnhancements } from "./enhancements.js?v=15";
+import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=21";
+import { initEnhancements } from "./enhancements.js?v=18";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
@@ -47,7 +47,8 @@ let settingsReturnFocus = null;
 let sidebarExpanded = true;
 const mobile = matchMedia("(max-width: 720px)");
 let lastContext = null;
-const composerPopovers = [[ui.optionsPopover, ui.optionsButton], [ui.modelPopover, ui.modelPickerButton], [ui.contextPopover, ui.contextButton]];
+const composerPopovers = [[ui.optionsPopover, ui.optionsButton], [$("toolsPopover"), $("workspaceToolsButton")],
+  [ui.modelPopover, ui.modelPickerButton], [ui.contextPopover, ui.contextButton]];
 const DRAFT_PREFIX = "playground.draft.v1:";
 const ATTACHMENT_PREFIX = "playground.attachments.v1:";
 const ACTIVE_CHAT_KEY = "playground.activeChat.v1";
@@ -739,7 +740,15 @@ function renderPromptQueue(focusIndex = null, focusAction = "removeQueuedPrompt"
       actions.appendChild(button);
       return button;
     });
-    row.appendChild(preview); row.appendChild(actions); item.appendChild(row); list.appendChild(item);
+    row.appendChild(preview); row.appendChild(actions); item.appendChild(row);
+    if (request.web_query) {
+      const search = document.createElement("small");
+      search.className = "queued-search";
+      search.textContent = text("webSearchQueued", { query: request.web_query });
+      search.title = search.textContent;
+      item.appendChild(search);
+    }
+    list.appendChild(item);
     if (focusIndex !== null && index === Math.min(focusIndex, items.length - 1)) controls.find(button => button.dataset.queueAction === focusAction)?.focus();
     else if (request.request_id === focusedRequest) (controls.find(button => button.dataset.queueAction === focusedAction && !button.disabled) || controls[0]).focus();
   });
@@ -789,16 +798,18 @@ function pausePromptQueue(chatId, reason = "promptQueuePaused") {
   if (activeChat === chatId) updateQueueControls();
 }
 
-function queueDraft(message) {
+function queueDraft(message, webSearch) {
   if (!canQueueDraft()) return;
   enhancements?.finishCompose();
   if (!validateResponseSettings(true)) return;
   const queue = promptQueues.get(activeChat) || { items: [], paused: Boolean(generationSession?.stopRequested), reason: "promptQueueStopped" };
   if (queue.items.length >= MAX_QUEUED_PROMPTS) return showToast(text("promptQueueFull"));
   const modelPath = queue.items[0]?.expected_model_path || loadedModelPath;
-  queue.items.push({ message, ...generationValues(), request_id: crypto.randomUUID(), expected_model_path: modelPath });
+  queue.items.push({ message, ...generationValues(), request_id: crypto.randomUUID(), expected_model_path: modelPath,
+    ...(webSearch ? { web_query: webSearch.query } : {}) });
   promptQueues.set(activeChat, queue);
   savePromptQueues();
+  if (webSearch) enhancements.consumeSearch(webSearch);
   ui.prompt.value = "";
   writeDraftFiles([]);
   promptInput(); saveDraft();
@@ -963,7 +974,7 @@ function openSettings(open = true) {
   ui.settingsPanel.setAttribute("aria-hidden", String(!open));
   document.querySelector(".main").inert = open;
   ui.sidebar.inert = open || (mobile.matches ? !ui.sidebar.classList.contains("open") : !sidebarExpanded);
-  if (open) ui.closeSettings.focus();
+  if (open) { ui.closeSettings.focus(); enhancements?.refreshAddons(); }
   else if (settingsReturnFocus?.isConnected) { settingsReturnFocus.focus({ preventScroll: true }); settingsReturnFocus = null; }
 }
 
@@ -1508,8 +1519,10 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
   if (fromComposer && enhancements?.attachmentsPending(activeChat)) return showToast(text("attachmentsReading"));
   message ??= draftMessage();
   if (!message) return;
+  const webSearch = fromComposer ? enhancements?.captureSearch() : null;
+  if (webSearch === false) return;
   if (fromComposer && (generating || promptQueues.has(activeChat))) {
-    queueDraft(message);
+    queueDraft(message, webSearch);
     return;
   }
   if (generating || stopRequestPending) return;
@@ -1520,7 +1533,8 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
   let submittedRevision = promptRevision;
   const toolAccess = !branchTarget && !queued?.newChatItems && enhancements?.toolAccess(queued?.chatId || activeChat);
   let request = queued?.request || { ...(retryRequest || { message, ...generationValues(), request_id: crypto.randomUUID() }),
-    expected_model_path: selectedModelPath() || null };
+    expected_model_path: selectedModelPath() || null, ...(webSearch ? { web_query: webSearch.query } : {}) };
+  if (branchTarget) delete request.web_query;
   // Reserve the UI before the first await so rapid clicks cannot submit twice.
   generating = true;
   const newSet = queued?.newChatItems;
@@ -1618,6 +1632,7 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
       }
     }
     session.accepted = true;
+    if (webSearch) enhancements.consumeSearch(webSearch);
     if (queued) removeQueuedPrompt(session.chatId, session.queuedId);
     updateQueueControls();
     enhancements?.update();
@@ -1862,6 +1877,7 @@ enhancements = initEnhancements({ api, text, refreshThemeContent, notify: showTo
   openChat, refreshChats, getChats: () => allChats, applyAppearance: applyTheme,
   runPromptSet, maxQueuedPrompts: MAX_QUEUED_PROMPTS,
   backupDrafts, restoreBackupDrafts,
+  manageAddons() { openSettings(true); $("addonSettings").scrollIntoView({ block: "start" }); $("addonsTitle").focus({ preventScroll: true }); },
   unattachedPdfName: () => draftPdfLinks().find(link => !link.attached)?.name,
   setAttachments(files) { writeDraftFiles(files); promptInput(); },
   loadDownloaded: async path => { if (await refreshModels(path)) await loadModel(); },

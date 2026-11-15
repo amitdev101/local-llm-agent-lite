@@ -117,9 +117,31 @@ IME composition waits until text is committed before sending. Ctrl+C / Cmd+C kee
 
 You can change the compact composer to **Ctrl/Cmd+Enter** in Settings; Enter then inserts a line break. The expanded editor always uses Ctrl/Cmd+Enter to send.
 
+## Add-ons
+
+Open **Settings → Add-ons** to enable MarkItDown or SearXNG. Both start off.
+
+**MarkItDown** adds Word (`.docx`), Excel (`.xlsx`), and PowerPoint (`.pptx`) to **Attach files**. Activate the Playground's virtual environment and run the install command.
+
+```powershell
+pip install 'markitdown[all]'
+```
+
+Use **Check installation** if Settings was already open, then turn on MarkItDown. The Playground runs the equivalent of `markitdown input.docx -o output.md` locally. Select the file chip to preview the generated Markdown before it is sent with your prompt. Office files can be up to 10 MiB, with up to 64 Ki characters of extracted text. PDF and UTF-8 text attachments are available if MarkItDown is missing or disabled. You can also save an Office document as PDF or text and attach the exported file. [MarkItDown documentation](https://github.com/microsoft/markitdown)
+
+**SearXNG** has two setup options in Add-ons:
+
+- **Set up locally → Without Docker.** On Windows, run Playground with 64-bit Intel/AMD Python 3.11 or 3.12. Choose **Install and start**, then **Use for chat**. Playground downloads a pinned SearXNG release and installs it in a separate Python environment under `tools/searxng/.local/native/`. The instance listens on `http://127.0.0.1:8889`. It runs while Playground is open. Choose **Start** after reopening Playground to use it again.
+- **Set up locally → With Docker.** Playground checks for a local Docker engine that runs Linux containers. Choose **Install and start** to download and run the official SearXNG image, then **Use for chat**. The instance listens on `http://127.0.0.1:8888` and starts with Docker unless you stop it. Configuration and cache live under `tools/searxng/.local/`. Docker stores the image separately. [Docker Desktop setup](https://docs.docker.com/desktop/)
+- **Connect to an existing instance.** Enter its base URL, choose **Test connection**, then **Save URL** and enable SearXNG. The instance needs the `json` search format enabled. [SearXNG Search API](https://docs.searxng.org/dev/search_api.html)
+
+Use **Start**, **Stop**, **Test search**, and **View logs** to manage either local installation. **Local files** shows where Playground keeps its files.
+
+In chat, choose **Tools → Web search** for the next reply. Enter a separate query if you want to send only a short search phrase. With the query field blank, Playground sends your prompt text to SearXNG. Attachments and chat history stay local. Search excerpts are added to the model context at send time, and source links are saved with the response.
+
 ## Workspace tools
 
-Select **Tools**, enter the full path to a workspace folder, and choose **Use folder**. This enables file listing, literal search, and line-range reads for the current chat until you turn tools off or reload. Try asking the model to find a setting and cite its file and line number. Expand the tool cards to see what it used.
+Select **Tools → Workspace**, enter the full path to a workspace folder, and choose **Use folder**. This enables file listing, literal search, and line-range reads for the current chat until you turn off workspace access or reload. Try asking the model to find a setting and cite its file and line number. Expand the tool cards to see what it used.
 
 Enable **Allow the model to propose edits and project checks** to review diffs and check commands in chat. Each proposal needs approval. **Stop** cancels pending approvals and active checks. **Undo edit** is available when the original local checkpoint exists and the file still matches the applied change. Chat backups include tool results.
 
@@ -137,7 +159,7 @@ Usage is stored locally in `data/token_usage.jsonl`, survives restarts, and rema
 | Partial downloads | Repository root `models/.downloads/*.part` |
 | Download history | `local_llm_playground/data/downloads.json` |
 | JSONL conversations | `local_llm_playground/data/chats/` |
-| Saved defaults and model parameters | `local_llm_playground/data/config.json` |
+| Saved defaults, model parameters, and add-on settings | `local_llm_playground/data/config.json` |
 | Token usage ledger | `local_llm_playground/data/token_usage.jsonl` |
 | Drafts, unsent response preferences, appearance, last-opened chat | This browser's local storage |
 | Custom profiles, saved prompts, reading and send preferences | This browser's local storage |

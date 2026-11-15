@@ -1,6 +1,7 @@
 // Shared chat tools. Theme files continue to own appearance, not behavior.
 import { initModelDownloads } from "./downloads.js?v=2";
 import { initConversationTools } from "./conversation-tools.js?v=5";
+import { initAddons } from "./addons.js?v=3";
 export function initEnhancements(hooks) {
   const { text, api, refreshThemeContent } = hooks;
   const $ = id => document.getElementById(id);
@@ -31,9 +32,10 @@ export function initEnhancements(hooks) {
     const node = document.createElement(tag); node.textContent = content; node.className = className; return node;
   }
 
+  const addons = initAddons(hooks);
   const workspaces = new Map();
   const toolsButton = $("workspaceToolsButton");
-  const workspaceDialog = dialog("workspaceDialog", "workspaceTools", `
+  const workspaceDialog = dialog("workspaceDialog", "workspaceTitle", `
     <form id="workspaceForm">
       <p class="setting-help" data-text="workspaceToolsHelp"></p>
       <label for="workspacePath" data-text="workspaceFolder"></label>
@@ -46,14 +48,16 @@ export function initEnhancements(hooks) {
     const state = hooks.getState();
     const access = workspaces.get(state.chatId);
     const label = access ? "workspaceToolsOn" : "workspaceTools";
-    toolsButton.dataset.text = label;
-    toolsButton.textContent = text(label);
-    toolsButton.title = access?.path || text("workspaceTools");
-    toolsButton.setAttribute("aria-pressed", String(Boolean(access)));
+    $("toolsButtonLabel").dataset.text = label;
+    $("toolsButtonLabel").textContent = text(label);
+    toolsButton.toggleAttribute("data-workspace", Boolean(access));
     toolsButton.setAttribute("aria-label", text(access?.allow_changes ? "workspaceToolsEditMode" : label));
     toolsButton.disabled = state.chatReadOnly;
+    $("workspaceState").hidden = !access;
+    $("workspaceState").textContent = text("workspaceOn");
+    $("configureWorkspace").title = access?.path || "";
   }
-  toolsButton.onclick = () => {
+  $("configureWorkspace").onclick = () => {
     const access = workspaces.get(hooks.getState().chatId);
     $("workspacePath").value = access?.path || "";
     $("allowWorkspaceChanges").checked = Boolean(access?.allow_changes);
@@ -62,6 +66,7 @@ export function initEnhancements(hooks) {
     open(workspaceDialog);
     $("workspacePath").focus();
   };
+  workspaceDialog.addEventListener("close", () => toolsButton.focus({ preventScroll: true }));
   $("disableWorkspace").onclick = () => {
     workspaces.delete(hooks.getState().chatId);
     updateWorkspaceButton();
@@ -104,6 +109,25 @@ export function initEnhancements(hooks) {
     details.querySelector("pre").textContent = item.output || "";
     const actions = details.querySelector(".tool-actions");
     actions.replaceChildren();
+    if (item.name === "web_search" && item.status === "OK" && Array.isArray(item.sources)) {
+      const list = element("ol", "", "web-sources");
+      list.setAttribute("aria-label", text("webSearchSources"));
+      item.sources.forEach((source, index) => {
+        if (!source || typeof source.url !== "string" || typeof source.title !== "string") return;
+        try {
+          const url = new URL(source.url);
+          if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return;
+          const link = element("a", source.title);
+          link.href = url.href; link.target = "_blank"; link.rel = "noopener noreferrer";
+          const sourceItem = element("li", "");
+          sourceItem.value = index + 1;
+          sourceItem.append(link);
+          list.append(sourceItem);
+        } catch (_) { /* A restored chat can contain invalid URLs. */ }
+      });
+      actions.append(list);
+      details.open = true;
+    }
     if (live && item.status === "approval") {
       details.open = true;
       for (const approved of [false, true]) {
@@ -231,6 +255,14 @@ export function initEnhancements(hooks) {
   }
 
   async function readAttachment(file, chatId) {
+    const officeExtension = /\.(docx|xlsx|pptx)$/i.exec(file.name)?.[0].toLowerCase();
+    if (officeExtension) {
+      if (file.size > 10 * 1024 * 1024) throw new Error(text("attachmentOfficeTooLarge"));
+      const result = await api("/api/attachments/office?extension=" + officeExtension, {
+        method: "POST", headers: { "Content-Type": "application/octet-stream" }, body: file,
+      });
+      return result.contents;
+    }
     if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
       if (file.size > 10 * 1024 * 1024) throw new Error(text("attachmentPdfTooLarge"));
       const result = await readPdf(file);
@@ -778,8 +810,12 @@ export function initEnhancements(hooks) {
   renderAttachments();
   return {
     compareResponse: conversations.compareResponse,
+    captureSearch: addons.captureSearch,
+    consumeSearch: addons.consumeSearch,
+    refreshAddons: addons.refresh,
     toolAccess: id => workspaces.get(id),
     transferToolAccess(id) {
+      addons.transferDraft(id);
       if (workspaces.has(null)) {
         workspaces.set(id, workspaces.get(null));
         workspaces.delete(null);
@@ -801,6 +837,7 @@ export function initEnhancements(hooks) {
     update() {
       const state = hooks.getState();
       updateWorkspaceButton();
+      addons.update();
       $("chatUsageButton").disabled = !state.chatId;
       $("attachTextButton").disabled = state.chatReadOnly;
       $("optionsAttachText").disabled = state.chatReadOnly;
@@ -812,6 +849,6 @@ export function initEnhancements(hooks) {
       wasGenerating = state.generating;
       downloader.update();
     },
-    themeChanged() { [workspaceDialog, editor, attachment, pdfPages, editDialog, queueEditor, library, libraryEditor, setEditor, variables, draftChoice, usage].forEach(node => refreshThemeContent(node)); updateWorkspaceButton(); renderAttachments(); updateSetFields(); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); conversations.themeChanged(); }
+    themeChanged() { [workspaceDialog, editor, attachment, pdfPages, editDialog, queueEditor, library, libraryEditor, setEditor, variables, draftChoice, usage].forEach(node => refreshThemeContent(node)); updateWorkspaceButton(); addons.render(); renderAttachments(); updateSetFields(); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); conversations.themeChanged(); }
   };
 }

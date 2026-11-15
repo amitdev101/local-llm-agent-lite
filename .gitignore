@@ -243,3 +243,4 @@ plans/*
 # Playground private state and unfinished model downloads
 /local_llm_playground/data/
 /models/.downloads/
+/tools/searxng/.local/

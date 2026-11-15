@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Local LLM Playground</title>
   <link rel="icon" type="image/svg+xml" href="/assets/themes/assets/fallback.svg">
-  <link rel="stylesheet" href="/assets/styles.css?v=27">
+  <link rel="stylesheet" href="/assets/styles.css?v=31">
   <link rel="stylesheet" href="/assets/themes/chatgpt.css?v=2">
   <link rel="stylesheet" href="/assets/themes/claude.css">
   <link rel="stylesheet" href="/assets/themes/github-copilot.css">
@@ -77,6 +77,7 @@
             <button id="expandComposer" class="icon-button expand-composer" data-title="expandComposer" aria-label="Expand composer"><span data-icon="expand"></span></button>
           </div>
           <div id="draftAttachmentPanel">
+            <button id="clearWebSearch" class="search-chip" type="button" hidden><span data-text="webSearchArmed">Web search for next reply</span><span aria-hidden="true">×</span><span class="sr-only" data-text="clearWebSearch">Remove</span></button>
             <div id="draftAttachments" class="draft-attachments" aria-label="Draft files" data-label="draftAttachments" hidden></div>
             <div id="pdfLinkHint" class="pdf-link-hint" hidden>
               <p id="pdfLinkHelp" class="setting-help"></p>
@@ -97,7 +98,7 @@
                 <span class="thinking-state" id="thinkingState" aria-hidden="true">Unavailable</span>
               </label>
               <span class="sr-only" id="thinkingHelp">Select a model to check Thinking support.</span>
-              <button id="workspaceToolsButton" class="composer-action workspace-tools-button" aria-pressed="false" aria-haspopup="dialog" data-text="workspaceTools">Tools</button>
+              <button id="workspaceToolsButton" class="composer-action workspace-tools-button" popovertarget="toolsPopover" aria-expanded="false" aria-haspopup="dialog"><span id="toolsButtonLabel" data-text="workspaceTools">Tools</span><span data-icon="chevronDown" aria-hidden="true"></span></button>
             </div>
             <div class="composer-model-actions" id="composerModelSlot">
               <div id="modelPicker" class="model-picker">
@@ -123,6 +124,19 @@
             <button id="optionsLibrary" class="secondary-button" data-text="library">Library</button>
           </div>
           <div id="composerSettingsSlot"></div>
+        </div>
+        <div class="composer-popover" id="toolsPopover" popover="auto" role="dialog" aria-labelledby="toolsTitle">
+          <h2 id="toolsTitle" data-text="workspaceTools">Tools</h2>
+          <label class="library-thinking-field"><input id="webSearchForReply" type="checkbox" aria-describedby="webSearchHelp" disabled><span data-text="webSearch">Web search</span></label>
+          <p id="webSearchHelp" class="setting-help"></p>
+          <div class="tool-field" id="webSearchQueryField" hidden>
+            <label for="webSearchQuery" data-text="webSearchQuery">Search query (optional)</label>
+            <input id="webSearchQuery" type="text" maxlength="500" autocomplete="off" aria-describedby="webSearchHelp">
+          </div>
+          <div class="setting-section">
+            <button id="configureWorkspace" class="secondary-button" type="button"><span data-text="workspaceTitle">Workspace</span><span id="workspaceState" class="options-state" hidden> · On</span></button>
+          </div>
+          <button id="manageAddons" class="text-button" type="button" data-text="manageAddons">Manage add-ons</button>
         </div>
         <div class="composer-popover" id="modelPopover" popover="auto" role="dialog" aria-labelledby="modelPopoverTitle">
           <h2 id="modelPopoverTitle" data-text="modelSelection">Select a model</h2>
@@ -199,6 +213,75 @@
         </div>
       </section>
 
+      <section class="setting-section" id="addonSettings" aria-labelledby="addonsTitle">
+        <h2 class="section-title" id="addonsTitle" tabindex="-1" data-text="addons">Add-ons</h2>
+        <div class="addon-card">
+          <div class="row-between">
+            <strong id="markitdownTitle">MarkItDown</strong>
+            <div class="addon-controls">
+              <span id="markitdownStatus" class="addon-status" role="status"></span>
+              <label class="switch"><input id="markitdownEnabled" type="checkbox" role="switch" aria-labelledby="markitdownTitle" aria-describedby="markitdownHelp" disabled><span></span></label>
+            </div>
+          </div>
+          <p class="setting-help" id="markitdownHelp" data-text="markitdownHelp">Convert Word, Excel, and PowerPoint attachments to Markdown on this device.</p>
+          <div id="markitdownSetup" hidden>
+            <p class="setting-help" data-text="markitdownSetup">Run this in the Playground’s virtual environment. You can still attach PDFs and text files.</p>
+            <code>pip install 'markitdown[all]'</code>
+            <button id="refreshAddons" class="text-button" type="button" data-text="refreshAddons">Check installation</button>
+          </div>
+        </div>
+        <div class="addon-card">
+          <div class="row-between">
+            <strong id="searxngTitle">SearXNG</strong>
+            <div class="addon-controls">
+              <span id="searxngStatus" class="addon-status" role="status"></span>
+              <label class="switch"><input id="searxngEnabled" type="checkbox" role="switch" aria-labelledby="searxngTitle" aria-describedby="searxngHelp" disabled><span></span></label>
+            </div>
+          </div>
+          <p class="setting-help" id="searxngHelp" data-text="searxngHelp">Use SearXNG for optional web search in chat.</p>
+          <section class="addon-option" aria-labelledby="searxngLocalTitle">
+            <div class="row-between">
+              <strong id="searxngLocalTitle" data-text="searxngLocalTitle">Set up locally</strong>
+              <span id="searxngLocalStatus" class="addon-status" role="status"></span>
+            </div>
+            <div class="tool-tabs searxng-methods" role="group" aria-label="Installation method" data-label="searxngInstallMethod">
+              <button id="searxngMethodNative" type="button" aria-pressed="false" data-text="searxngWithoutDocker">Without Docker</button>
+              <button id="searxngMethodDocker" type="button" aria-pressed="true" data-text="searxngWithDocker">With Docker</button>
+            </div>
+            <p id="searxngLocalHelp" class="setting-help"></p>
+            <p id="searxngLocalMessage" class="setting-help" role="status" hidden></p>
+            <div class="settings-actions">
+              <button id="startSearxng" class="secondary-button" type="button" hidden></button>
+              <button id="stopSearxng" class="secondary-button" type="button" data-text="searxngStop" hidden>Stop</button>
+              <button id="useLocalSearxng" class="secondary-button" type="button" data-text="searxngUseLocal" hidden>Use for chat</button>
+              <button id="testLocalSearxng" class="secondary-button" type="button" data-text="searxngTestSearch" hidden>Test search</button>
+              <button id="searxngLogs" class="text-button" type="button" data-text="searxngLogs" aria-controls="searxngLogOutput" aria-expanded="false" hidden>View logs</button>
+              <button id="checkSearxngLocal" class="text-button" type="button"></button>
+            </div>
+            <p id="searxngLocalFeedback" class="setting-help" role="status" hidden></p>
+            <details id="searxngLocalFiles" hidden>
+              <summary data-text="searxngLocalFiles">Local files</summary>
+              <code id="searxngLocalPath"></code>
+            </details>
+            <a id="installSearxngDocker" href="https://docs.docker.com/desktop/" target="_blank" rel="noopener noreferrer" data-text="searxngDockerGuide" hidden>Docker setup guide</a>
+            <pre id="searxngLogOutput" class="library-preview" tabindex="0" hidden></pre>
+          </section>
+          <section class="addon-option" aria-labelledby="searxngExternalTitle">
+            <strong id="searxngExternalTitle" data-text="searxngExternalTitle">Connect to an existing instance</strong>
+            <p class="setting-help" data-text="searxngExternalHelp">Use the URL of an instance with JSON search enabled.</p>
+            <form id="searxngForm" class="tool-field">
+              <label for="searxngUrl" data-text="searxngUrl">Instance URL</label>
+              <input id="searxngUrl" type="url" maxlength="2048" placeholder="http://127.0.0.1:8888" spellcheck="false">
+              <div class="settings-actions">
+                <button id="saveSearxng" class="secondary-button" type="submit" data-text="saveSearxng">Save URL</button>
+                <button id="testSearxng" class="secondary-button" type="button" data-text="testSearxng">Test connection</button>
+              </div>
+            </form>
+          </section>
+          <p id="addonFeedback" class="setting-help" role="status" hidden></p>
+        </div>
+      </section>
+
       <section class="setting-section" id="conversationOptions">
         <div class="section-title"><span data-text="conversation">Conversation</span><span id="responseScope" class="instant-badge" data-text="responseScopeCurrent">This chat</span></div>
         <div class="row-between"><label for="systemPrompt" data-text="systemPrompt">System prompt</label><select id="systemPreset" aria-label="System prompt preset" data-label="systemPreset"><option value="" data-text="noPrompt">No prompt</option><option value="You are a helpful assistant." data-text="helpfulAssistant">Helpful assistant</option><option value="You are a concise, expert programming assistant." data-text="codingAssistant">Coding assistant</option><option value="custom" data-text="custom">Custom</option></select></div>
@@ -245,6 +328,6 @@
     <div class="overlay" id="overlay"></div>
     <div class="toast" id="toast" role="status"></div>
   </div>
-  <script type="module" src="/assets/app.js?v=38"></script>
+  <script type="module" src="/assets/app.js?v=41"></script>
 </body>
 </html>
