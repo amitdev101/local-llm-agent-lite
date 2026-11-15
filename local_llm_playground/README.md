@@ -1,6 +1,6 @@
 # 🌐 Local LLM Playground
 
-A lightweight browser chat for testing local GGUF models. Compare responses, adjust system instructions and sampling, and inspect performance without agent tools, RAG, or project context.
+A lightweight browser chat for testing local GGUF models. Compare responses, adjust system instructions and sampling, inspect performance, and enable workspace tools on demand.
 
 ## 🚀 Run
 
@@ -24,7 +24,7 @@ Supports public repositories without sign-in and complete single-file GGUF model
 
 Open **Settings → Appearance** to choose **ChatGPT**, **Claude**, or **GitHub Copilot**, in **Light** or **Dark**. Each family has its own layout, typography, navigation, composer, and button styling, with Local LLM Playground branding. Switching preserves drafts, response preferences, and an ongoing response. Appearance stays in this browser.
 
-These Playwright captures show the current frontend, including grouped **Options**, visible **Thinking**, model readiness, and collapsed response details. Conversations and metrics are deterministic sample data, not live model benchmarks.
+These Playwright captures show grouped **Options**, visible **Thinking**, model readiness, and collapsed response details. Conversations and metrics are deterministic sample data.
 
 | Theme | Light | Dark |
 | --- | --- | --- |
@@ -39,6 +39,10 @@ Customize names, logos, wording, colors, fonts, buttons, and supported component
 **Options** groups system instructions, temperature, and advanced sampling. **Thinking** stays visible beside it: supported models show **On/Off**, while unsupported or unconfigured models show **Unavailable** or **Unknown**. Configure compatibility by filename in [`model_capabilities.json`](model_capabilities.json); see the [model state and capability guide](docs/model-capabilities.md).
 
 The model menu separates selection from loading, shows the full path and loaded state, and retains load errors. **Send** becomes available when the selected model is loaded. The compact **Context** percentage opens detailed usage.
+
+Selecting a model restores its last successful context size, GPU layer count, and thread count. Select **Load** to apply them. On narrow screens, **Options** also contains **Attach files** and **Library**.
+
+The prompt box starts at one line and grows as you type or paste. It scrolls internally at 180 pixels and shrinks as you delete text or send the draft.
 
 While a model is loading, **Cancel load** appears beside the model selector and in **Settings → Model loading**. It stops the model worker and releases its memory without waiting for loading to finish. Once ready, **Unload model** releases the model's memory. Stop an active response before unloading. Chats, drafts, response preferences, downloaded files, and the saved model selection remain available; choose **Load** to use the model again. Refreshing the browser keeps it unloaded for the current server session; restarting the server retains the usual automatic loading behavior.
 
@@ -68,7 +72,9 @@ In **Library → Prompt sets**, save an ordered group of up to 20 prompts. **Run
 
 Use the expand icon beside the prompt for a larger editor. It edits the same draft, with **Enter** for line breaks and **Ctrl/Cmd+Enter** to send. **Edit prompt** on a completed response creates a new alternative chat using the revised prompt and that turn's original response settings.
 
-Use the paperclip to preview a UTF-8 text or code file up to 64 KiB and see a rough token estimate. **Add file to draft** inserts the filename and contents as editable text. Open **Context → Preview draft context** for an estimate of the complete request with the loaded model.
+Use the paperclip or drop files onto the composer. When your draft includes a local PDF link, **Attach PDF** opens the file picker. Attach UTF-8 text and code files up to 64 KiB each, or PDFs up to 10 MiB. If the whole PDF exceeds the page or text limit, choose a page range. The Playground extracts PDF text locally with page labels and limits each selection to 200 pages and 64 Ki characters of text. Image-only scans need an OCR text layer.
+
+Select a file chip to preview its text, or use its remove button. Files stay with the draft until you send or remove them. Open **Context → Preview draft context** for an estimate of the complete request with the loaded model.
 
 You can browse other chats or compose a new draft while a response runs. A banner returns you to the running response; **Stop** still controls it. One response runs at a time. In **Settings → Reading and composing**, choose text size, spacing, and the compact composer's send shortcut. Appearance can also **Follow system**. Response settings have short explanations and individual Reset buttons.
 
@@ -110,6 +116,12 @@ See the [expanded composer](docs/images/usability/expanded-composer.png) and [ch
 IME composition waits until text is committed before sending. Ctrl+C / Cmd+C keep normal copying behavior. For exact action behavior and manual review scenarios, see the [chat behavior and settings guide](docs/usability.md).
 
 You can change the compact composer to **Ctrl/Cmd+Enter** in Settings; Enter then inserts a line break. The expanded editor always uses Ctrl/Cmd+Enter to send.
+
+## Workspace tools
+
+Select **Tools**, enter the full path to a workspace folder, and choose **Use folder**. This enables file listing, literal search, and line-range reads for the current chat until you turn tools off or reload. Try asking the model to find a setting and cite its file and line number. Expand the tool cards to see what it used.
+
+Enable **Allow the model to propose edits and project checks** to review diffs and check commands in chat. Each proposal needs approval. **Stop** cancels pending approvals and active checks. **Undo edit** is available when the original local checkpoint exists and the file still matches the applied change. Chat backups include tool results.
 
 ## Token usage
 

@@ -134,7 +134,19 @@ body[data-chat-state="active"] .welcome { display: none; }
 .composer-box:focus-within { border-color: var(--focus); }
 .composer { display: flex; padding: 3px 4px 12px; }
 .expand-composer { align-self: flex-start; width: 30px; height: 30px; color: var(--muted); }
-.composer textarea { flex: 1; min-width: 0; min-height: 62px; max-height: 180px; border: 0; outline: 0; resize: none; background: transparent; line-height: 1.6; padding: 3px 0; }
+.composer textarea { flex: 1; min-width: 0; max-height: 180px; overflow-y: auto; border: 0; outline: 0; resize: none; background: transparent; line-height: 1.6; padding: 3px 0; }
+.composer textarea:placeholder-shown { overflow-y: hidden; }
+.draft-attachments { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 8px; max-height: 132px; overflow: auto; }
+.attachment-chip { display: inline-flex; min-width: 0; max-width: 100%; align-items: center; border: 1px solid var(--line); border-radius: var(--button-radius); background: var(--panel); }
+.attachment-chip button { border: 0; background: transparent; min-height: 32px; padding-inline: 8px; }
+.attachment-chip button:hover { background: var(--panel-3); }
+.attachment-name { min-width: 0; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
+.attachment-remove { font-size: 18px; }
+.attachment-estimate { color: var(--muted); font-size: 11px; }
+.draft-attachment-status { margin: 0 0 8px; overflow-wrap: anywhere; }
+.pdf-link-hint { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.pdf-link-hint p { margin: 0; overflow-wrap: anywhere; }
+.pdf-link-hint button { flex-shrink: 0; }
 .composer-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; min-width: 0; }
 .prompt-queue { margin-bottom: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--button-radius); background: var(--panel); font-size: 12px; }
 .prompt-queue-header, .prompt-queue-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
@@ -146,9 +158,16 @@ body[data-chat-state="active"] .welcome { display: none; }
 .prompt-queue-actions button { padding-inline: 6px; }
 .composer-tools, .composer-model-actions, .model-picker { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .composer-tools { flex-wrap: wrap; }
+.mobile-composer-options { display: none; }
 .composer-model-actions { margin-left: auto; }
 .composer-action { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: var(--control-height); padding: 7px 9px; border: 1px solid transparent; border-radius: var(--button-radius); background: transparent; font-size: 12px; white-space: nowrap; }
 .composer-action:hover { background: var(--panel-3); }
+.workspace-tools-button[aria-pressed="true"] { color: var(--on-accent); background: var(--accent); }
+.tool-activity { display: grid; gap: 4px; margin-block: 8px; }
+.tool-activity details { min-width: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: var(--button-radius); }
+.tool-activity summary { color: var(--muted); cursor: pointer; font-size: 12px; overflow-wrap: anywhere; }
+.tool-activity pre { margin: 8px 0; }
+.tool-activity pre:empty, .tool-actions:empty { display: none; }
 .composer-action [data-icon], .thinking-control [data-icon] { width: 16px; height: 16px; }
 .options-state { color: var(--muted); font-size: 11px; }
 .model-picker-button { min-width: 0; max-width: 210px; }
@@ -356,10 +375,17 @@ body.sidebar-collapsed .sidebar { visibility: hidden; padding: 0; }
   .message.user .bubble { max-width: 92%; }
   .message-actions button, .thinking-box summary, .response-details summary { min-height: 44px; }
   .composer-wrap { padding-inline: 12px; }
+  .composer-box { padding: 10px; }
   .composer-tools, .composer-model-actions { width: 100%; }
-  .composer-model-actions { justify-content: space-between; }
+  .composer-tools { flex-wrap: nowrap; }
+  .composer-tools #attachTextButton, .composer-tools #libraryButton, .options-state { display: none; }
+  .mobile-composer-options { display: flex; margin-top: 12px; }
+  .composer-model-actions { justify-content: flex-end; }
   .composer-model-actions .model-picker { flex: 1; }
+  .composer-model-actions .model-picker-button { max-width: 100%; flex: 0 1 auto; }
   .composer-action, .thinking-control, .quick-load, .context-summary { min-height: 44px; }
+  .attachment-chip button { min-height: 44px; }
+  .attachment-remove { min-width: 44px; }
   .send-button, .stop-button { width: 44px; height: 44px; }
   .composer textarea, .composer-popover textarea, .composer-popover input[type="number"] { font-size: 16px; }
   .composer-footnote { font-size: 9px; }
@@ -371,3 +397,6 @@ body.sidebar-collapsed .sidebar { visibility: hidden; padding: 0; }
   .metrics { font-size: 9px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+@media (max-width: 380px) {
+  .composer-tools #optionsButton [data-icon], .composer-tools .thinking-control [data-icon] { display: none; }
+}

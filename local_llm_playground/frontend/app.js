@@ -1,5 +1,5 @@
-import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=14";
-import { initEnhancements } from "./enhancements.js?v=11";
+import { applyTheme, initThemes, text, refreshThemeContent } from "./theme.js?v=18";
+import { initEnhancements } from "./enhancements.js?v=15";
 
 const $ = (id) => document.getElementById(id);
 const ui = Object.fromEntries(
@@ -35,6 +35,7 @@ let unloadedForIdle = false;
 let availableModels = [];
 let loadedThinkingSupport = "unknown";
 let loadedModelSettings = {};
+let modelLoadProfiles = {};
 let thinkingPreference = false;
 let responseDefaults = { ...defaults, system_prompt: "", thinking: false };
 let responseSettingsBaseline = "";
@@ -48,6 +49,7 @@ const mobile = matchMedia("(max-width: 720px)");
 let lastContext = null;
 const composerPopovers = [[ui.optionsPopover, ui.optionsButton], [ui.modelPopover, ui.modelPickerButton], [ui.contextPopover, ui.contextButton]];
 const DRAFT_PREFIX = "playground.draft.v1:";
+const ATTACHMENT_PREFIX = "playground.attachments.v1:";
 const ACTIVE_CHAT_KEY = "playground.activeChat.v1";
 const RESPONSE_PREFIX = "playground.responseSettings.v1:";
 const PROMPT_QUEUE_KEY = "playground.promptQueue.v1";
@@ -58,10 +60,12 @@ const draftCache = new Map();
 const browserStateErrors = new Map();
 let draftSaveTimer = null;
 let draftBaseline = "";
+let draftFiles = [];
 let promptRevision = 0;
 let chatNavigation = 0;
 
 function draftKey(id = activeChat) { return DRAFT_PREFIX + (id || "new"); }
+function attachmentKey(id = activeChat) { return ATTACHMENT_PREFIX + (id || "new"); }
 function responseKey(id = activeChat) { return RESPONSE_PREFIX + (id || "new"); }
 function responseInputIds() { return ["temperatureNumber", "topP", "topK", "minP", "repeatPenalty", "seed"]; }
 
@@ -177,6 +181,7 @@ function promptInput() {
   promptRevision++;
   if (generating && generationSession?.chatId === activeChat) generationSession.draftEdited = true;
   resizePrompt();
+  enhancements?.renderPdfLinkHint();
   updateQueueControls();
   clearTimeout(draftSaveTimer);
   draftSaveTimer = setTimeout(saveDraft, 250);
@@ -184,15 +189,63 @@ function promptInput() {
 
 function restoreDraft() {
   ui.prompt.value = readBrowserState(draftKey()) || "";
+  draftFiles = readDraftFiles(activeChat);
   draftBaseline = ui.prompt.value; promptRevision++;
   resizePrompt();
+  enhancements?.renderAttachments();
+}
+
+function validDraftFiles(files) {
+  if (!Array.isArray(files)) return [];
+  return files.filter(file => typeof file?.name === "string" && file.name.length > 0 && file.name.length <= 255
+    && typeof file.contents === "string" && file.contents.trim() && file.contents.length <= 64 * 1024);
+}
+
+function readDraftFiles(id) {
+  try { return validDraftFiles(JSON.parse(readBrowserState(attachmentKey(id)))); }
+  catch (_) { return []; }
+}
+
+function writeDraftFiles(files, id = activeChat) {
+  const persisted = writeBrowserState(attachmentKey(id), files.length ? JSON.stringify(files) : null);
+  if (id === activeChat) {
+    draftFiles = files;
+    enhancements?.renderAttachments();
+  }
+  return persisted;
+}
+
+function draftPdfLinks() {
+  const links = ui.prompt.value.matchAll(/\bfile:\/\/\/[^\r\n<>"']+?\.pdf(?=$|[\s?#<>"'),;\]]|\.(?=\s|$))/gi);
+  return [...links].flatMap(([url]) => {
+    try {
+      const name = decodeURIComponent(new URL(url).pathname.split("/").at(-1));
+      const attached = draftFiles.some(file => file.name.toLowerCase() === name.toLowerCase());
+      return [{ url, name, attached }];
+    } catch (_) { return []; }
+  });
+}
+
+function draftMessage() {
+  let message = ui.prompt.value.trim();
+  for (const { url, name, attached } of draftPdfLinks()) {
+    if (attached) message = message.replaceAll(url, () => name);
+  }
+  const parts = [message];
+  for (const { name, contents } of draftFiles) {
+    const longest = (contents.match(/^ {0,3}`+/gm) || []).reduce((length, run) => Math.max(length, run.trimStart().length), 2);
+    const fence = "`".repeat(longest + 1);
+    parts.push(`${name.replace(/[\r\n]/g, " ")}\n${fence}\n${contents}\n${fence}`);
+  }
+  return parts.filter(Boolean).join("\n\n");
 }
 
 function backupDrafts(chatIds) {
   saveDraft();
   return [null, ...chatIds].flatMap(chatId => {
-    const draft = readBrowserState(draftKey(chatId));
-    return draft ? [{ chat_id: chatId, text: draft }] : [];
+    const draft = readBrowserState(draftKey(chatId)) || "";
+    const files = readDraftFiles(chatId);
+    return draft || files.length ? [{ chat_id: chatId, text: draft, ...(files.length ? { files } : {}) }] : [];
   });
 }
 
@@ -201,12 +254,14 @@ function restoreBackupDrafts(drafts, chatIds) {
   const allowed = new Set([null, ...chatIds]);
   let added = 0, skipped = 0, persisted = true;
   for (const entry of drafts) {
-    if (!entry || !allowed.has(entry.chat_id) || typeof entry.text !== "string" || !entry.text
-        || readBrowserState(draftKey(entry.chat_id))) {
+    const files = validDraftFiles(entry?.files);
+    if (!entry || !allowed.has(entry.chat_id) || typeof entry.text !== "string" || (!entry.text && !files.length)
+        || readBrowserState(draftKey(entry.chat_id)) || readDraftFiles(entry.chat_id).length) {
       skipped++;
       continue;
     }
-    persisted = writeBrowserState(draftKey(entry.chat_id), entry.text) && persisted;
+    persisted = writeBrowserState(draftKey(entry.chat_id), entry.text || null) && persisted;
+    if (files.length) persisted = writeDraftFiles(files, entry.chat_id) && persisted;
     added++;
     if (activeChat === entry.chat_id) { restoreDraft(); updateQueueControls(); }
   }
@@ -217,10 +272,14 @@ function activateChat(id, transferDraft = false) {
   saveWorkspaceState();
   const previousKey = draftKey();
   const previousResponseKey = responseKey();
+  const previousAttachmentKey = attachmentKey();
+  const files = draftFiles;
   const responseSnapshot = serializeResponseSettings();
   const value = ui.prompt.value;
   activeChat = id;
+  if (transferDraft) enhancements?.transferToolAccess(id);
   if (transferDraft && writeBrowserState(draftKey(), value || null)) writeBrowserState(previousKey, null);
+  if (transferDraft && files.length && writeBrowserState(attachmentKey(), JSON.stringify(files))) writeBrowserState(previousAttachmentKey, null);
   if (transferDraft && responseSnapshot && writeBrowserState(responseKey(), responseSnapshot)) writeBrowserState(previousResponseKey, null);
   writeBrowserState(ACTIVE_CHAT_KEY, id || "new");
   restoreDraft();
@@ -582,7 +641,7 @@ function updateResponseActions() {
 function updateRunningResponse() {
   const banner = $("runningResponse");
   banner.hidden = !generating || !generationSession?.chatId || generationSession.chatId === activeChat;
-  $("runningResponseLabel").textContent = text("runningElsewhere");
+  $("runningResponseLabel").textContent = text(generationSession?.toolApprovalPending ? "approvalElsewhere" : "runningElsewhere");
 }
 
 function restorePromptQueues() {
@@ -628,7 +687,7 @@ function updateQueueControls() {
   const queue = promptQueues.get(activeChat);
   const canAdd = canQueueDraft();
   $("queuePrompt").hidden = !canAdd;
-  $("queuePrompt").disabled = !canAdd || !ui.prompt.value.trim() || queue?.items.length >= MAX_QUEUED_PROMPTS;
+  $("queuePrompt").disabled = !canAdd || (!ui.prompt.value.trim() && !draftFiles.length) || queue?.items.length >= MAX_QUEUED_PROMPTS;
   ui.sendButton.classList.toggle("hidden", generating || Boolean(queue?.items.length));
   $("resumePromptQueue").hidden = !queue?.paused;
   $("resumePromptQueue").disabled = !canResumeQueue(activeChat);
@@ -741,6 +800,7 @@ function queueDraft(message) {
   promptQueues.set(activeChat, queue);
   savePromptQueues();
   ui.prompt.value = "";
+  writeDraftFiles([]);
   promptInput(); saveDraft();
   renderPromptQueue();
   ui.prompt.focus();
@@ -851,10 +911,11 @@ function initContextPreview() {
   button.onclick = async () => {
     reset();
     const current = revision;
-    const snapshot = () => JSON.stringify({ chat_id: activeChat, message: ui.prompt.value.trim(),
-      expected_model_path: loadedModelPath, ...generationValues() });
+    const snapshot = () => JSON.stringify({ chat_id: activeChat, message: draftMessage(),
+      expected_model_path: loadedModelPath, ...generationValues(), tool_access: enhancements?.toolAccess(activeChat) });
     const show = message => { status.textContent = message; status.hidden = false; };
-    if (!ui.prompt.value.trim()) return show(text("contextPreviewDraft"));
+    if (enhancements?.attachmentsPending(activeChat)) return show(text("attachmentsReading"));
+    if (!ui.prompt.value.trim() && !draftFiles.length) return show(text("contextPreviewDraft"));
     if (ui.sendButton.disabled || generating || promptQueues.has(activeChat)) return show(text("contextPreviewWait"));
     if (!validateResponseSettings()) return show(text("invalidResponseSettings"));
     const body = snapshot();
@@ -963,12 +1024,16 @@ async function loadInitial() {
   const navigation = chatNavigation;
   const initialResponseRevision = responseRevision;
   const initialPromptRevision = promptRevision;
-  const preserveNewComposition = activeChat === null && (Boolean(ui.prompt.value) || readBrowserState(responseKey()) !== null);
+  const preserveNewComposition = activeChat === null && (Boolean(ui.prompt.value) || draftFiles.length || readBrowserState(responseKey()) !== null);
   try {
     const [models, settings, status, chats] = await Promise.all([
       api("/api/models"), api("/api/settings"), api("/api/status"), api("/api/chats")
     ]);
     populateModels(models);
+    modelLoadProfiles = settings.model_load_profiles || {};
+    if (settings.model_path && !modelLoadProfiles[modelProfileKey(settings.model_path)]) {
+      modelLoadProfiles[modelProfileKey(settings.model_path)] = settings;
+    }
     if (settings.model_path && models.some((model) => model.path === settings.model_path)) ui.modelSelect.value = settings.model_path;
     else if (settings.model_path) ui.customModel.value = settings.model_path;
     ui.quickModelSelect.value = ui.modelSelect.value;
@@ -999,6 +1064,24 @@ async function loadInitial() {
   } catch (error) { setStatus("error", error.message); }
 }
 
+function modelProfileKey(path) {
+  return /^(?:[a-z]:[\\/]|\\\\)/i.test(path) ? path.replace(/\//g, "\\").toLowerCase() : path;
+}
+
+function restoreModelLoadSettings() {
+  const saved = modelLoadProfiles[modelProfileKey(selectedModelPath())];
+  if (!saved || !Number.isInteger(saved.context_size) || !Number.isInteger(saved.gpu_layers) || !Number.isInteger(saved.threads)) return;
+  ui.contextSize.value = saved.context_size;
+  ui.gpuLayers.value = saved.gpu_layers;
+  ui.threads.value = saved.threads;
+}
+
+function modelSelectionChanged() {
+  restoreModelLoadSettings();
+  showModelError();
+  updateModelPicker();
+}
+
 function populateModels(models) {
   availableModels = models;
   const options = models.length ? models.map(model => `<option value="${escapeHtml(model.path)}">${escapeHtml(model.name)} · ${(model.size / 1073741824).toFixed(2)} GiB</option>`).join("")
@@ -1016,7 +1099,9 @@ async function refreshModels(preferred = null) {
   } else {
     ui.customModel.value = target || ""; ui.modelSelect.value = ui.quickModelSelect.value = "";
   }
-  updateModelPicker(); enhancements?.update();
+  if (target !== current) modelSelectionChanged();
+  else updateModelPicker();
+  enhancements?.update();
   return Boolean(preferred && target === preferred);
 }
 
@@ -1214,6 +1299,7 @@ function renderChatList() {
       try { await api(`/api/chats/${chat.id}`, { method: "DELETE" }); }
       catch (error) { showToast(error.message); return; }
       if (promptQueues.delete(chat.id)) { savePromptQueues(); renderPromptQueue(); }
+      writeBrowserState(attachmentKey(chat.id), null);
       if (undoChatMove?.chat.id === chat.id) { undoChatMove = null; renderUndo(); }
       if (activeChat === chat.id) {
         clearTimeout(draftSaveTimer); draftSaveTimer = null;
@@ -1308,6 +1394,7 @@ function displayChat(chat, id = chat.id) {
   chat.messages.forEach((message) => {
     if (message.type === "user") { sourcePrompt = message.content; lastUserMessage = message.content; }
     const node = messageElement(message.type, message.content, message.metrics, message.status, sourcePrompt, message.request, message.error, message.id);
+    for (const item of message.tool_activity || []) enhancements?.showToolActivity(node, item, id);
     node.bookmarked = message.bookmarked;
     conversationChars += message.content.length;
   });
@@ -1358,6 +1445,7 @@ async function loadModel() {
     updateModelStatus(status, loadValues);
     if (status.load_cancelled || status.status !== "ready") return;
     loaded = true;
+    modelLoadProfiles[modelProfileKey(status.model_path)] = loadValues;
     if (ui.customModel.value.trim()) ui.customModel.value = status.model_path;
     else { ui.quickModelSelect.value = status.model_path; ui.modelSelect.value = status.model_path; }
     openSettings(false);
@@ -1417,7 +1505,8 @@ function runtimeModelMatchesSelection() {
 
 async function send(message, retryRequest = null, branchTarget = null, queued = null) {
   const fromComposer = message === undefined && !queued;
-  message ??= ui.prompt.value.trim();
+  if (fromComposer && enhancements?.attachmentsPending(activeChat)) return showToast(text("attachmentsReading"));
+  message ??= draftMessage();
   if (!message) return;
   if (fromComposer && (generating || promptQueues.has(activeChat))) {
     queueDraft(message);
@@ -1429,6 +1518,7 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
   if (!retryRequest && !queued && !validateResponseSettings(true)) return;
   const submittedDraft = ui.prompt.value;
   let submittedRevision = promptRevision;
+  const toolAccess = !branchTarget && !queued?.newChatItems && enhancements?.toolAccess(queued?.chatId || activeChat);
   let request = queued?.request || { ...(retryRequest || { message, ...generationValues(), request_id: crypto.randomUUID() }),
     expected_model_path: selectedModelPath() || null };
   // Reserve the UI before the first await so rapid clicks cannot submit twice.
@@ -1499,7 +1589,8 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
     if (showingChat) scrollDown(!queued);
     generationTimer = setInterval(() => {
       elapsedSeconds += 1;
-      setStatus("generating", { key: "generatingStatus", values: { seconds: elapsedSeconds } });
+      setStatus("generating", session.toolApprovalPending ? { key: "workspace_approval" }
+        : { key: "generatingStatus", values: { seconds: elapsedSeconds } });
       updateAssistant(assistant, raw, null, "streaming", elapsedSeconds);
     }, 1000);
     if (queued) {
@@ -1508,6 +1599,7 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
       savePromptQueues();
     }
     const { submitted, ...payload } = request;
+    if (toolAccess) payload.tool_access = toolAccess;
     const response = await fetch(`/api/chats/${session.chatId}/generate`, {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
     });
@@ -1519,9 +1611,10 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
     if (!response.body) throw new Error(text("streamInterrupted"));
     if (fromComposer && !session.draftEdited) {
       if (activeChat === session.chatId && ui.prompt.value === submittedDraft && promptRevision === submittedRevision) {
-        ui.prompt.value = ""; resizePrompt(); saveDraft();
-      } else if (activeChat !== session.chatId && readBrowserState(draftKey(session.chatId)) === submittedDraft) {
+        ui.prompt.value = ""; writeDraftFiles([]); resizePrompt(); saveDraft();
+      } else if (activeChat !== session.chatId && (readBrowserState(draftKey(session.chatId)) || "") === submittedDraft) {
         writeBrowserState(draftKey(session.chatId), null);
+        writeDraftFiles([], session.chatId);
       }
     }
     session.accepted = true;
@@ -1549,6 +1642,13 @@ async function send(message, retryRequest = null, branchTarget = null, queued = 
         updateAssistant(assistant, raw, null, "streaming", elapsedSeconds);
       }
       else if (item.type === "context_trimmed" && activeChat === session.chatId) contextNotice(item.message);
+      else if (item.type === "tool_activity") {
+        session.toolApprovalPending = item.status === "approval";
+        updateRunningResponse();
+        if (session.toolApprovalPending) setStatus("generating", { key: "workspace_approval" });
+        enhancements?.showToolActivity(assistant, item, session.chatId, true);
+        if (activeChat === session.chatId) scrollDown();
+      }
       else if (item.type === "token") {
         const follow = ui.messages.scrollHeight - ui.messages.scrollTop - ui.messages.clientHeight < 180;
         raw += item.text; updateAssistant(assistant, raw, null, "streaming", elapsedSeconds);
@@ -1629,12 +1729,21 @@ async function stop() {
   }
 }
 function resizePrompt() {
-  ui.prompt.style.height = "auto";
-  ui.prompt.style.height = enhancements?.isExpanded() ? "" : `${Math.min(ui.prompt.scrollHeight, 180)}px`;
+  if (enhancements?.isExpanded()) return;
+  const prompt = ui.prompt;
+  const scrollTop = prompt.scrollTop;
+  prompt.style.height = "";
+  if (!prompt.value) return;
+  prompt.style.overflowY = "hidden";
+  prompt.style.height = `${prompt.scrollHeight}px`;
+  prompt.style.overflowY = "";
+  prompt.scrollTop = scrollTop;
 }
 
 ui.settingsButton.onclick = () => openSettings(true); ui.closeSettings.onclick = () => openSettings(false); ui.overlay.onclick = () => { openSettings(false); if (mobile.matches) setSidebar(false); };
 $("saveIdleUnload").onclick = saveIdleUnload;
+$("optionsLibrary").onclick = () => $("libraryButton").click();
+$("optionsAttachText").onclick = () => $("attachTextButton").click();
 ui.modelSettingsButton.onclick = () => { openSettings(true); ui.modelSelect.focus(); };
 ui.menuButton.onclick = () => setSidebar(mobile.matches ? !ui.sidebar.classList.contains("open") : !sidebarExpanded);
 ui.sidebarClose.onclick = () => setSidebar(false);
@@ -1662,9 +1771,10 @@ for (const field of [ui.topP, ui.topK, ui.minP, ui.repeatPenalty, ui.seed]) fiel
 for (const field of [ui.contextSize, ui.gpuLayers, ui.threads]) field.oninput = updateModelPicker;
 ui.resetSettings.onclick = () => { applySettings(responseDefaults); responseSettingsChanged(); saveResponseSettings(); };
 ui.saveResponseDefaults.onclick = saveResponseDefaults;
-ui.modelSelect.onchange = () => { ui.customModel.value = ""; ui.quickModelSelect.value = ui.modelSelect.value; showModelError(); updateModelPicker(); };
+ui.modelSelect.onchange = () => { ui.customModel.value = ""; ui.quickModelSelect.value = ui.modelSelect.value; modelSelectionChanged(); };
 ui.customModel.oninput = () => { showModelError(); updateModelPicker(); };
-ui.chooseDetectedModel.onclick = () => { ui.customModel.value = ""; showModelError(); updateModelPicker(); ui.quickModelSelect.focus(); };
+ui.customModel.onchange = modelSelectionChanged;
+ui.chooseDetectedModel.onclick = () => { ui.customModel.value = ""; modelSelectionChanged(); ui.quickModelSelect.focus(); };
 ui.quickLoadModel.onclick = ui.menuLoadModel.onclick = loadModel;
 ui.quickUnloadModel.onclick = ui.menuUnloadModel.onclick = ui.unloadModel.onclick = unloadModel;
 ui.chatSearch.oninput = queueChatSearch;
@@ -1688,7 +1798,7 @@ ui.quickModelSelect.onchange = () => {
   if (generating || loadingModel || unloadingModel) return;
   ui.modelSelect.value = ui.quickModelSelect.value;
   ui.customModel.value = "";
-  showModelError(); updateModelPicker();
+  modelSelectionChanged();
 };
 document.addEventListener("keydown", (event) => {
   if (event.defaultPrevented || event.isComposing || composingPrompt || event.keyCode === 229) return;
@@ -1725,12 +1835,19 @@ document.addEventListener("themechange", () => {
 });
 
 initComposerPopovers();
+let promptWidth = ui.prompt.offsetWidth;
+new ResizeObserver(() => {
+  const width = ui.prompt.offsetWidth;
+  if (width === promptWidth) return;
+  promptWidth = width;
+  resizePrompt();
+}).observe(ui.prompt);
 initContextPreview();
 restorePromptQueues();
 initDrafts();
 await initThemes();
 enhancements = initEnhancements({ api, text, refreshThemeContent, notify: showToast, resize: resizePrompt, send: () => send(),
-  getState: () => ({ chatId: activeChat, draft: ui.prompt.value, settings: generationValues(), generating, chatReadOnly: activeChatVisibility() !== "active",
+  getState: () => ({ chatId: activeChat, draft: ui.prompt.value, attachments: draftFiles, settings: generationValues(), generating, chatReadOnly: activeChatVisibility() !== "active",
     canQueuePrompt: canQueueDraft(), queuePending: promptQueues.has(activeChat),
     modelBusy: loadingModel || unloadingModel || ["loading", "unloading", "generating"].includes(runtimeStatus), hasModels: Boolean(availableModels.length || selectedModelPath()) }),
   refreshModels,
@@ -1745,6 +1862,8 @@ enhancements = initEnhancements({ api, text, refreshThemeContent, notify: showTo
   openChat, refreshChats, getChats: () => allChats, applyAppearance: applyTheme,
   runPromptSet, maxQueuedPrompts: MAX_QUEUED_PROMPTS,
   backupDrafts, restoreBackupDrafts,
+  unattachedPdfName: () => draftPdfLinks().find(link => !link.attached)?.name,
+  setAttachments(files) { writeDraftFiles(files); promptInput(); },
   loadDownloaded: async path => { if (await refreshModels(path)) await loadModel(); },
   closePanels: () => { openSettings(false); closeComposerPopovers(); },
   setDraft: value => { ui.prompt.value = value; promptInput(); saveDraft(); ui.prompt.focus(); },

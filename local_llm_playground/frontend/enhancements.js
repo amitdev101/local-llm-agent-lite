@@ -31,60 +31,303 @@ export function initEnhancements(hooks) {
     const node = document.createElement(tag); node.textContent = content; node.className = className; return node;
   }
 
+  const workspaces = new Map();
+  const toolsButton = $("workspaceToolsButton");
+  const workspaceDialog = dialog("workspaceDialog", "workspaceTools", `
+    <form id="workspaceForm">
+      <p class="setting-help" data-text="workspaceToolsHelp"></p>
+      <label for="workspacePath" data-text="workspaceFolder"></label>
+      <input id="workspacePath" autocomplete="off" spellcheck="false" required>
+      <label class="library-thinking-field"><input id="allowWorkspaceChanges" type="checkbox"><span data-text="allowWorkspaceChanges"></span></label>
+      <p id="workspaceError" class="setting-help" role="status"></p>
+    </form>`,
+    '<button id="disableWorkspace" class="secondary-button" data-text="disableWorkspace"></button><button id="enableWorkspace" class="primary-button" type="submit" form="workspaceForm" data-text="enableWorkspace"></button>');
+  function updateWorkspaceButton() {
+    const state = hooks.getState();
+    const access = workspaces.get(state.chatId);
+    const label = access ? "workspaceToolsOn" : "workspaceTools";
+    toolsButton.dataset.text = label;
+    toolsButton.textContent = text(label);
+    toolsButton.title = access?.path || text("workspaceTools");
+    toolsButton.setAttribute("aria-pressed", String(Boolean(access)));
+    toolsButton.setAttribute("aria-label", text(access?.allow_changes ? "workspaceToolsEditMode" : label));
+    toolsButton.disabled = state.chatReadOnly;
+  }
+  toolsButton.onclick = () => {
+    const access = workspaces.get(hooks.getState().chatId);
+    $("workspacePath").value = access?.path || "";
+    $("allowWorkspaceChanges").checked = Boolean(access?.allow_changes);
+    $("workspaceError").textContent = "";
+    $("disableWorkspace").hidden = !access;
+    open(workspaceDialog);
+    $("workspacePath").focus();
+  };
+  $("disableWorkspace").onclick = () => {
+    workspaces.delete(hooks.getState().chatId);
+    updateWorkspaceButton();
+    workspaceDialog.close();
+  };
+  $("workspaceForm").onsubmit = async event => {
+    event.preventDefault();
+    const chatId = hooks.getState().chatId;
+    const button = $("enableWorkspace");
+    button.disabled = true;
+    try {
+      const access = await api("/api/workspace-tools/folder", { method: "POST",
+        body: JSON.stringify({ path: $("workspacePath").value.trim(), allow_changes: $("allowWorkspaceChanges").checked }) });
+      if (workspaceDialog.open && hooks.getState().chatId === chatId) {
+        workspaces.set(chatId, access);
+        updateWorkspaceButton();
+        workspaceDialog.close();
+      }
+    } catch (error) { $("workspaceError").textContent = error.message; }
+    finally { button.disabled = false; }
+  };
+
+  function showToolActivity(message, item, chatId, live = false) {
+    if (!message.toolCards) {
+      const list = element("div", "", "tool-activity");
+      message.querySelector(".content").before(list);
+      message.toolCards = new Map();
+      message.toolActivityList = list;
+    }
+    let details = message.toolCards.get(item.id);
+    if (!details) {
+      details = document.createElement("details");
+      details.append(element("summary", ""), element("pre", "", "library-preview"), element("div", "", "settings-actions tool-actions"));
+      message.toolCards.set(item.id, details);
+      message.toolActivityList.append(details);
+    }
+    const label = text("workspace_" + item.name);
+    const name = label === "workspace_" + item.name ? item.name : label;
+    details.querySelector("summary").textContent = [name, item.target, text("workspace_" + item.status)].filter(Boolean).join(" · ");
+    details.querySelector("pre").textContent = item.output || "";
+    const actions = details.querySelector(".tool-actions");
+    actions.replaceChildren();
+    if (live && item.status === "approval") {
+      details.open = true;
+      for (const approved of [false, true]) {
+        const button = element("button", text(approved ? "approveWorkspaceAction" : "denyWorkspaceAction"),
+          approved ? "primary-button" : "secondary-button");
+        button.onclick = async () => {
+          for (const control of actions.querySelectorAll("button")) control.disabled = true;
+          try {
+            await api(`/api/chats/${chatId}/tool-approval/${item.id}`, { method: "POST", body: JSON.stringify({ approved }) });
+          } catch (error) {
+            for (const control of actions.querySelectorAll("button")) control.disabled = false;
+            hooks.notify(error.message);
+          }
+        };
+        actions.append(button);
+      }
+    } else if (item.undo === true) {
+      const button = element("button", text("undoWorkspaceEdit"), "secondary-button");
+      button.onclick = async () => {
+        button.disabled = true;
+        try {
+          const result = await api(`/api/chats/${chatId}/tool-undo/${item.id}`, { method: "POST", body: "{}" });
+          showToolActivity(message, { ...item, status: "UNDONE", output: result.output, undo: false }, chatId);
+          hooks.notify(result.output);
+        } catch (error) {
+          button.disabled = false;
+          hooks.notify(error.message);
+        }
+      };
+      actions.append(button);
+    }
+  }
+
   const editor = dialog("composerDialog", "expandComposer", '<p class="setting-help" data-text="expandedHelp"></p><p id="expandedDraftWarning" class="draft-warning" role="status" data-text="draftUnavailable" hidden></p><div id="expandedComposerSlot"></div>', '<button id="composerDone" class="secondary-button" data-text="done"></button><button id="composerSend" class="primary-button" data-text="send"></button>');
   const mirrorDraftWarning = () => { $("expandedDraftWarning").hidden = $("draftWarning").hidden; };
   new MutationObserver(mirrorDraftWarning).observe($("draftWarning"), { attributes: true, attributeFilter: ["hidden"] });
   mirrorDraftWarning();
   const prompt = $("prompt"), promptHome = document.createComment("composer textarea"); prompt.before(promptHome);
-  editor.addEventListener("close", () => { promptHome.after(prompt); hooks.resize(); prompt.focus(); });
-  $("expandComposer").onclick = () => { open(editor); $("expandedComposerSlot").append(prompt); prompt.style.height = ""; prompt.focus(); };
+  const attachmentList = $("draftAttachments"), attachmentPanel = $("draftAttachmentPanel");
+  const attachmentHome = document.createComment("draft attachments"); attachmentPanel.before(attachmentHome);
+  editor.addEventListener("close", () => { promptHome.after(prompt); attachmentHome.after(attachmentPanel); hooks.resize(); prompt.focus(); });
+  $("expandComposer").onclick = () => { open(editor); $("expandedComposerSlot").append(prompt, attachmentPanel); prompt.style.height = ""; prompt.focus(); };
   $("composerDone").onclick = () => editor.close();
   $("composerSend").onclick = () => { editor.close(); hooks.send(); };
 
-  const attachment = dialog("attachTextDialog", "attachText", `
-    <p class="setting-help" data-text="attachTextHelp"></p>
-    <label for="attachTextFile" data-text="attachTextFile"></label><input id="attachTextFile" type="file">
-    <p id="attachTextStatus" class="setting-help" role="status"></p>
-    <pre id="attachTextPreview" class="library-preview" hidden></pre>`,
-    '<button id="addTextAttachment" class="primary-button" data-text="attachTextAdd" disabled></button>');
-  const attachmentFile = $("attachTextFile"), attachmentPreview = $("attachTextPreview");
-  const attachmentStatus = $("attachTextStatus"), attachmentAdd = $("addTextAttachment");
-  let attachmentRevision = 0, attachmentBlock = "";
-  function resetAttachment() {
-    attachmentRevision += 1;
-    attachmentBlock = attachmentPreview.textContent = attachmentStatus.textContent = "";
-    attachmentPreview.hidden = attachmentAdd.disabled = true;
+  const attachment = dialog("attachTextDialog", "attachmentPreviewTitle",
+    '<p id="attachTextStatus" class="setting-help"></p><pre id="attachTextPreview" class="library-preview"></pre>');
+  const pdfPages = dialog("pdfPagesDialog", "pdfPageTitle", `
+    <p id="pdfPageHelp" class="setting-help"></p>
+    <form id="pdfPageForm" aria-describedby="pdfPageHelp">
+      <div class="grid-two">
+        <label><span data-text="pdfFirstPage"></span><input id="pdfFirstPage" type="number" min="1" required></label>
+        <label><span data-text="pdfLastPage"></span><input id="pdfLastPage" type="number" min="1" required></label>
+      </div>
+      <p id="pdfPageError" class="setting-help" role="status"></p>
+    </form>`,
+    '<button id="attachPdfPages" type="submit" form="pdfPageForm" class="primary-button" data-text="attachPdfPages"></button>');
+  const attachmentFile = $("attachTextFile");
+  const attachmentReads = new Map();
+  let pdfChoice = null;
+
+  function readPdf(file, query = "") {
+    return api("/api/attachments/pdf" + query, {
+      method: "POST", headers: { "Content-Type": "application/pdf" }, body: file,
+    });
   }
-  $("attachTextButton").onclick = () => { attachmentFile.value = ""; resetAttachment(); open(attachment); attachmentFile.focus(); };
-  attachmentFile.onchange = async () => {
-    resetAttachment();
-    const revision = attachmentRevision, file = attachmentFile.files[0];
-    if (!file) return;
-    if (file.size > 64 * 1024) { attachmentStatus.textContent = text("attachTextTooLarge"); return; }
+
+  function choosePdfPages(file, count) {
+    if (pdfChoice) throw new Error(text("pdfPageChoiceBusy"));
+    const first = $("pdfFirstPage"), last = $("pdfLastPage");
+    first.max = last.max = count;
+    first.value = 1;
+    last.value = Math.min(5, count);
+    $("attachPdfPages").disabled = false;
+    $("pdfPageError").textContent = "";
+    $("pdfPageHelp").textContent = text("pdfPageHelp", { name: file.name, count });
+    return new Promise(resolve => {
+      pdfChoice = { file, resolve, contents: null };
+      open(pdfPages);
+      first.focus();
+    });
+  }
+
+  pdfPages.addEventListener("close", () => {
+    const choice = pdfChoice;
+    pdfChoice = null;
+    choice?.resolve(choice.contents);
+  });
+  $("pdfPageForm").onsubmit = async event => {
+    event.preventDefault();
+    const choice = pdfChoice;
+    const first = $("pdfFirstPage").valueAsNumber, last = $("pdfLastPage").valueAsNumber;
+    const submit = $("attachPdfPages"), status = $("pdfPageError");
+    if (!choice || submit.disabled) return;
+    if (last < first) { status.textContent = text("pdfPageOrder"); return; }
+    submit.disabled = true;
+    status.textContent = text("attachmentsReading");
     try {
-      const contents = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
-      if (revision !== attachmentRevision || !attachment.open) return;
-      if (!contents.trim() || /[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(contents)) throw new Error();
-      const longest = (contents.match(/^ {0,3}`+/gm) || []).reduce((length, run) => Math.max(length, run.trimStart().length), 2);
-      const fence = "`".repeat(longest + 1);
-      const name = file.name.replace(/[\r\n]/g, " ");
-      attachmentBlock = `${name}\n${fence}\n${contents}\n${fence}`;
-      attachmentStatus.textContent = text("attachTextEstimate", { name, tokens: Math.ceil(attachmentBlock.length / 4).toLocaleString() });
-      attachmentPreview.textContent = contents;
-      attachmentPreview.hidden = attachmentAdd.disabled = false;
-    } catch (_) {
-      if (revision === attachmentRevision && attachment.open) attachmentStatus.textContent = text("attachTextInvalid");
+      const result = await readPdf(choice.file, `?start_page=${first}&end_page=${last}`);
+      if (pdfChoice === choice && pdfPages.open) {
+        choice.contents = result.contents;
+        pdfPages.close();
+      }
+    } catch (error) {
+      if (pdfChoice === choice) status.textContent = error.message;
+    } finally {
+      if (pdfChoice === choice) submit.disabled = false;
     }
   };
-  attachmentAdd.onclick = () => {
-    const { draft, chatReadOnly } = hooks.getState();
-    if (!attachmentBlock || chatReadOnly) return;
-    const block = attachmentBlock;
-    resetAttachment();
-    attachment.close();
-    hooks.setDraft(draft ? `${draft}\n\n${block}` : block);
-  };
-  attachment.addEventListener("close", resetAttachment);
+
+  function renderPdfLinkHint() {
+    const state = hooks.getState();
+    const name = !state.chatReadOnly && hooks.unattachedPdfName();
+    $("pdfLinkHint").hidden = !name;
+    $("pdfLinkHelp").textContent = name ? text("pdfLinkHelp", { name }) : "";
+    $("attachPdfLink").disabled = Boolean(attachmentReads.get(state.chatId)?.pending);
+  }
+
+  function renderAttachmentStatus() {
+    const batch = attachmentReads.get(hooks.getState().chatId);
+    const status = $("draftAttachmentStatus");
+    status.textContent = batch?.pending ? text("attachmentsReading") : batch?.error || "";
+    status.hidden = !status.textContent;
+    renderPdfLinkHint();
+  }
+
+  async function readAttachment(file, chatId) {
+    if (file.type === "application/pdf" || /\.pdf$/i.test(file.name)) {
+      if (file.size > 10 * 1024 * 1024) throw new Error(text("attachmentPdfTooLarge"));
+      const result = await readPdf(file);
+      if (result.page_count) {
+        return hooks.getState().chatId === chatId ? choosePdfPages(file, result.page_count) : null;
+      }
+      return result.contents;
+    }
+    if (file.size > 64 * 1024) throw new Error(text("attachmentTextTooLarge"));
+    try {
+      const contents = new TextDecoder("utf-8", { fatal: true }).decode(await file.arrayBuffer());
+      if (contents.trim() && !/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(contents)) return contents;
+    } catch (_) { /* Report unreadable text with the same guidance as invalid UTF-8. */ }
+    throw new Error(text("attachmentTextInvalid"));
+  }
+
+  async function addAttachments(files, chatId) {
+    if (!files.length) return;
+    const batch = attachmentReads.get(chatId) || { pending: 0, error: "" };
+    attachmentReads.set(chatId, batch);
+    batch.pending += 1;
+    batch.error = "";
+    renderAttachmentStatus();
+    const accepted = [], skipped = [];
+    try {
+      for (const file of files) {
+        const name = file.name.replace(/[\r\n]/g, " ");
+        try {
+          const contents = await readAttachment(file, chatId);
+          if (contents) accepted.push({ name, contents });
+        }
+        catch (error) { skipped.push(text("attachmentFileError", { name, reason: error.message })); }
+      }
+      const state = hooks.getState();
+      if (state.chatId !== chatId || state.chatReadOnly) return hooks.notify(text("attachmentChatChanged"));
+      if (accepted.length) hooks.setAttachments([...state.attachments, ...accepted]);
+      if (skipped.length) {
+        batch.error = skipped.length === 1 ? skipped[0] : `${text("attachmentsSkipped", { count: skipped.length })} ${skipped[0]}`;
+      }
+    } finally {
+      batch.pending -= 1;
+      if (!batch.pending && !batch.error) attachmentReads.delete(chatId);
+      renderAttachmentStatus();
+    }
+  }
+  let pickerChat = null;
+  function openAttachmentPicker(accept = "") {
+    pickerChat = hooks.getState().chatId;
+    attachmentFile.accept = accept;
+    attachmentFile.value = "";
+    attachmentFile.click();
+  }
+  $("attachTextButton").onclick = () => openAttachmentPicker();
+  $("attachPdfLink").onclick = () => openAttachmentPicker(".pdf,application/pdf");
+  attachmentFile.onchange = () => addAttachments([...attachmentFile.files], pickerChat);
+  for (const target of [document.querySelector(".composer-box"), editor]) {
+    target.addEventListener("dragover", event => {
+      if (event.dataTransfer.types.includes("Files")) event.preventDefault();
+    });
+    target.addEventListener("drop", event => {
+      const files = [...event.dataTransfer.files];
+      if (!files.length) return;
+      event.preventDefault();
+      const state = hooks.getState();
+      if (!state.chatReadOnly) void addAttachments(files, state.chatId);
+    });
+  }
+  function renderAttachments() {
+    renderAttachmentStatus();
+    const { attachments, chatReadOnly } = hooks.getState();
+    attachmentList.hidden = !attachments.length;
+    attachmentList.replaceChildren();
+    const estimate = file => Math.ceil((file.name.length + file.contents.length + 8) / 4);
+    attachments.forEach((file, index) => {
+      const chip = element("div", "", "attachment-chip");
+      const preview = element("button", file.name, "attachment-name");
+      preview.setAttribute("aria-label", text("previewAttachment", { name: file.name }));
+      preview.title = file.name;
+      preview.onclick = () => {
+        $("attachTextStatus").textContent = text("attachTextEstimate", { name: file.name, tokens: estimate(file).toLocaleString() });
+        $("attachTextPreview").textContent = file.contents;
+        open(attachment);
+      };
+      const remove = element("button", "×", "attachment-remove");
+      remove.setAttribute("aria-label", text("removeAttachment", { name: file.name }));
+      remove.disabled = chatReadOnly;
+      remove.onclick = () => {
+        hooks.setAttachments(attachments.filter((_, itemIndex) => itemIndex !== index));
+        prompt.focus();
+      };
+      chip.append(preview, remove);
+      attachmentList.append(chip);
+    });
+    if (attachments.length) attachmentList.append(element("span", text("attachmentTotalTokens", {
+      tokens: attachments.reduce((sum, file) => sum + estimate(file), 0).toLocaleString()
+    }), "attachment-estimate"));
+  }
 
   const editDialog = dialog("editPromptDialog", "editResend", '<p class="setting-help" data-text="editHelp"></p><textarea id="editedPrompt" rows="12" maxlength="100000" required data-label="messageLabel"></textarea><p id="editPromptError" class="model-load-error" role="alert"></p>', '<button id="cancelEdit" class="secondary-button" data-text="cancel"></button><button id="sendEdit" class="primary-button" data-text="editResend"></button>');
   $("cancelEdit").onclick = () => editDialog.close();
@@ -532,8 +775,20 @@ export function initEnhancements(hooks) {
       return { added, duplicateItems, invalidItems, persisted };
     },
   });
+  renderAttachments();
   return {
     compareResponse: conversations.compareResponse,
+    toolAccess: id => workspaces.get(id),
+    transferToolAccess(id) {
+      if (workspaces.has(null)) {
+        workspaces.set(id, workspaces.get(null));
+        workspaces.delete(null);
+      }
+    },
+    showToolActivity,
+    renderAttachments,
+    renderPdfLinkHint,
+    attachmentsPending: id => Boolean(attachmentReads.get(id)?.pending),
     isExpanded: () => editor.open, modifierSends: () => preferences.send === "modifier",
     finishCompose() { if (editor.open) editor.close(); },
     editPrompt(target) { editing = target; $("editedPrompt").value = target.message; $("editPromptError").textContent = ""; open(editDialog); $("editedPrompt").focus(); },
@@ -545,8 +800,10 @@ export function initEnhancements(hooks) {
     },
     update() {
       const state = hooks.getState();
+      updateWorkspaceButton();
       $("chatUsageButton").disabled = !state.chatId;
       $("attachTextButton").disabled = state.chatReadOnly;
+      $("optionsAttachText").disabled = state.chatReadOnly;
       const queueMode = state.generating || state.queuePending;
       $("composerSend").disabled = state.chatReadOnly || (queueMode && !state.canQueuePrompt);
       $("composerSend").dataset.text = queueMode ? "queuePrompt" : "send";
@@ -555,6 +812,6 @@ export function initEnhancements(hooks) {
       wasGenerating = state.generating;
       downloader.update();
     },
-    themeChanged() { [editor, attachment, editDialog, queueEditor, library, libraryEditor, setEditor, variables, draftChoice, usage].forEach(node => refreshThemeContent(node)); updateSetFields(); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); conversations.themeChanged(); }
+    themeChanged() { [workspaceDialog, editor, attachment, pdfPages, editDialog, queueEditor, library, libraryEditor, setEditor, variables, draftChoice, usage].forEach(node => refreshThemeContent(node)); updateWorkspaceButton(); renderAttachments(); updateSetFields(); renderLibrary(); if (usage.open) loadUsage(); downloader.themeChanged(); conversations.themeChanged(); }
   };
 }

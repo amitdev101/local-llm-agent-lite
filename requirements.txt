@@ -15,6 +15,7 @@ python-dotenv==1.2.1
 # Local tools, web search, and observability
 httpx==0.28.1
 psutil>=7.0,<8
+pypdf>=7.0.1,<8
 
 # Local embeddings and persistent vector storage (imported lazily)
 lancedb==0.37.1

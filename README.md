@@ -79,7 +79,7 @@ Choose **ChatGPT**, **Claude**, or **GitHub Copilot** layouts in light or dark m
 
 ![Local LLM Playground in the Claude dark theme](local_llm_playground/docs/images/themes/claude-dark.png)
 
-*Playwright capture of the current frontend with sample conversation data; the displayed metrics are illustrative.*
+*Playwright capture with sample conversation data. The displayed metrics are illustrative.*
 
 The interface provides:
 
@@ -100,7 +100,10 @@ The interface provides:
 - 📊 Context usage, first-token latency, speed, and token metrics
 - 📱 Responsive layouts, keyboard shortcuts, and an always-visible composer
 - ♾️ No fixed output-token limit; generation stops at EOS, context boundary, interruption, or error
-- 🧼 Direct local chat without agent tools, RAG, project context, or hidden prompts
+- 🧰 Optional workspace tools for listing, searching, and reading files. Approve edits and project checks in chat, and undo completed edits.
+- ⚙️ Remember the last successful context size, GPU layers, and thread count for each model
+- 📎 Attach text, code, and PDFs with previews and page selection for large PDFs
+- ⌨️ The prompt box starts at one line, grows with your draft, and scrolls at its height limit
 
 See the [Playground README and six-theme gallery](local_llm_playground/README.md), [theme customization guide](local_llm_playground/docs/themes.md), and [chat behavior guide](local_llm_playground/docs/usability.md).
 

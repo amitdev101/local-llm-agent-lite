@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import shlex
 import subprocess
 import tempfile
 import time
@@ -12,7 +13,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from threading import Event
-from typing import Any
+from typing import Any, Callable
 
 try:
     from .build_profiles import BuildProfileConfig, BuildProfileRegistry, CheckPlan
@@ -195,11 +196,14 @@ class ToolRegistry:
         data_paths: DataPaths,
         store: EventStore,
         build_config: BuildProfileConfig | None = None,
+        *,
+        check_output: Callable[[str], None] | None = None,
     ) -> None:
         self.workspace = workspace
         self.paths = data_paths
         self.store = store
         self.build_config = build_config or BuildProfileConfig()
+        self.check_output = check_output
 
     def build_registry(self) -> BuildProfileRegistry:
         return BuildProfileRegistry(
@@ -295,7 +299,7 @@ class ToolRegistry:
             plan = resolution.plan
             if not plan:
                 return f"{resolution.status}: {resolution.reason}"
-            command = " ".join(plan.argv) if plan.argv else plan.description
+            command = (subprocess.list2cmdline(plan.argv) if os.name == "nt" else shlex.join(plan.argv)) if plan.argv else plan.description
             return (
                 f"Profile: {plan.profile_id}\nCheck: {plan.kind}\nMode: {plan.mode}\n"
                 f"Command: {command}\nCWD: {plan.project_root}\n"
@@ -337,6 +341,8 @@ class ToolRegistry:
         expected_state: dict[str, Any] | None = None,
         step: int = 0,
     ) -> ToolResult:
+        if cancel.is_set():
+            return ToolResult("CANCELLED", "The action was cancelled.")
         handlers = {
             "list_files": self._list_files,
             "search": self._search,
@@ -350,7 +356,7 @@ class ToolRegistry:
             return ToolResult("FAILED", f"Unknown tool: {call.name}")
         return handlers[call.name](call.arguments, cancel, run_id, dry_run, expected_state or {}, step)
 
-    def _list_files(self, args: dict[str, Any], *_: Any) -> ToolResult:
+    def _list_files(self, args: dict[str, Any], cancel: Event, *_: Any) -> ToolResult:
         depth = args.get("depth", 2)
         if not isinstance(depth, int) or isinstance(depth, bool) or not 1 <= depth <= 5:
             return ToolResult("REJECTED", "depth must be an integer from 1 to 5.")
@@ -364,6 +370,8 @@ class ToolRegistry:
         entries: list[str] = []
         root_depth = len(root.parts)
         for current, directories, files in os.walk(root):
+            if cancel.is_set():
+                return ToolResult("CANCELLED", "File listing cancelled.")
             current_path = Path(current)
             level = len(current_path.parts) - root_depth
             directories[:] = sorted(
@@ -383,7 +391,7 @@ class ToolRegistry:
                     return ToolResult("OK", "\n".join(entries) + "\n<list truncated>")
         return ToolResult("OK", "\n".join(entries) if entries else "<no visible files>")
 
-    def _search(self, args: dict[str, Any], *_: Any) -> ToolResult:
+    def _search(self, args: dict[str, Any], cancel: Event, *_: Any) -> ToolResult:
         query = args.get("query")
         if not isinstance(query, str) or not query:
             return ToolResult("REJECTED", "query must be non-empty text.")
@@ -397,6 +405,8 @@ class ToolRegistry:
         matches: list[str] = []
         scanned = 0
         for path in candidates:
+            if cancel.is_set():
+                return ToolResult("CANCELLED", "File search cancelled.")
             if not self.workspace.visible(path) or self._sensitive(path) or path.suffix.casefold() not in TEXT_EXTENSIONS:
                 continue
             try:
@@ -832,6 +842,8 @@ class ToolRegistry:
                 except subprocess.TimeoutExpired as pending:
                     if pending.output:
                         current = pending.output if isinstance(pending.output, str) else pending.output.decode("utf-8", errors="replace")
+                        if current != output and self.check_output is not None:
+                            self.check_output(bounded(current))
                         output = current
             code = process.returncode
             status = "OK" if code == 0 else "FAILED"

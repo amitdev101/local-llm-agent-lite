@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Local LLM Playground</title>
   <link rel="icon" type="image/svg+xml" href="/assets/themes/assets/fallback.svg">
-  <link rel="stylesheet" href="/assets/styles.css?v=22">
-  <link rel="stylesheet" href="/assets/themes/chatgpt.css">
+  <link rel="stylesheet" href="/assets/styles.css?v=27">
+  <link rel="stylesheet" href="/assets/themes/chatgpt.css?v=2">
   <link rel="stylesheet" href="/assets/themes/claude.css">
   <link rel="stylesheet" href="/assets/themes/github-copilot.css">
 </head>
@@ -76,6 +76,15 @@
             <textarea id="prompt" rows="1" placeholder="Message your local model…" aria-label="Message" data-label="messageLabel"></textarea>
             <button id="expandComposer" class="icon-button expand-composer" data-title="expandComposer" aria-label="Expand composer"><span data-icon="expand"></span></button>
           </div>
+          <div id="draftAttachmentPanel">
+            <div id="draftAttachments" class="draft-attachments" aria-label="Draft files" data-label="draftAttachments" hidden></div>
+            <div id="pdfLinkHint" class="pdf-link-hint" hidden>
+              <p id="pdfLinkHelp" class="setting-help"></p>
+              <button id="attachPdfLink" class="secondary-button" data-text="attachPdfLink">Attach PDF</button>
+            </div>
+            <p id="draftAttachmentStatus" class="draft-attachment-status attachment-estimate" role="status" hidden></p>
+          </div>
+          <input id="attachTextFile" type="file" multiple hidden>
           <div class="composer-toolbar" id="composerToolbar">
             <div class="composer-tools">
               <button id="attachTextButton" class="composer-action" data-title="attachText"><span data-icon="attachment" aria-hidden="true"></span></button>
@@ -88,6 +97,7 @@
                 <span class="thinking-state" id="thinkingState" aria-hidden="true">Unavailable</span>
               </label>
               <span class="sr-only" id="thinkingHelp">Select a model to check Thinking support.</span>
+              <button id="workspaceToolsButton" class="composer-action workspace-tools-button" aria-pressed="false" aria-haspopup="dialog" data-text="workspaceTools">Tools</button>
             </div>
             <div class="composer-model-actions" id="composerModelSlot">
               <div id="modelPicker" class="model-picker">
@@ -108,6 +118,10 @@
         <p id="draftWarning" class="draft-warning" role="status" data-text="draftUnavailable" hidden>Couldn't save your draft or response preferences in this browser. Keep this tab open or copy your text before refreshing.</p>
         <div class="composer-popover" id="optionsPopover" popover="auto" role="dialog" aria-labelledby="optionsTitle">
           <h2 id="optionsTitle" data-text="responseOptions">Response options</h2>
+          <div class="mobile-composer-options settings-actions">
+            <button id="optionsAttachText" class="secondary-button" data-text="attachText">Attach files</button>
+            <button id="optionsLibrary" class="secondary-button" data-text="library">Library</button>
+          </div>
           <div id="composerSettingsSlot"></div>
         </div>
         <div class="composer-popover" id="modelPopover" popover="auto" role="dialog" aria-labelledby="modelPopoverTitle">
@@ -231,6 +245,6 @@
     <div class="overlay" id="overlay"></div>
     <div class="toast" id="toast" role="status"></div>
   </div>
-  <script type="module" src="/assets/app.js?v=32"></script>
+  <script type="module" src="/assets/app.js?v=38"></script>
 </body>
 </html>

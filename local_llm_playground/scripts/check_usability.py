@@ -120,12 +120,14 @@ def main():
                 with page.expect_response(lambda response: response.url.endswith("/generate") and response.request.method == "POST"):
                     page.locator("#prompt").press("Control+Enter")
                 page.get_by_role("button", name="Sample chat 2", exact=True).click()
+                page.locator("#runningResponse").wait_for(state="visible")
                 page.locator("#prompt").fill("A separate draft")
                 check(page.locator("#runningResponse").is_visible(), "background response shows a return affordance")
                 page.locator("#returnToResponse").click()
                 page.locator(".assistant[data-status='streaming']").wait_for()
                 check(page.locator(".assistant[data-status='streaming']").count() == 1, "returning to a live response keeps one streaming answer")
                 page.get_by_role("button", name="Sample chat 2", exact=True).click()
+                page.locator("#runningResponse").wait_for(state="visible")
                 backend.runtime.llm.release.set()
                 page.locator("#stopButton").wait_for(state="hidden", timeout=10000)
                 check(page.locator("#prompt").input_value() == "A separate draft", "background completion preserves the viewed draft")
@@ -177,7 +179,11 @@ def main():
                     for theme in ("chatgpt", "claude", "github-copilot"):
                         for mode in ("light", "dark"):
                             set_appearance(page, theme, mode)
-                            page.locator("#libraryButton").click()
+                            if width <= 720:
+                                page.locator("#optionsButton").click()
+                                page.locator("#optionsLibrary").click()
+                            else:
+                                page.locator("#libraryButton").click()
                             check(page.evaluate("document.documentElement.scrollWidth <= innerWidth") and page.locator("#libraryDialog").is_visible(), f"{theme}/{mode}/{width}: library is reachable without page overflow")
                             check(page.locator("#saveLibraryItem").evaluate("el => el.getBoundingClientRect().bottom <= innerHeight"), f"{theme}/{mode}/{width}: library save action is immediately visible")
                             page.keyboard.press("Escape"); page.locator("#expandComposer").click()

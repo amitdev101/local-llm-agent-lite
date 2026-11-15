@@ -13,10 +13,12 @@ import uuid
 from collections import deque
 from contextlib import asynccontextmanager, closing
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from typing import Iterator, Literal
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from model_worker import ProcessModel as Llama
@@ -24,6 +26,9 @@ import psutil
 from pydantic import BaseModel, Field
 from token_usage import TokenUsageStore
 from model_downloads import DownloadError, ModelDownloads, repository_id
+from workspace_tools import (
+    ToolAccess, ToolApproval, WorkspaceTools, approvals, resolve_workspace, tool_instructions, tool_schema, undo_edit,
+)
 
 ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = ROOT.parent
@@ -33,6 +38,9 @@ CHATS = DATA / "chats"
 LOGS = ROOT / "logs"
 CONFIG = DATA / "config.json"
 MODEL_CAPABILITIES = ROOT / "model_capabilities.json"
+MAX_PDF_BYTES = 10 * 1024 * 1024
+MAX_PDF_PAGES = 200
+MAX_ATTACHMENT_TEXT = 64 * 1024
 for directory in (CHATS, LOGS):
     directory.mkdir(parents=True, exist_ok=True)
 
@@ -75,9 +83,18 @@ def read_config() -> dict:
     return {**DEFAULTS, **(loaded if isinstance(loaded, dict) else {})}
 
 
-def write_config(values: dict) -> dict:
+def write_config(values: dict, *, remember_model: bool = False) -> dict:
     with settings_lock:
-        config = {**read_config(), **values}
+        previous = read_config()
+        config = {**previous, **values}
+        if remember_model:
+            stored = config.get("model_load_profiles")
+            profiles = dict(stored) if isinstance(stored, dict) else {}
+            keys = ("context_size", "gpu_layers", "threads")
+            if isinstance(previous["model_path"], str) and previous["model_path"]:
+                profiles.setdefault(os.path.normcase(previous["model_path"]), {key: previous[key] for key in keys})
+            profiles[os.path.normcase(values["model_path"])] = {key: values[key] for key in keys}
+            config["model_load_profiles"] = profiles
         temporary = CONFIG.with_name(f".{CONFIG.name}.{uuid.uuid4().hex}.tmp")
         try:
             temporary.write_text(json.dumps(config, indent=2), encoding="utf-8")
@@ -140,6 +157,7 @@ def chat_view(chat_id: str) -> dict:
     visibility = "active"
     pinned = False
     bookmarks = set()
+    undone_tools = {}
     created_at = events[0].get("time", "") if events else ""
     for index, event in enumerate(events):
         kind = event.get("type")
@@ -158,6 +176,8 @@ def chat_view(chat_id: str) -> dict:
                 bookmarks.add(event["message_id"])
             else:
                 bookmarks.discard(event["message_id"])
+        elif kind == "tool_undone" and isinstance(event.get("id"), str):
+            undone_tools[event["id"]] = event.get("output", "")
         elif kind == "user":
             generation_request = {
                 key: value for key, value in settings.items()
@@ -174,6 +194,9 @@ def chat_view(chat_id: str) -> dict:
         message.pop("bookmarked", None)
         if message["type"] == "assistant" and message["id"] in bookmarks and message.get("status", "complete") == "complete":
             message["bookmarked"] = True
+        for item in message.get("tool_activity", []):
+            if item["id"] in undone_tools:
+                item.update(status="UNDONE", output=undone_tools[item["id"]], undo=False)
     return {
         "id": chat_id,
         "title": title,
@@ -276,7 +299,7 @@ class ModelRuntime:
                 remembered = True
                 if remember:
                     try:
-                        write_config(self.loaded_settings)
+                        write_config(self.loaded_settings, remember_model=True)
                     except OSError:
                         logger.exception("Model loaded but loading settings could not be remembered")
                         remembered = False
@@ -478,6 +501,7 @@ class GenerateRequest(ResponseSettings):
     message: str = Field(min_length=1)
     request_id: str | None = Field(None, min_length=1, max_length=80, pattern=r"^[\w-]+$")
     expected_model_path: str | None = Field(None, min_length=1)
+    tool_access: ToolAccess | None = None
 
 
 class ContextPreviewRequest(GenerateRequest):
@@ -491,6 +515,63 @@ def event(data: dict) -> str:
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(FRONTEND / "index.html")
+
+
+def pdf_attachment_text(document: BytesIO, start_page: int | None, end_page: int | None) -> dict:
+    try:
+        from pypdf import PdfReader
+    except ImportError as error:
+        raise HTTPException(503, "Install the updated Playground dependencies to attach PDFs.") from error
+
+    pages = []
+    length = 0
+    try:
+        reader = PdfReader(document)
+        if reader.is_encrypted:
+            raise HTTPException(422, "This PDF is password-protected. Unlock it and attach the unlocked copy.")
+        page_count = len(reader.pages)
+        whole_document = start_page is None and end_page is None
+        if whole_document:
+            if page_count > MAX_PDF_PAGES:
+                return {"page_count": page_count}
+            start_page, end_page = 1, page_count
+        elif start_page is None or end_page is None or not 1 <= start_page <= end_page <= page_count:
+            raise HTTPException(422, f"Choose a page range between 1 and {page_count}.")
+        if end_page - start_page + 1 > MAX_PDF_PAGES:
+            raise HTTPException(413, "Choose up to 200 pages per attachment.")
+
+        for number in range(start_page, end_page + 1):
+            content = (reader.pages[number - 1].extract_text() or "").strip()
+            if not content:
+                continue
+            section = f"[Page {number}]\n{content}"
+            length += len(section.encode("utf-16-le")) // 2 + (2 if pages else 0)
+            if length > MAX_ATTACHMENT_TEXT:
+                if whole_document and page_count > 1:
+                    return {"page_count": page_count}
+                raise HTTPException(413, "The extracted text exceeds the draft limit. Choose fewer pages or attach an excerpt as text.")
+            pages.append(section)
+    except HTTPException:
+        raise
+    except Exception as error:
+        logger.warning("PDF attachment extraction failed (%s)", type(error).__name__)
+        raise HTTPException(422, "Could not read this PDF. Try exporting a fresh copy from your PDF viewer.") from error
+    if not pages:
+        raise HTTPException(422, "These PDF pages have no selectable text. Choose different pages or make the PDF searchable with OCR.")
+    return {"contents": "\n\n".join(pages)}
+
+
+@app.post("/api/attachments/pdf")
+async def extract_pdf_attachment(request: Request, start_page: int | None = None, end_page: int | None = None) -> dict:
+    if request.headers.get("content-type") != "application/pdf":
+        raise HTTPException(415, "Upload a PDF file.")
+    with BytesIO() as document:
+        async for chunk in request.stream():
+            if document.tell() + len(chunk) > MAX_PDF_BYTES:
+                raise HTTPException(413, "PDFs can be up to 10 MiB. Attach a smaller section.")
+            document.write(chunk)
+        document.seek(0)
+        return await run_in_threadpool(pdf_attachment_text, document, start_page, end_page)
 
 
 @app.get("/api/status")
@@ -681,6 +762,9 @@ def backup_lines(events: list[dict]) -> bytes:
         elif kind in ("pin", "bookmark"):
             if not isinstance(row.get("value"), bool) or (kind == "bookmark" and not isinstance(row.get("message_id"), str)):
                 raise ValueError("Invalid saved item")
+        elif kind == "tool_undone":
+            if not isinstance(row.get("id"), str) or not isinstance(row.get("output"), str):
+                raise ValueError("Invalid tool undo event")
         elif kind in ("user", "assistant"):
             if not isinstance(row.get("content"), str):
                 raise ValueError("Invalid message text")
@@ -689,6 +773,13 @@ def backup_lines(events: list[dict]) -> bytes:
                     raise ValueError("Invalid message details")
             if row.get("metrics") is not None and not isinstance(row["metrics"], dict):
                 raise ValueError("Invalid response metrics")
+            if "tool_activity" in row:
+                activity = row["tool_activity"]
+                if not isinstance(activity, list) or any(
+                    not isinstance(item, dict) or any(not isinstance(item.get(key), str) for key in ("id", "name", "status"))
+                    or not isinstance(item.get("output", ""), str) for item in activity
+                ):
+                    raise ValueError("Invalid tool activity")
         else:
             raise ValueError("Unrecognized chat event")
     return "".join(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n" for row in events).encode("utf-8")
@@ -796,6 +887,8 @@ def branch_chat(chat_id: str, request: BranchRequest) -> dict:
             else:
                 copied["message_id"] = item["id"]
                 copied["usage_inherited"] = True
+                if "tool_activity" in copied:
+                    copied["tool_activity"] = [{**activity, "undo": False} for activity in copied["tool_activity"]]
             append_event(branch_id, copied)
     return chat_view(branch_id)
 
@@ -922,6 +1015,48 @@ def estimate_prompt_tokens(messages: list[dict]) -> int:
     return len(runtime.llm.tokenize(json.dumps(messages).encode("utf-8")))
 
 
+def tool_protected_paths() -> tuple[Path, ...]:
+    return (DATA, LOGS, PROJECT_ROOT / "single_model_agent" / "single_model_agent_data",
+            PROJECT_ROOT / ".myllm", PROJECT_ROOT / ".codex", PROJECT_ROOT / ".agents")
+
+
+@app.post("/api/workspace-tools/folder")
+def workspace_folder(access: ToolAccess) -> dict:
+    try:
+        workspace = resolve_workspace(access.path, tool_protected_paths())
+    except (OSError, ValueError, RuntimeError) as error:
+        raise HTTPException(400, str(error)) from error
+    return {"path": str(workspace.root), "allow_changes": access.allow_changes}
+
+
+@app.post("/api/chats/{chat_id}/tool-approval/{identifier}")
+def approve_workspace_tool(chat_id: str, identifier: str, decision: ToolApproval) -> dict:
+    if not approvals.decide(chat_id, identifier, decision.approved):
+        raise HTTPException(409, "This tool approval is no longer pending.")
+    return {"approved": decision.approved}
+
+
+@app.post("/api/chats/{chat_id}/tool-undo/{identifier}")
+def undo_workspace_tool(chat_id: str, identifier: str) -> dict:
+    chat_path(chat_id)
+    if not runtime.generation_lock.acquire(blocking=False):
+        raise HTTPException(409, "Wait for the current response before undoing an edit.")
+    try:
+        chat = chat_view(chat_id)
+        if not any(item["id"] == identifier and item.get("undo") is True
+                   for message in chat["messages"] for item in message.get("tool_activity", [])):
+            raise HTTPException(409, "This edit is unavailable to undo.")
+        result = undo_edit(DATA / "workspace-tools", chat_id, identifier, tool_protected_paths())
+        if result.status != "OK":
+            raise HTTPException(409, result.content)
+        with chat_lock:
+            if chat_path(chat_id).exists():
+                append_event(chat_id, {"type": "tool_undone", "id": identifier, "output": result.content})
+        return {"output": result.content}
+    finally:
+        runtime.generation_lock.release()
+
+
 def prepare_context(request: GenerateRequest, saved: list[dict]) -> dict:
     visible_message = request.message.strip()
     if not visible_message:
@@ -933,8 +1068,12 @@ def prepare_context(request: GenerateRequest, saved: list[dict]) -> dict:
         directive = "/think" if thinking_enabled else "/no_think"
         effective_message += f"\n\n{directive}"
     messages = []
-    if request.system_prompt.strip():
-        messages.append({"role": "system", "content": request.system_prompt.strip()})
+    access = request.tool_access
+    tool_prompt = tool_instructions(access) if access else ""
+    tool_tokens = max(0, estimate_prompt_tokens(tool_schema(access)) - estimate_prompt_tokens([])) if access else 0
+    system = "\n\n".join(part for part in (tool_prompt, request.system_prompt.strip()) if part)
+    if system:
+        messages.append({"role": "system", "content": system})
     system_count = len(messages)
     pending_user = None
     for item in saved:
@@ -951,12 +1090,12 @@ def prepare_context(request: GenerateRequest, saved: list[dict]) -> dict:
     context_size = int(runtime.loaded_settings.get("context_size") or read_config()["context_size"])
     trimmed_messages = 0
     while len(messages) > system_count + 1:
-        if estimate_prompt_tokens(messages) <= int(context_size * 0.80):
+        if estimate_prompt_tokens(messages) + tool_tokens <= int(context_size * 0.80):
             break
         del messages[system_count:system_count + 2]
         trimmed_messages += 2
     return {"messages": messages, "context_size": context_size, "trimmed_messages": trimmed_messages,
-            "thinking": thinking_enabled, "thinking_support": support}
+            "thinking": thinking_enabled, "thinking_support": support, "tool_tokens": tool_tokens}
 
 
 @app.post("/api/context-preview")
@@ -969,7 +1108,7 @@ def preview_context(request: ContextPreviewRequest) -> dict:
         if chat["visibility"] != "active":
             raise HTTPException(409, "Restore this chat before previewing context")
         context = prepare_context(request, chat["messages"])
-        return {**context, "prompt_tokens": estimate_prompt_tokens(context["messages"])}
+        return {**context, "prompt_tokens": estimate_prompt_tokens(context["messages"]) + context["tool_tokens"]}
     finally:
         runtime.last_model_activity = time.monotonic()
         runtime.generation_lock.release()
@@ -985,6 +1124,7 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
 
     runtime.cancel.clear()
     completed = None
+    workspace = None
     try:
         require_loaded_model(request.expected_model_path)
         chat = chat_view(chat_id)
@@ -1000,13 +1140,20 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
             if saved[target]["content"] != request.message.strip():
                 raise HTTPException(409, "This request ID belongs to a different prompt")
             # Retry the original response settings, even after reopening the chat.
-            request = GenerateRequest(**{**saved[target]["request"], "expected_model_path": request.expected_model_path})
+            request = GenerateRequest(**{**saved[target]["request"], "expected_model_path": request.expected_model_path,
+                                         "tool_access": request.tool_access})
             completed = next((item for item in reversed(saved[target + 1:])
                               if item.get("status", "complete") == "complete"), None)
 
         if completed is None:
             visible_message = request.message.strip()
             request_id = request.request_id or str(uuid.uuid4())
+            if request.tool_access is not None:
+                try:
+                    workspace = WorkspaceTools(request.tool_access, DATA / "workspace-tools", runtime.model_path,
+                                               chat_id, tool_protected_paths())
+                except (OSError, ValueError, RuntimeError) as error:
+                    raise HTTPException(400, str(error)) from error
             context = prepare_context(request, saved[:target])
             messages = context["messages"]
             context_size = context["context_size"]
@@ -1014,7 +1161,7 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
             support = context["thinking_support"]
             thinking_enabled = context["thinking"]
 
-            settings = request.model_dump(exclude={"message", "request_id", "expected_model_path"})
+            settings = request.model_dump(exclude={"message", "request_id", "expected_model_path", "tool_access"})
             settings["model"] = runtime.model_path
             append_event(chat_id, {"type": "settings", "values": settings})
             if target is None:
@@ -1036,6 +1183,8 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
 
         def replay() -> Iterator[str]:
             yield event({"type": "start", "message_id": completed["id"]})
+            for item in completed.get("tool_activity", []):
+                yield event({"type": "tool_activity", **item})
             yield event({"type": "token", "text": completed.get("content", "")})
             yield event({"type": "done", "metrics": completed.get("metrics")})
 
@@ -1047,16 +1196,19 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
         first_token = None
         message_id = str(uuid.uuid4())
         metrics = None
+        activity = {}
 
         def response_metrics():
             elapsed = time.perf_counter() - started
-            prompt_tokens = estimate_prompt_tokens(messages)
-            completion_tokens = len(runtime.llm.tokenize(response.encode("utf-8"))) if response else 0
-            return {"first_token_seconds": round((first_token or time.perf_counter()) - started, 3),
+            prompt_tokens = workspace.prompt_tokens if workspace else estimate_prompt_tokens(messages)
+            completion_tokens = (workspace.completion_tokens if workspace
+                                 else len(runtime.llm.tokenize(response.encode("utf-8"))) if response else 0)
+            first = workspace.first_token if workspace else first_token
+            return {"first_token_seconds": round((first or time.perf_counter()) - started, 3),
                     "total_seconds": round(elapsed, 3), "prompt_tokens": prompt_tokens,
                     "completion_tokens": completion_tokens, "token_counts_estimated": True,
                     "tokens_per_second": round(completion_tokens / elapsed, 2) if elapsed else 0,
-                    "context_size": context_size, "context_used": prompt_tokens + completion_tokens,
+                    "context_size": context_size, "context_used": workspace.context_used if workspace else prompt_tokens + completion_tokens,
                     "temperature": request.temperature, "thinking": thinking_enabled,
                     "thinking_support": support, "model": Path(runtime.model_path).name}
 
@@ -1068,7 +1220,11 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
                 logger.exception("Token counts unavailable for response %s", message_id)
             append_event(chat_id, {"type": "assistant", "content": response, "status": status,
                                    "request_id": request_id, "message_id": message_id,
-                                   "metrics": metrics, **({"error": error} if error else {})})
+                                   "metrics": metrics, **({"error": error} if error else {}),
+                                   **({"tool_activity": [
+                                       {**item, "status": "CANCELLED"} if item["status"] in {"approval", "running"} else item
+                                       for item in activity.values()
+                                   ]} if activity else {})})
             try:
                 usage_store.record(chat_id, message_id, metrics, status)
             except OSError:
@@ -1092,17 +1248,28 @@ def generate(chat_id: str, request: GenerateRequest) -> StreamingResponse:
                 "seed": request.seed,
                 "stream": True,
             }
-            with closing(runtime.llm.create_chat_completion(**kwargs)) as chunks:
-                for chunk in chunks:
-                    if runtime.cancel.is_set():
-                        break
-                    text = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                    if not text:
-                        continue
-                    if first_token is None:
-                        first_token = time.perf_counter()
-                    response += text
-                    yield event({"type": "token", "text": text})
+            if workspace:
+                tool_stream = workspace.run(runtime.llm, kwargs, runtime.cancel, estimate_prompt_tokens,
+                                            context_size, context["tool_tokens"])
+                with closing(tool_stream) as items:
+                    for item in items:
+                        if item["type"] == "tool_activity":
+                            activity[item["id"]] = {key: value for key, value in item.items() if key != "type"}
+                        elif item["type"] == "token":
+                            response += item["text"]
+                        yield event(item)
+            else:
+                with closing(runtime.llm.create_chat_completion(**kwargs)) as chunks:
+                    for chunk in chunks:
+                        if runtime.cancel.is_set():
+                            break
+                        text = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                        if not text:
+                            continue
+                        if first_token is None:
+                            first_token = time.perf_counter()
+                        response += text
+                        yield event({"type": "token", "text": text})
 
             stopped = runtime.cancel.is_set()
             persist("interrupted" if stopped else "complete")
